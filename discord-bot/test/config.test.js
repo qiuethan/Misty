@@ -15,8 +15,27 @@ test('loadConfig returns typed config and strips trailing slash', () => {
   assert.equal(cfg.directoryBaseUrl, 'http://localhost:8000');
   assert.equal(cfg.discordToken, 't');
   assert.equal(cfg.directoryApiKey, 'k');
+  assert.equal(cfg.discordGuildId, 'g');
 });
 
 test('loadConfig throws listing missing vars', () => {
   assert.throws(() => loadConfig({ DISCORD_TOKEN: 't' }), /DIRECTORY_API_KEY/);
+});
+
+test('DISCORD_GUILD_ID is optional (global registration) and not reported missing', () => {
+  const { DISCORD_GUILD_ID, ...noGuild } = FULL;
+  let cfg;
+  assert.doesNotThrow(() => {
+    cfg = loadConfig(noGuild);
+  });
+  assert.equal(cfg.discordGuildId, undefined);
+});
+
+test('missing-var error does not list the optional DISCORD_GUILD_ID', () => {
+  try {
+    loadConfig({ DISCORD_TOKEN: 't' });
+    assert.fail('expected loadConfig to throw');
+  } catch (err) {
+    assert.doesNotMatch(err.message, /DISCORD_GUILD_ID/);
+  }
 });

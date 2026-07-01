@@ -8,6 +8,14 @@ in cleanly.
 It holds **no database and no business logic** — every action is an HTTP call to
 the directory (the API-only source of truth).
 
+## Multi-server model
+
+The bot is meant to run across **many Discord servers** from a single deployment.
+There is no per-server allowlist: anyone can add it to a server, and access is
+gated purely by the auth layer — an unlinked user can't run gated commands, a
+linked user can. Identity is a Discord user's **global** account (snowflake), so
+a linked person is recognized in every server the bot shares with them.
+
 ## Commands
 
 - `/link email:<your UTMIST email>` (public) — links your Discord account to your
@@ -35,7 +43,10 @@ parallel to team-tracking's scoped-key auth.
 
 1. **Node 20+** required.
 2. `cp .env.example .env` and fill in:
-   - Discord app credentials (`DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`).
+   - Discord app credentials (`DISCORD_TOKEN`, `DISCORD_CLIENT_ID`).
+   - `DISCORD_GUILD_ID` — **optional** dedicated testing guild. Commands always
+     register globally (production); if this is set they *also* register to this
+     guild for instant updates while developing. Leave blank in production.
    - `DIRECTORY_BASE_URL` (e.g. `http://localhost:8000`).
    - `DIRECTORY_API_KEY` — issue one from team-tracking:
      ```bash
@@ -44,9 +55,12 @@ parallel to team-tracking's scoped-key auth.
        --scopes people:read identifiers:read identifiers:write
      ```
 3. `npm install`
-4. `npm run register` — registers the slash commands to your guild (run once, or
-   whenever command definitions change).
-5. `npm start`
+4. `npm run register` — registers the slash commands (run once, or whenever
+   command definitions change). Always registers **globally** (works in every
+   server the bot joins; can take ~1h to propagate). If `DISCORD_GUILD_ID` is set,
+   it *also* registers to that testing guild for instant updates (that guild will
+   then list the commands twice — expected, harmless in a test server).
+5. `npm start` — then invite the bot to any server via its OAuth2 URL.
 
 ## Architecture
 
@@ -62,7 +76,7 @@ parallel to team-tracking's scoped-key auth.
 | `src/messages.js` | Pure reply-string rendering. |
 | `src/commands/*.js` | Thin discord.js interaction handlers + registry. |
 | `src/index.js` | Client setup + interaction routing. |
-| `src/registerCommands.js` | One-shot guild slash-command registration. |
+| `src/registerCommands.js` | One-shot slash-command registration (always global; also the testing guild when `DISCORD_GUILD_ID` is set). |
 
 ## Testing
 

@@ -1,7 +1,6 @@
 const REQUIRED = [
   'DISCORD_TOKEN',
   'DISCORD_CLIENT_ID',
-  'DISCORD_GUILD_ID',
   'DIRECTORY_BASE_URL',
   'DIRECTORY_API_KEY',
 ];
@@ -14,7 +13,9 @@ export function loadConfig(env = process.env) {
   return {
     discordToken: env.DISCORD_TOKEN,
     discordClientId: env.DISCORD_CLIENT_ID,
-    discordGuildId: env.DISCORD_GUILD_ID,
+    // Optional dedicated testing guild. Commands always register globally (prod);
+    // when this is set they ALSO register to this guild for instant dev updates.
+    discordGuildId: env.DISCORD_GUILD_ID || undefined,
     directoryBaseUrl: env.DIRECTORY_BASE_URL.replace(/\/+$/, ''),
     directoryApiKey: env.DIRECTORY_API_KEY,
   };
