@@ -51,7 +51,8 @@ def list_docs(
 ) -> list[Doc]:
     return storage.list_docs(
         owning_team_id=owning_team_id, owning_person_id=owning_person_id,
-        source_id=source_id, tag=tag, active_only=active_only,
+        source_id=source_id, tag=tag.strip().lower() if tag is not None else None,
+        active_only=active_only,
     )
 
 
@@ -79,13 +80,16 @@ def update_doc(
 ) -> Doc:
     values = payload.model_dump(exclude_unset=True)
     # Re-resolve labels when an owner id changes and the directory is reachable.
+    # A genuinely unknown id (directory reachable, record not found) is a 400,
+    # matching POST's BadReference behavior. A down directory degrades to a
+    # null label instead of failing the request.
     if "owning_team_id" in values:
-        values["owning_team_label"] = _safe_label(
-            directory.get_team_label, values["owning_team_id"]
+        values["owning_team_label"] = _resolve_owner_label(
+            directory.get_team_label, values["owning_team_id"], "owning_team_id not found"
         )
     if "owning_person_id" in values:
-        values["owning_person_label"] = _safe_label(
-            directory.get_person_label, values["owning_person_id"]
+        values["owning_person_label"] = _resolve_owner_label(
+            directory.get_person_label, values["owning_person_id"], "owning_person_id not found"
         )
     updated = storage.update_doc(doc_id, values, actor=actor)
     if updated is None:
@@ -142,7 +146,11 @@ def refetch(
         doc_id,
         {
             "title": result.title or doc.title,
-            "content_snapshot": result.content_snapshot,
+            "content_snapshot": (
+                result.content_snapshot
+                if result.content_snapshot is not None
+                else doc.content_snapshot
+            ),
             "fetched_at": datetime.now(timezone.utc),
         },
         actor=actor,
@@ -156,6 +164,20 @@ def _safe_label(lookup, entity_id):
         return lookup(entity_id)
     except DirectoryUnavailable:
         return None
+
+
+def _resolve_owner_label(lookup, entity_id, not_found_detail: str):
+    """Resolve an owner id's label for PATCH, distinguishing a down directory
+    (degrade to null label) from a genuinely unknown id (400, like POST)."""
+    if entity_id is None:
+        return None
+    try:
+        label = lookup(entity_id)
+    except DirectoryUnavailable:
+        return None
+    if label is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=not_found_detail)
+    return label
 
 
 def _backfill_labels(doc: Doc, storage: StorageAdapter, directory: DirectoryClient) -> Doc:

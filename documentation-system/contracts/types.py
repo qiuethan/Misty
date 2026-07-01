@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class DirectoryBase(BaseModel):
@@ -54,6 +54,11 @@ class DocIngest(BaseModel):
     owning_team_id: UUID | None = None
     owning_person_id: UUID | None = None
     tags: list[str] = []
+
+    @field_validator("tags")
+    @classmethod
+    def _normalize_tags(cls, v: list[str]) -> list[str]:
+        return [t.strip().lower() for t in v]
 
 
 class DocUpdate(BaseModel):

@@ -8,7 +8,7 @@ Log line shape:
         "ts": "2026-07-01T12:34:56.789Z",  # UTC ISO-8601
         "request_id": "b8c...uuid",
         "method": "POST",
-        "path": "/people",
+        "path": "/docs",
         "status": 201,
         "duration_ms": 42,
         "key_name": "discord-bot",  # or "env-bootstrap" or None

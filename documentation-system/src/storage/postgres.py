@@ -113,6 +113,7 @@ class PostgresStorageAdapter:
             )
         if conditions:
             stmt = stmt.where(and_(*conditions))
+        stmt = stmt.order_by(docs.c.created_at)
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).all()
             return [self._row_to_doc(conn, r) for r in rows]

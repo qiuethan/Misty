@@ -47,3 +47,11 @@ def test_5xx_raises_unavailable():
     dc = HttpDirectoryClient("http://dir", "k", client=_client(handler))
     with pytest.raises(DirectoryUnavailable):
         dc.get_person_label(uuid4())
+
+
+def test_403_raises_unavailable():
+    def handler(request):
+        return httpx.Response(403, json={"detail": "forbidden"})
+    dc = HttpDirectoryClient("http://dir", "k", client=_client(handler))
+    with pytest.raises(DirectoryUnavailable):
+        dc.get_team_label(uuid4())

@@ -89,6 +89,22 @@ def test_list_filter_by_tag(client):
     assert len(resp.json()) == 1
 
 
+def test_ingest_tags_are_normalized_and_tag_filter_is_case_insensitive(client):
+    created = client.post(
+        "/docs", json={"url": "https://onboarding.com", "tags": ["Onboarding"]}, headers=AUTH
+    ).json()
+    doc_id = created["doc"]["id"]
+    assert client.get(f"/docs/{doc_id}", headers=AUTH).json()["tags"] == ["onboarding"]
+
+    resp_lower = client.get("/docs?tag=onboarding", headers=AUTH)
+    assert resp_lower.status_code == 200
+    assert len(resp_lower.json()) == 1
+
+    resp_mixed = client.get("/docs?tag=Onboarding", headers=AUTH)
+    assert resp_mixed.status_code == 200
+    assert len(resp_mixed.json()) == 1
+
+
 def test_get_404(client):
     resp = client.get("/docs/00000000-0000-0000-0000-000000000000", headers=AUTH)
     assert resp.status_code == 404
@@ -100,6 +116,23 @@ def test_patch_soft_delete_hides_from_default_list(client):
     client.patch(f"/docs/{doc_id}", json={"active": False}, headers=AUTH)
     assert client.get("/docs", headers=AUTH).json() == []
     assert len(client.get("/docs?active_only=false", headers=AUTH).json()) == 1
+
+
+def test_patch_bad_team_id_returns_400(client):
+    doc_id = client.post("/docs", json={"url": "https://a.com"}, headers=AUTH).json()["doc"]["id"]
+
+    class NotFoundDir:
+        def get_team_label(self, team_id):
+            return None
+        def get_person_label(self, person_id):
+            return None
+    client.app.dependency_overrides[get_directory] = lambda: NotFoundDir()
+    resp = client.patch(
+        f"/docs/{doc_id}",
+        json={"owning_team_id": "00000000-0000-0000-0000-000000000001"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 400
 
 
 def test_add_and_remove_tag(client):

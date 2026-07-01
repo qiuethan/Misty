@@ -30,9 +30,8 @@ class HttpDirectoryClient:
                 client.close()
         if resp.status_code == 404:
             return None
-        if resp.status_code >= 500:
+        if not (200 <= resp.status_code < 300):
             raise DirectoryUnavailable(f"directory returned {resp.status_code}")
-        resp.raise_for_status()
         return resp.json().get(label_field)
 
     def get_team_label(self, team_id: UUID) -> str | None:
