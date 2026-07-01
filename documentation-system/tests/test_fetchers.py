@@ -1,0 +1,47 @@
+import httpx
+import pytest
+
+from contracts.fetcher import FetchError
+from src.fetch.github import GithubFetcher, parse_github_title
+from src.fetch.registry import FetchUnsupported, FetcherRegistry
+from src.fetch.web import WebFetcher, extract_text, parse_title
+
+
+def test_parse_title_from_html():
+    assert parse_title("<html><head><title>Hello  World</title></head></html>") == "Hello World"
+
+
+def test_parse_title_none_when_absent():
+    assert parse_title("<html><body>no title</body></html>") is None
+
+
+def test_extract_text_strips_tags_and_truncates():
+    out = extract_text("<p>Alpha</p><p>Beta</p>", limit=100)
+    assert "Alpha" in out and "<p>" not in out
+
+
+def test_parse_github_title_from_path():
+    assert parse_github_title("https://github.com/utmist/site") == "utmist/site"
+
+
+def test_web_fetcher_uses_injected_client():
+    def handler(request):
+        return httpx.Response(200, html="<title>Injected</title>")
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    result = WebFetcher(client=client).fetch("https://x.com")
+    assert result.title == "Injected"
+
+
+def test_web_fetcher_raises_fetcherror_on_http_error():
+    def handler(request):
+        return httpx.Response(500)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(FetchError):
+        WebFetcher(client=client).fetch("https://x.com")
+
+
+def test_registry_routes_by_source_and_rejects_unknown():
+    reg = FetcherRegistry({"github": GithubFetcher()})
+    assert reg.fetch_for("github", "https://github.com/a/b").title == "a/b"
+    with pytest.raises(FetchUnsupported):
+        reg.fetch_for("web", "https://x.com")

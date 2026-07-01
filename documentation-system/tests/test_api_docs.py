@@ -1,0 +1,143 @@
+from datetime import datetime, timezone
+
+import pytest
+from fastapi.testclient import TestClient
+
+from contracts.fetcher import FetchResult
+from contracts.types import Source
+from src.api.app import create_app
+from src.api.deps import get_directory, get_fetchers, get_storage
+from src.storage.in_memory import InMemoryStorageAdapter
+
+AUTH = {"X-API-Key": "test-key"}
+
+
+def _sources():
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    return [Source(id="web", label="Web", url_patterns=[], requires_auth=False,
+                   has_api=False, content_fetch_enabled=True,
+                   created_at=now, updated_at=now, created_by="system", updated_by="system")]
+
+
+class FakeFetchers:
+    def fetch_for(self, source_id, url):
+        return FetchResult(title="Fetched", content_snapshot="body")
+
+
+class FakeDirectory:
+    def get_team_label(self, team_id):
+        return "Partnerships"
+    def get_person_label(self, person_id):
+        return "Priya"
+
+
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setenv("API_KEY", "test-key")
+    from src.config import get_settings
+    get_settings.cache_clear()
+    adapter = InMemoryStorageAdapter(seed_sources=_sources())
+    app = create_app()
+    app.dependency_overrides[get_storage] = lambda: adapter
+    app.dependency_overrides[get_fetchers] = lambda: FakeFetchers()
+    app.dependency_overrides[get_directory] = lambda: FakeDirectory()
+    with TestClient(app) as c:
+        yield c
+
+
+def test_ingest_returns_201_with_warnings_envelope(client):
+    resp = client.post("/docs", json={"url": "https://x.com/a"}, headers=AUTH)
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["created"] is True
+    assert body["doc"]["title"] == "Fetched"
+    assert body["warnings"] == []
+
+
+def test_reingest_returns_200(client):
+    client.post("/docs", json={"url": "https://x.com/a"}, headers=AUTH)
+    resp = client.post("/docs", json={"url": "https://x.com/a/"}, headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["created"] is False
+
+
+def test_ingest_requires_write_scope_via_missing_key(client):
+    resp = client.post("/docs", json={"url": "https://x.com"})
+    assert resp.status_code == 401
+
+
+def test_ingest_bad_team_id_returns_400(client):
+    class NotFoundDir:
+        def get_team_label(self, team_id):
+            return None
+        def get_person_label(self, person_id):
+            return None
+    client.app.dependency_overrides[get_directory] = lambda: NotFoundDir()
+    resp = client.post(
+        "/docs",
+        json={"url": "https://x.com", "owning_team_id": "00000000-0000-0000-0000-000000000001"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 400
+
+
+def test_list_filter_by_tag(client):
+    client.post("/docs", json={"url": "https://a.com", "tags": ["x"]}, headers=AUTH)
+    client.post("/docs", json={"url": "https://b.com", "tags": ["y"]}, headers=AUTH)
+    resp = client.get("/docs?tag=x", headers=AUTH)
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+
+
+def test_ingest_tags_are_normalized_and_tag_filter_is_case_insensitive(client):
+    created = client.post(
+        "/docs", json={"url": "https://onboarding.com", "tags": ["Onboarding"]}, headers=AUTH
+    ).json()
+    doc_id = created["doc"]["id"]
+    assert client.get(f"/docs/{doc_id}", headers=AUTH).json()["tags"] == ["onboarding"]
+
+    resp_lower = client.get("/docs?tag=onboarding", headers=AUTH)
+    assert resp_lower.status_code == 200
+    assert len(resp_lower.json()) == 1
+
+    resp_mixed = client.get("/docs?tag=Onboarding", headers=AUTH)
+    assert resp_mixed.status_code == 200
+    assert len(resp_mixed.json()) == 1
+
+
+def test_get_404(client):
+    resp = client.get("/docs/00000000-0000-0000-0000-000000000000", headers=AUTH)
+    assert resp.status_code == 404
+
+
+def test_patch_soft_delete_hides_from_default_list(client):
+    created = client.post("/docs", json={"url": "https://a.com"}, headers=AUTH).json()
+    doc_id = created["doc"]["id"]
+    client.patch(f"/docs/{doc_id}", json={"active": False}, headers=AUTH)
+    assert client.get("/docs", headers=AUTH).json() == []
+    assert len(client.get("/docs?active_only=false", headers=AUTH).json()) == 1
+
+
+def test_patch_bad_team_id_returns_400(client):
+    doc_id = client.post("/docs", json={"url": "https://a.com"}, headers=AUTH).json()["doc"]["id"]
+
+    class NotFoundDir:
+        def get_team_label(self, team_id):
+            return None
+        def get_person_label(self, person_id):
+            return None
+    client.app.dependency_overrides[get_directory] = lambda: NotFoundDir()
+    resp = client.patch(
+        f"/docs/{doc_id}",
+        json={"owning_team_id": "00000000-0000-0000-0000-000000000001"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 400
+
+
+def test_add_and_remove_tag(client):
+    doc_id = client.post("/docs", json={"url": "https://a.com"}, headers=AUTH).json()["doc"]["id"]
+    assert client.post(f"/docs/{doc_id}/tags", json={"tag": "new"}, headers=AUTH).status_code == 200
+    assert "new" in client.get(f"/docs/{doc_id}", headers=AUTH).json()["tags"]
+    assert client.request("DELETE", f"/docs/{doc_id}/tags/new", headers=AUTH).status_code == 200
+    assert "new" not in client.get(f"/docs/{doc_id}", headers=AUTH).json()["tags"]
