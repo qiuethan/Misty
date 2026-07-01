@@ -37,7 +37,7 @@ class InMemoryStorageAdapter:
     # --- People ---
 
     def create_person(self, payload: PersonCreate, *, actor: str) -> Person:
-        email = payload.primary_email
+        email = payload.primary_email.strip().lower()
         if any(p.primary_email == email for p in self._people.values()):
             raise ValueError(f"primary_email already exists: {email}")
         now = _now()
@@ -215,7 +215,7 @@ class InMemoryStorageAdapter:
                 and (m.ended_at is None or m.ended_at > as_of)
             ]
         if is_team_admin is not None:
-            results = [m for m in results if m.is_team_admin is is_team_admin]
+            results = [m for m in results if m.is_team_admin == is_team_admin]
         return results
 
     def update_membership(
@@ -238,6 +238,13 @@ class InMemoryStorageAdapter:
     def end_membership(
         self, membership_id: UUID, ended_at: date, *, actor: str
     ) -> TeamMembership | None:
+        """Set ended_at only.
+
+        Delegates to update_membership; correctness relies on
+        TeamMembershipUpdate.model_dump(exclude_unset=True) skipping fields
+        the caller didn't set. If TeamMembershipUpdate ever grows a field
+        with a non-None default, revisit this method.
+        """
         return self.update_membership(
             membership_id, TeamMembershipUpdate(ended_at=ended_at), actor=actor
         )

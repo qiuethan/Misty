@@ -249,3 +249,57 @@ def test_get_role_kind(adapter):
     assert lead is not None
     assert lead.label == "Lead"
     assert adapter.get_role_kind("nonexistent") is None
+
+
+def test_update_person_email_conflict(adapter):
+    """update_person with an email that conflicts with another person raises."""
+    adapter.create_person(
+        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
+    )
+    p2 = adapter.create_person(
+        PersonCreate(display_name="B", primary_email="b@utmist.ca"), actor="t"
+    )
+    with pytest.raises(ValueError):
+        adapter.update_person(
+            p2.id, PersonUpdate(primary_email="A@UTMIST.CA"), actor="t"
+        )
+
+
+def test_update_team_slug_conflict(adapter):
+    """update_team with a slug that conflicts with another team raises."""
+    adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    t2 = adapter.create_team(TeamCreate(slug="events", label="Events"), actor="t")
+    from contracts.types import TeamUpdate
+
+    with pytest.raises(ValueError):
+        adapter.update_team(t2.id, TeamUpdate(slug="ops"), actor="t")
+
+
+def test_end_membership_on_nonexistent_returns_none(adapter):
+    """end_membership on a nonexistent id returns None, does not raise."""
+    from uuid import uuid4
+
+    result = adapter.end_membership(uuid4(), date.today(), actor="t")
+    assert result is None
+
+
+def test_list_memberships_active_only_direct(adapter):
+    """active_only filter returns only rows where ended_at is None."""
+    p = adapter.create_person(
+        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
+    )
+    team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    m_active = adapter.create_membership(
+        TeamMembershipCreate(person_id=p.id, team_id=team.id), actor="t"
+    )
+    adapter.create_membership(
+        TeamMembershipCreate(
+            person_id=p.id, team_id=team.id, ended_at=date(2020, 1, 1)
+        ),
+        actor="t",
+    )
+    all_rows = adapter.list_memberships()
+    active_rows = adapter.list_memberships(active_only=True)
+    assert len(all_rows) == 2
+    assert len(active_rows) == 1
+    assert active_rows[0].id == m_active.id
