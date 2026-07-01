@@ -1,4 +1,17 @@
-export class DirectoryUnavailable extends Error {}
+export class DirectoryUnavailable extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'DirectoryUnavailable';
+  }
+}
+
+async function parseJson(resp) {
+  try {
+    return await resp.json();
+  } catch {
+    throw new DirectoryUnavailable('malformed directory response');
+  }
+}
 
 export class AlreadyLinked extends Error {
   constructor(detail) {
@@ -23,7 +36,7 @@ export function createDirectoryClient({ baseUrl, apiKey, fetchImpl = fetch }) {
     const resp = await send(path);
     if (resp.status === 404) return null;
     if (!resp.ok) throw new DirectoryUnavailable(`directory returned ${resp.status}`);
-    return resp.json();
+    return parseJson(resp);
   }
 
   return {
@@ -40,7 +53,7 @@ export function createDirectoryClient({ baseUrl, apiKey, fetchImpl = fetch }) {
         method: 'POST',
         body: JSON.stringify({ provider: 'discord', external_id: externalId, handle }),
       });
-      if (resp.status === 201) return resp.json();
+      if (resp.status === 201) return parseJson(resp);
       if (resp.status === 409) {
         const body = await resp.json().catch(() => ({}));
         throw new AlreadyLinked(body.detail ?? 'already linked');

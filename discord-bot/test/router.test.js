@@ -5,14 +5,16 @@ import { DirectoryUnavailable } from '../src/directoryClient.js';
 
 function fakeInteraction(commandName) {
   const replies = [];
+  const calls = [];
   return {
     commandName,
     user: { id: '123', username: 'alex' },
     replied: false,
     deferred: false,
-    reply: async (p) => { replies.push(p); },
-    followUp: async (p) => { replies.push(p); },
+    reply: async (p) => { replies.push(p); calls.push('reply'); },
+    followUp: async (p) => { replies.push(p); calls.push('followUp'); },
     replies,
+    calls,
   };
 }
 
@@ -79,6 +81,31 @@ test('directory outage fails closed (deny, do not execute)', async () => {
   });
   assert.equal(ran, false);
   assert.match(interaction.replies[0].content, /unavailable|try again/i);
+});
+
+test('non-DirectoryUnavailable authN error propagates and does not execute the command', async () => {
+  let ran = false;
+  const interaction = fakeInteraction('linked');
+  const commands = new Map([['linked', cmd('linked', 'linked', async () => { ran = true; })]]);
+  await assert.rejects(
+    () => dispatchInteraction(interaction, {
+      commands,
+      ...ctxWith(async () => { throw new Error('boom'); }),
+    }),
+    (e) => e instanceof Error && e.message === 'boom',
+  );
+  assert.equal(ran, false);
+});
+
+test('safeReply routes through followUp when interaction already replied', async () => {
+  let ran = false;
+  const interaction = fakeInteraction('whoami');
+  interaction.replied = true;
+  const commands = new Map([['whoami', cmd('whoami', 'linked', async () => { ran = true; })]]);
+  await dispatchInteraction(interaction, { commands, ...ctxWith(async () => null) });
+  assert.equal(ran, false);
+  assert.deepEqual(interaction.calls, ['followUp']);
+  assert.match(interaction.replies[0].content, /link/i);
 });
 
 test('handler error is caught centrally with a generic reply', async () => {

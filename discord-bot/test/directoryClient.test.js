@@ -75,6 +75,16 @@ test('linkDiscord throws AlreadyLinked with detail on 409', async () => {
   );
 });
 
+test('getPersonByEmail throws DirectoryUnavailable on malformed 200 body', async () => {
+  const fetchImpl = async () => ({
+    status: 200,
+    ok: true,
+    json: async () => { throw new SyntaxError('bad'); },
+  });
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await assert.rejects(() => client.getPersonByEmail('x@utmist.ca'), DirectoryUnavailable);
+});
+
 test('network error becomes DirectoryUnavailable', async () => {
   const fetchImpl = async () => { throw new Error('econnrefused'); };
   const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });

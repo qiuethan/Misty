@@ -6,9 +6,9 @@ import { authMessages } from './messages.js';
 async function safeReply(interaction, content) {
   const payload = { content, ephemeral: true };
   if (interaction.replied || interaction.deferred) {
-    await interaction.followUp(payload).catch(() => {});
+    await interaction.followUp(payload).catch((e) => console.error('reply failed:', e.message));
   } else {
-    await interaction.reply(payload).catch(() => {});
+    await interaction.reply(payload).catch((e) => console.error('reply failed:', e.message));
   }
 }
 
