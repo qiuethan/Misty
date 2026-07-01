@@ -16,7 +16,7 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.dialects.postgresql import CITEXT, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, UUID
 
 metadata = MetaData()
 
@@ -78,4 +78,21 @@ team_memberships = Table(
     Index("ix_team_memberships_team_ended", "team_id", "ended_at"),
     Index("ix_team_memberships_person_ended", "person_id", "ended_at"),
     Index("ix_team_memberships_dates", "started_at", "ended_at"),
+)
+
+api_keys = Table(
+    "api_keys",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("name", Text, nullable=False, unique=True),
+    Column("prefix", Text, nullable=False, unique=True),
+    Column("key_hash", Text, nullable=False),
+    Column("scopes", ARRAY(Text), nullable=False, server_default=text("ARRAY[]::text[]")),
+    Column("active", Boolean, nullable=False, server_default=text("true")),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    Column("created_by", Text, nullable=False),
+    Column("updated_by", Text, nullable=False),
+    Column("revoked_at", DateTime(timezone=True), nullable=True),
+    Column("last_used_at", DateTime(timezone=True), nullable=True),
 )

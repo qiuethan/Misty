@@ -135,3 +135,36 @@ class TeamMembershipUpdate(BaseModel):
     role_kind_id: str | None = None
     is_team_admin: bool | None = None
     ended_at: date | None = None
+
+
+class ApiKey(DirectoryBase):
+    """A named, scoped API key. `key_hash` is never returned by public APIs
+    (only exists on writes back to storage); consumers get to see the plaintext
+    key ONCE at issuance time.
+    """
+
+    id: UUID
+    name: str
+    prefix: str
+    scopes: list[str]
+    active: bool = True
+    revoked_at: datetime | None = None
+    last_used_at: datetime | None = None
+
+
+class ApiKeyCreate(BaseModel):
+    """Input DTO for issuing a new API key. The plaintext key is not part of
+    this DTO — the storage layer generates it and returns it in an issuance
+    result the caller must handle carefully (log to stdout ONCE, never persist)."""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    scopes: list[str] = []
+
+
+class IssuedApiKey(BaseModel):
+    """Result of issuing a key: the plaintext key (shown ONCE) plus the stored ApiKey row."""
+
+    model_config = ConfigDict(extra="forbid")
+    plaintext: str
+    api_key: ApiKey
