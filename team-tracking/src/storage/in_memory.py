@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 from uuid import UUID, uuid4
 
 from contracts.types import (
+    ApiKey,
     Person,
     PersonCreate,
     PersonUpdate,
@@ -33,6 +34,8 @@ class InMemoryStorageAdapter:
             rk.id: rk for rk in (seed_role_kinds or [])
         }
         self._memberships: dict[UUID, TeamMembership] = {}
+        self._api_keys: dict[UUID, ApiKey] = {}
+        self._api_key_hashes: dict[UUID, str] = {}
 
     # --- People ---
 
@@ -248,3 +251,76 @@ class InMemoryStorageAdapter:
         return self.update_membership(
             membership_id, TeamMembershipUpdate(ended_at=ended_at), actor=actor
         )
+
+    # --- API keys ---
+
+    def create_api_key(
+        self,
+        *,
+        name: str,
+        prefix: str,
+        key_hash: str,
+        scopes: list[str],
+        actor: str,
+    ) -> ApiKey:
+        if any(k.name == name for k in self._api_keys.values()):
+            raise ValueError(f"name already exists: {name}")
+        if any(k.prefix == prefix for k in self._api_keys.values()):
+            raise ValueError(f"prefix already exists: {prefix}")
+        now = _now()
+        key = ApiKey(
+            id=uuid4(),
+            name=name,
+            prefix=prefix,
+            scopes=scopes,
+            active=True,
+            revoked_at=None,
+            last_used_at=None,
+            created_at=now,
+            updated_at=now,
+            created_by=actor,
+            updated_by=actor,
+        )
+        self._api_keys[key.id] = key
+        self._api_key_hashes[key.id] = key_hash
+        return key
+
+    def get_api_key_by_prefix(self, prefix: str) -> ApiKey | None:
+        for k in self._api_keys.values():
+            if k.prefix == prefix:
+                return k
+        return None
+
+    def get_api_key_hash(self, prefix: str) -> str | None:
+        for k in self._api_keys.values():
+            if k.prefix == prefix and k.active and k.revoked_at is None:
+                return self._api_key_hashes.get(k.id)
+        return None
+
+    def list_api_keys(self, *, active_only: bool = False) -> list[ApiKey]:
+        keys = list(self._api_keys.values())
+        if active_only:
+            keys = [k for k in keys if k.active and k.revoked_at is None]
+        return keys
+
+    def revoke_api_key(self, api_key_id: UUID, *, actor: str) -> ApiKey | None:
+        existing = self._api_keys.get(api_key_id)
+        if existing is None:
+            return None
+        now = _now()
+        data = existing.model_dump()
+        data["active"] = False
+        data["revoked_at"] = now
+        data["updated_at"] = now
+        data["updated_by"] = actor
+        revoked = ApiKey(**data)
+        self._api_keys[api_key_id] = revoked
+        return revoked
+
+    def touch_api_key_last_used(self, api_key_id: UUID) -> None:
+        existing = self._api_keys.get(api_key_id)
+        if existing is None:
+            return
+        data = existing.model_dump()
+        data["last_used_at"] = _now()
+        self._api_keys[api_key_id] = ApiKey(**data)

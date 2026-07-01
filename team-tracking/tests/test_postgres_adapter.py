@@ -131,3 +131,37 @@ def test_is_team_admin_filter(adapter):
     non_admins = adapter.list_memberships(team_id=team.id, is_team_admin=False)
     assert len(admins) == 1
     assert len(non_admins) == 1
+
+
+def test_api_key_create_and_lookup_pg(adapter):
+    key = adapter.create_api_key(
+        name="discord-bot",
+        prefix="tt_pg_1",
+        key_hash="$argon2id$v=19$fake",
+        scopes=["people:read"],
+        actor="admin",
+    )
+    fetched = adapter.get_api_key_by_prefix("tt_pg_1")
+    assert fetched is not None
+    assert fetched.id == key.id
+    assert adapter.get_api_key_hash("tt_pg_1") == "$argon2id$v=19$fake"
+
+
+def test_api_key_name_conflict_pg(adapter):
+    adapter.create_api_key(
+        name="dup", prefix="tt_pg_x", key_hash="h", scopes=[], actor="admin"
+    )
+    with pytest.raises(ValueError):
+        adapter.create_api_key(
+            name="dup", prefix="tt_pg_y", key_hash="h", scopes=[], actor="admin"
+        )
+
+
+def test_revoke_and_touch_pg(adapter):
+    key = adapter.create_api_key(
+        name="bot-pg", prefix="tt_pg_r", key_hash="h", scopes=[], actor="admin"
+    )
+    adapter.touch_api_key_last_used(key.id)
+    assert adapter.get_api_key_by_prefix("tt_pg_r").last_used_at is not None
+    adapter.revoke_api_key(key.id, actor="admin")
+    assert adapter.get_api_key_hash("tt_pg_r") is None
