@@ -5,8 +5,23 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from contracts.types import RoleKind
+from contracts.types import Provider, RoleKind
 from src.config import get_settings
+
+
+def build_seed_providers() -> list[Provider]:
+    """Standard providers seed for tests — matches migration 004."""
+    now = datetime.now(timezone.utc)
+    return [
+        Provider(
+            id=pid, label=plabel, description=None, active=True,
+            created_at=now, updated_at=now, created_by="system", updated_by="system",
+        )
+        for pid, plabel in [
+            ("discord", "Discord"), ("github", "GitHub"),
+            ("notion", "Notion"), ("uoft_email", "UofT Email"),
+        ]
+    ]
 
 
 def build_seed_role_kinds() -> list[RoleKind]:
@@ -40,6 +55,9 @@ def clean_db(engine: Engine) -> Iterator[Engine]:
     """
     with engine.begin() as conn:
         conn.execute(
-            text("TRUNCATE team_memberships, teams, people, api_keys RESTART IDENTITY CASCADE")
+            text(
+                "TRUNCATE person_identifiers, team_memberships, teams, people, api_keys "
+                "RESTART IDENTITY CASCADE"
+            )
         )
     yield engine

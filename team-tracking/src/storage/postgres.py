@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import and_, insert, or_, select, update
+from sqlalchemy import and_, delete, insert, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -9,7 +9,11 @@ from contracts.types import (
     ApiKey,
     Person,
     PersonCreate,
+    PersonIdentifier,
+    PersonIdentifierCreate,
+    PersonIdentifierUpdate,
     PersonUpdate,
+    Provider,
     RoleKind,
     Team,
     TeamCreate,
@@ -18,7 +22,15 @@ from contracts.types import (
     TeamMembershipUpdate,
     TeamUpdate,
 )
-from src.storage.schema import api_keys, people, role_kinds, team_memberships, teams
+from src.storage.schema import (
+    api_keys,
+    people,
+    person_identifiers,
+    providers,
+    role_kinds,
+    team_memberships,
+    teams,
+)
 
 
 def _now() -> datetime:
@@ -91,6 +103,33 @@ def _api_key_row_to_model(row) -> ApiKey:
         active=row.active,
         revoked_at=row.revoked_at,
         last_used_at=row.last_used_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        created_by=row.created_by,
+        updated_by=row.updated_by,
+    )
+
+
+def _provider_row_to_model(row) -> Provider:
+    return Provider(
+        id=row.id,
+        label=row.label,
+        description=row.description,
+        active=row.active,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        created_by=row.created_by,
+        updated_by=row.updated_by,
+    )
+
+
+def _identifier_row_to_model(row) -> PersonIdentifier:
+    return PersonIdentifier(
+        id=row.id,
+        person_id=row.person_id,
+        provider=row.provider,
+        external_id=row.external_id,
+        handle=row.handle,
         created_at=row.created_at,
         updated_at=row.updated_at,
         created_by=row.created_by,
@@ -334,6 +373,120 @@ class PostgresStorageAdapter:
         return self.update_membership(
             membership_id, TeamMembershipUpdate(ended_at=ended_at), actor=actor
         )
+
+    # --- Providers ---
+
+    def list_providers(self, *, active_only: bool = False) -> list[Provider]:
+        stmt = select(providers)
+        if active_only:
+            stmt = stmt.where(providers.c.active.is_(True))
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).all()
+        return [_provider_row_to_model(r) for r in rows]
+
+    def get_provider(self, provider_id: str) -> Provider | None:
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                select(providers).where(providers.c.id == provider_id)
+            ).one_or_none()
+        return _provider_row_to_model(row) if row else None
+
+    # --- Person identifiers ---
+
+    def list_person_identifiers(self, person_id: UUID) -> list[PersonIdentifier]:
+        with self._engine.connect() as conn:
+            rows = conn.execute(
+                select(person_identifiers).where(
+                    person_identifiers.c.person_id == person_id
+                )
+            ).all()
+        return [_identifier_row_to_model(r) for r in rows]
+
+    def create_person_identifier(
+        self, person_id: UUID, payload: PersonIdentifierCreate, *, actor: str
+    ) -> PersonIdentifier:
+        try:
+            with self._engine.begin() as conn:
+                row = conn.execute(
+                    insert(person_identifiers)
+                    .values(
+                        person_id=person_id,
+                        provider=payload.provider,
+                        external_id=payload.external_id,
+                        handle=payload.handle,
+                        created_by=actor,
+                        updated_by=actor,
+                    )
+                    .returning(person_identifiers)
+                ).one()
+        except IntegrityError as e:
+            constraint = getattr(
+                getattr(getattr(e, "orig", None), "diag", None), "constraint_name", None
+            )
+            if constraint == "uq_person_identifiers_person_provider":
+                raise ValueError(
+                    f"person already has an identifier for provider: {payload.provider}"
+                ) from e
+            if constraint == "uq_person_identifiers_provider_external":
+                raise ValueError(
+                    f"identifier already linked to another person: "
+                    f"{payload.provider}/{payload.external_id}"
+                ) from e
+            raise ValueError(
+                f"identifier conflict for provider {payload.provider}"
+            ) from e
+        return _identifier_row_to_model(row)
+
+    def update_person_identifier(
+        self, person_id: UUID, provider: str, payload: PersonIdentifierUpdate, *, actor: str
+    ) -> PersonIdentifier | None:
+        patch = payload.model_dump(exclude_unset=True)
+        patch["updated_at"] = _now()
+        patch["updated_by"] = actor
+        try:
+            with self._engine.begin() as conn:
+                row = conn.execute(
+                    update(person_identifiers)
+                    .where(
+                        person_identifiers.c.person_id == person_id,
+                        person_identifiers.c.provider == provider,
+                    )
+                    .values(**patch)
+                    .returning(person_identifiers)
+                ).one_or_none()
+        except IntegrityError as e:
+            raise ValueError(
+                f"external_id conflict on update for provider {provider}"
+            ) from e
+        return _identifier_row_to_model(row) if row else None
+
+    def delete_person_identifier(self, person_id: UUID, provider: str) -> bool:
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                delete(person_identifiers).where(
+                    person_identifiers.c.person_id == person_id,
+                    person_identifiers.c.provider == provider,
+                )
+            )
+        return result.rowcount > 0
+
+    def get_person_by_identifier(
+        self, provider: str, external_id: str
+    ) -> Person | None:
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                select(people)
+                .select_from(
+                    person_identifiers.join(
+                        people, person_identifiers.c.person_id == people.c.id
+                    )
+                )
+                .where(
+                    person_identifiers.c.provider == provider,
+                    person_identifiers.c.external_id == external_id,
+                )
+            ).one_or_none()
+        return _person_row_to_model(row) if row else None
 
     # --- API keys ---
 

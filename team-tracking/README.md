@@ -82,7 +82,7 @@ team-tracking/
 │       ├── 001_initial_schema.py   Creates all four tables + indexes
 │       └── 002_seed_role_kinds.py  Seeds executive/director/lead/member
 │
-├── tests/                  Test suite (63 tests)
+├── tests/                  Test suite (150 tests)
 │   ├── conftest.py         Fixtures: in-memory adapter, test client, seeded role_kinds
 │   ├── test_api_people.py
 │   ├── test_api_teams.py
@@ -118,6 +118,13 @@ All endpoints require `X-API-Key`. Write endpoints also accept `X-Actor` (identi
 | GET | `/people` | List people (`?active_only=true`) |
 | GET | `/people/{id}` | Get one person |
 | PATCH | `/people/{id}` | Update a person |
+| GET | `/providers` | List identity providers |
+| GET | `/providers/{id}` | Get one provider |
+| GET | `/people/by-identifier/{provider}/{external_id}` | Reverse lookup → Person |
+| GET | `/people/{id}/identifiers` | List a person's linked accounts |
+| POST | `/people/{id}/identifiers` | Link an external account |
+| PATCH | `/people/{id}/identifiers/{provider}` | Update a link (external_id/handle) |
+| DELETE | `/people/{id}/identifiers/{provider}` | Unlink an account |
 | POST | `/teams` | Create a team |
 | GET | `/teams` | List teams (`?active_only=true`) |
 | GET | `/teams/{id}` | Get team by UUID |
@@ -164,12 +171,12 @@ Machine-readable OpenAPI schema: `GET /openapi.json`. Interactive Swagger UI: `G
 
 ## Status
 
-v1 shipped on 2026-06-30. Four base tables, 16 endpoints, two storage adapters, 63 passing tests.
+v1 shipped on 2026-06-30. Six tables (people, teams, role_kinds, team_memberships, providers, person_identifiers), 23 endpoints, two storage adapters, 150 passing tests.
 
 **Not in v1 (per design non-goals):**
 
 - Connectors layer — no Discord, Google Workspace, GitHub, or Notion sync. Connectors are designed to hang off the HTTP API when built.
-- Extension tables — `person_identifiers` (Discord ID, GitHub handle, UofT email) and `team_metadata` are reserved but not implemented. Adding them does not require touching base tables.
+- Extension tables — `team_metadata` is reserved but not implemented. Adding it does not require touching base tables.
 - Permission enforcement — the API exposes primitives (memberships, admin flag) from which downstream systems derive access rules. No policy engine lives here.
 - Admin UI — officer edits go through whatever admin surface is chosen (NocoDB, Directus, direct SQL, or a custom app).
 - Pagination — list endpoints return all matching rows. Adequate for UTMIST's roster size; add limit/offset when needed.

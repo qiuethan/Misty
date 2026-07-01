@@ -63,6 +63,21 @@ class TeamMembership(DirectoryBase):
     ended_at: date | None = None
 
 
+class Provider(DirectoryBase):
+    id: str  # slug PK, e.g. "discord", "github", "notion", "uoft_email"
+    label: str
+    description: str | None = None
+    active: bool = True
+
+
+class PersonIdentifier(DirectoryBase):
+    id: UUID
+    person_id: UUID
+    provider: str
+    external_id: str
+    handle: str | None = None
+
+
 # --- Input DTOs (for API create/update payloads) ---
 
 
@@ -135,6 +150,19 @@ class TeamMembershipUpdate(BaseModel):
     role_kind_id: str | None = None
     is_team_admin: bool | None = None
     ended_at: date | None = None
+
+
+class PersonIdentifierCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: str
+    external_id: str
+    handle: str | None = None
+
+
+class PersonIdentifierUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    external_id: str | None = None
+    handle: str | None = None
 
 
 class ApiKey(DirectoryBase):

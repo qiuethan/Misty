@@ -18,6 +18,8 @@ If the key is missing or wrong, every endpoint returns `401 Unauthorized`.
 
 Write endpoints (`POST`, `PATCH`) also accept an optional `X-Actor` header that identifies the caller. This value is stored in the `created_by` and `updated_by` audit fields. If omitted, it defaults to `"api"`. Use descriptive values like `"discord-bot"`, `"sync-job"`, or `"bootstrap-script"` so the audit trail is useful.
 
+The API uses fine-grained scopes. Base scopes are `people:{read,write}`, `teams:{read,write}`, `role_kinds:read`, `memberships:{read,write}`. Identity scopes are `providers:read`, `identifiers:{read,write}`. The special `admin` scope grants access to all endpoints.
+
 ```bash
 # Read request — only X-API-Key required
 curl -sS http://localhost:8000/people \
@@ -35,10 +37,10 @@ curl -sS -X POST http://localhost:8000/people \
 
 | Status | When |
 |--------|------|
-| `400 Bad Request` | Invalid FK on membership create/update (person_id, team_id, or role_kind_id not found) |
+| `400 Bad Request` | Invalid FK on membership create/update (person_id, team_id, or role_kind_id not found); unknown provider on identifier create |
 | `401 Unauthorized` | Missing or incorrect `X-API-Key` |
-| `404 Not Found` | Resource with the given ID or slug does not exist |
-| `409 Conflict` | Uniqueness violation: `primary_email` already taken, team `slug` already taken |
+| `404 Not Found` | Resource with the given ID or slug does not exist; unknown person/identifier link, or unlinked reverse lookup |
+| `409 Conflict` | Uniqueness violation: `primary_email` already taken, team `slug` already taken, person already has that provider linked, or (provider, external_id) belongs to another person |
 | `422 Unprocessable Entity` | Pydantic validation failure: wrong type, missing required field, or field rejected by validator (e.g., slug contains uppercase) |
 
 Error responses always include a `detail` field in the JSON body describing the problem.
@@ -372,6 +374,236 @@ curl -sS "http://localhost:8000/role_kinds/lead" \
 
 ---
 
+## Providers
+
+Providers are the controlled vocabulary of identity provider types (e.g., Discord, GitHub, Notion). They are read-only through the API in v1 (no create/update endpoints). Requires scope `providers:read`.
+
+### GET /providers
+
+List all providers.
+
+**Query parameters:**
+
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `active_only` | boolean | `false` | If `true`, returns only active providers |
+
+**Response:** Array of `Provider` objects, HTTP 200.
+
+```bash
+curl -sS "http://localhost:8000/providers" \
+  -H "X-API-Key: dev-api-key-change-me"
+
+# Active providers only
+curl -sS "http://localhost:8000/providers?active_only=true" \
+  -H "X-API-Key: dev-api-key-change-me"
+```
+
+**Response shape (one item):**
+
+```json
+{
+  "id": "discord",
+  "label": "Discord",
+  "description": "Discord server member ID",
+  "active": true,
+  "created_at": "2026-06-30T12:00:00Z",
+  "updated_at": "2026-06-30T12:00:00Z",
+  "created_by": "system",
+  "updated_by": "system"
+}
+```
+
+---
+
+### GET /providers/{provider_id}
+
+Get a single provider by its ID.
+
+**Path parameters:**
+
+| Param | Type | Notes |
+|-------|------|-------|
+| `provider_id` | string | e.g. `discord`, `github`, `notion` |
+
+**Response:** `Provider` object, HTTP 200.
+
+**Errors:** 404 if not found.
+
+```bash
+curl -sS "http://localhost:8000/providers/discord" \
+  -H "X-API-Key: dev-api-key-change-me"
+```
+
+---
+
+## Person identifiers
+
+A `PersonIdentifier` row records that a person holds an external account on a given provider (e.g., Discord account snowflake, GitHub username). Each person can have at most one link per provider. Identity mappings are current state, not history: unlinking hard-deletes the row via the DELETE endpoint (a deliberate exception to the "never hard-delete" convention for people/teams/memberships). Re-linking requires unlink-then-relink.
+
+Identity operations require scopes `identifiers:read` (for GET) and `identifiers:write` (for POST/PATCH/DELETE).
+
+### GET /people/by-identifier/{provider}/{external_id}
+
+Reverse lookup: find the person who owns a given external identifier on a provider. This is the primary identity call for external systems (e.g., Discord bot looking up a user by their snowflake). Returns 404 if the identifier is unlinked.
+
+**Path parameters:**
+
+| Param | Type | Notes |
+|-------|------|-------|
+| `provider` | string | Provider ID (e.g. `discord`) |
+| `external_id` | string | The external identifier (e.g. snowflake, username, email) |
+
+**Response:** `Person` object, HTTP 200.
+
+**Errors:** 404 if the identifier is not linked or the provider does not exist.
+
+```bash
+curl -sS "http://localhost:8000/people/by-identifier/discord/123456789" \
+  -H "X-API-Key: dev-api-key-change-me"
+```
+
+---
+
+### GET /people/{person_id}/identifiers
+
+List all linked external identifiers for a person.
+
+**Path parameters:**
+
+| Param | Type | Notes |
+|-------|------|-------|
+| `person_id` | UUID | |
+
+**Response:** Array of `PersonIdentifier` objects, HTTP 200.
+
+**Errors:** 404 if person not found.
+
+```bash
+curl -sS "http://localhost:8000/people/550e8400-e29b-41d4-a716-446655440000/identifiers" \
+  -H "X-API-Key: dev-api-key-change-me"
+```
+
+**Response shape:**
+
+```json
+[
+  {
+    "id": "880e8400-e29b-41d4-a716-446655440003",
+    "person_id": "550e8400-e29b-41d4-a716-446655440000",
+    "provider": "discord",
+    "external_id": "123456789",
+    "handle": "alexchen",
+    "created_at": "2026-06-30T12:00:00Z",
+    "updated_at": "2026-06-30T12:00:00Z",
+    "created_by": "discord-bot",
+    "updated_by": "discord-bot"
+  }
+]
+```
+
+---
+
+### POST /people/{person_id}/identifiers
+
+Link an external account to a person.
+
+**Path parameters:**
+
+| Param | Type | Notes |
+|-------|------|-------|
+| `person_id` | UUID | |
+
+**Request body:**
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `provider` | string | yes | Must be an active provider ID |
+| `external_id` | string | yes | The stable external identifier (e.g. snowflake, numeric id, email) |
+| `handle` | string | no | Optional human-readable handle or display name |
+
+**Response:** `PersonIdentifier` object, HTTP 201.
+
+**Errors:** 
+- 400 if `provider` does not exist or is inactive
+- 404 if person not found
+- 409 if person already has that provider linked, or if (provider, external_id) is linked to a different person
+- 422 if required fields are missing or validation fails
+
+```bash
+curl -sS -X POST "http://localhost:8000/people/550e8400-e29b-41d4-a716-446655440000/identifiers" \
+  -H "X-API-Key: dev-api-key-change-me" \
+  -H "X-Actor: discord-bot" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "discord",
+    "external_id": "123456789",
+    "handle": "alexchen"
+  }'
+```
+
+---
+
+### PATCH /people/{person_id}/identifiers/{provider}
+
+Update an existing link (change `external_id` and/or `handle`).
+
+**Path parameters:**
+
+| Param | Type | Notes |
+|-------|------|-------|
+| `person_id` | UUID | |
+| `provider` | string | Provider ID |
+
+**Request body (all fields optional):**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `external_id` | string | New external identifier |
+| `handle` | string | New handle; pass `null` to clear |
+
+**Response:** Updated `PersonIdentifier` object, HTTP 200.
+
+**Errors:**
+- 404 if person or identifier link not found
+- 409 if new `external_id` is already linked to a different person
+- 422 if validation fails
+
+```bash
+curl -sS -X PATCH "http://localhost:8000/people/550e8400-e29b-41d4-a716-446655440000/identifiers/discord" \
+  -H "X-API-Key: dev-api-key-change-me" \
+  -H "X-Actor: discord-bot" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "handle": "alexchen2024"
+  }'
+```
+
+---
+
+### DELETE /people/{person_id}/identifiers/{provider}
+
+Unlink an external account from a person.
+
+**Path parameters:**
+
+| Param | Type | Notes |
+|-------|------|-------|
+| `person_id` | UUID | |
+| `provider` | string | Provider ID |
+
+**Response:** HTTP 204 (No Content).
+
+**Errors:** 404 if person or identifier link not found.
+
+```bash
+curl -sS -X DELETE "http://localhost:8000/people/550e8400-e29b-41d4-a716-446655440000/identifiers/discord" \
+  -H "X-API-Key: dev-api-key-change-me" \
+  -H "X-Actor: admin"
+```
+
+---
+
 ## Memberships
 
 A `TeamMembership` row records that a person holds a role on a team for a date range. Rows are never deleted; when someone leaves, the row gains an `ended_at` date.
@@ -603,6 +835,15 @@ curl -sS "http://localhost:8000/memberships?team_id=<partnerships-uuid>" \
 ```
 
 Then filter client-side on `role_kind_id == "executive"`. There is no server-side `role_kind_id` filter on `GET /memberships` in v1; if this query is frequent, it is a good candidate for a future query parameter.
+
+**Which person owns this Discord account?**
+
+```bash
+curl -sS "http://localhost:8000/people/by-identifier/discord/<snowflake>" \
+  -H "X-API-Key: dev-api-key-change-me"
+```
+
+This is the reverse-lookup endpoint: given an external identifier (Discord snowflake, GitHub username, UofT email), it returns the `Person` who owns it. Returns 404 if the identifier is not linked. This is the Discord bot's primary identity call.
 
 ---
 

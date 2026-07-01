@@ -14,6 +14,7 @@ from sqlalchemy import (
     MetaData,
     Table,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, UUID
@@ -95,4 +96,36 @@ api_keys = Table(
     Column("updated_by", Text, nullable=False),
     Column("revoked_at", DateTime(timezone=True), nullable=True),
     Column("last_used_at", DateTime(timezone=True), nullable=True),
+)
+
+providers = Table(
+    "providers",
+    metadata,
+    Column("id", Text, primary_key=True),  # slug PK
+    Column("label", Text, nullable=False),
+    Column("description", Text, nullable=True),
+    Column("active", Boolean, nullable=False, server_default=text("true")),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    Column("created_by", Text, nullable=False),
+    Column("updated_by", Text, nullable=False),
+)
+
+person_identifiers = Table(
+    "person_identifiers",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")),
+    Column("person_id", UUID(as_uuid=True), ForeignKey("people.id"), nullable=False),
+    Column("provider", Text, ForeignKey("providers.id"), nullable=False),
+    Column("external_id", Text, nullable=False),
+    Column("handle", Text, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+    Column("created_by", Text, nullable=False),
+    Column("updated_by", Text, nullable=False),
+    # One account per provider per person; and one account maps to one person.
+    # The (provider, external_id) unique index also powers the reverse lookup,
+    # so no separate Index is needed.
+    UniqueConstraint("person_id", "provider", name="uq_person_identifiers_person_provider"),
+    UniqueConstraint("provider", "external_id", name="uq_person_identifiers_provider_external"),
 )

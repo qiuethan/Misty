@@ -145,3 +145,53 @@ def test_team_create_accepts_good_slug():
 
     ok = TeamCreate(slug="events.agi_workshop_2025", label="AGI")
     assert ok.slug == "events.agi_workshop_2025"
+
+
+def _audit():
+    now = datetime.now(timezone.utc)
+    return dict(created_at=now, updated_at=now, created_by="t", updated_by="t")
+
+
+def test_provider_model_roundtrips():
+    from contracts.types import Provider
+
+    p = Provider(id="discord", label="Discord", **_audit())
+    assert p.id == "discord"
+    assert p.active is True
+    assert p.description is None
+
+
+def test_person_identifier_model_roundtrips():
+    from contracts.types import PersonIdentifier
+
+    pi = PersonIdentifier(
+        id=uuid4(), person_id=uuid4(), provider="discord",
+        external_id="123456789", handle="alex#0001", **_audit(),
+    )
+    assert pi.provider == "discord"
+    assert pi.external_id == "123456789"
+    assert pi.handle == "alex#0001"
+
+
+def test_identifier_create_defaults_handle_none():
+    from contracts.types import PersonIdentifierCreate
+
+    c = PersonIdentifierCreate(provider="github", external_id="42")
+    assert c.handle is None
+
+
+def test_identifier_update_is_partial():
+    from contracts.types import PersonIdentifierUpdate
+
+    u = PersonIdentifierUpdate(handle="newhandle")
+    assert u.model_dump(exclude_unset=True) == {"handle": "newhandle"}
+
+
+def test_identifier_create_rejects_extra_fields():
+    import pytest
+    from pydantic import ValidationError
+
+    from contracts.types import PersonIdentifierCreate
+
+    with pytest.raises(ValidationError):
+        PersonIdentifierCreate(provider="discord", external_id="1", person_id=uuid4())
