@@ -43,7 +43,9 @@ team-tracking/
 
 ## Status
 
-Design phase complete. Implementation stack not yet chosen — the concrete language / framework for `contracts/` and `src/` is the next decision.
+v1 implementation complete: Python + FastAPI + SQLAlchemy Core. Four base tables (people, teams, role_kinds, team_memberships) exposed via an HTTP API guarded by an API key. Two `StorageAdapter` implementations shipped — `InMemoryStorageAdapter` for tests, `PostgresStorageAdapter` for production. OpenAPI is auto-generated at `/openapi.json` and `/docs`.
+
+**Deferred (per DESIGN.md non-goals):** connectors layer (Discord/Google/GitHub sync), extension tables (e.g. `person_identifiers`), permission-enforcement engine, admin UI, pagination.
 
 ## Local development
 
