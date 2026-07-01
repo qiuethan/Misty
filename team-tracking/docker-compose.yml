@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: team_tracking
+      POSTGRES_PASSWORD: dev_password
+      POSTGRES_DB: team_tracking
+    ports:
+      - "5433:5432"
+    volumes:
+      - team_tracking_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U team_tracking"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  team_tracking_pg:
