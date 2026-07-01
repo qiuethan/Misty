@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from uuid import UUID, uuid4
 
 from contracts.types import (
@@ -16,7 +16,7 @@ from contracts.types import (
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(timezone.utc)
 
 
 class InMemoryStorageAdapter:

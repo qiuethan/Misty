@@ -34,7 +34,7 @@ def test_email_uniqueness_case_insensitive(adapter):
         PersonCreate(display_name="A", primary_email="alex@utmist.ca"),
         actor="t",
     )
-    with pytest.raises(Exception):  # IntegrityError from citext unique
+    with pytest.raises(ValueError):
         adapter.create_person(
             PersonCreate(display_name="B", primary_email="ALEX@UTMIST.CA"),
             actor="t",

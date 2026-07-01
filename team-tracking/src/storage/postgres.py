@@ -1,8 +1,9 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import and_, insert, or_, select, update
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 from contracts.types import (
     Person,
@@ -17,6 +18,10 @@ from contracts.types import (
     TeamUpdate,
 )
 from src.storage.schema import people, role_kinds, team_memberships, teams
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _person_row_to_model(row) -> Person:
@@ -89,17 +94,20 @@ class PostgresStorageAdapter:
     # --- People ---
 
     def create_person(self, payload: PersonCreate, *, actor: str) -> Person:
-        with self._engine.begin() as conn:
-            row = conn.execute(
-                insert(people)
-                .values(
-                    display_name=payload.display_name,
-                    primary_email=payload.primary_email,
-                    created_by=actor,
-                    updated_by=actor,
-                )
-                .returning(people)
-            ).one()
+        try:
+            with self._engine.begin() as conn:
+                row = conn.execute(
+                    insert(people)
+                    .values(
+                        display_name=payload.display_name,
+                        primary_email=payload.primary_email,
+                        created_by=actor,
+                        updated_by=actor,
+                    )
+                    .returning(people)
+                ).one()
+        except IntegrityError as e:
+            raise ValueError(f"primary_email already exists: {payload.primary_email}") from e
         return _person_row_to_model(row)
 
     def get_person(self, person_id: UUID) -> Person | None:
@@ -130,33 +138,39 @@ class PostgresStorageAdapter:
         patch = payload.model_dump(exclude_unset=True)
         if not patch:
             return self.get_person(person_id)
-        patch["updated_at"] = datetime.utcnow()
+        patch["updated_at"] = _now()
         patch["updated_by"] = actor
-        with self._engine.begin() as conn:
-            row = conn.execute(
-                update(people)
-                .where(people.c.id == person_id)
-                .values(**patch)
-                .returning(people)
-            ).one_or_none()
+        try:
+            with self._engine.begin() as conn:
+                row = conn.execute(
+                    update(people)
+                    .where(people.c.id == person_id)
+                    .values(**patch)
+                    .returning(people)
+                ).one_or_none()
+        except IntegrityError as e:
+            raise ValueError(f"primary_email conflict on update: {patch.get('primary_email')}") from e
         return _person_row_to_model(row) if row else None
 
     # --- Teams ---
 
     def create_team(self, payload: TeamCreate, *, actor: str) -> Team:
-        with self._engine.begin() as conn:
-            row = conn.execute(
-                insert(teams)
-                .values(
-                    slug=payload.slug,
-                    label=payload.label,
-                    description=payload.description,
-                    parent_id=payload.parent_id,
-                    created_by=actor,
-                    updated_by=actor,
-                )
-                .returning(teams)
-            ).one()
+        try:
+            with self._engine.begin() as conn:
+                row = conn.execute(
+                    insert(teams)
+                    .values(
+                        slug=payload.slug,
+                        label=payload.label,
+                        description=payload.description,
+                        parent_id=payload.parent_id,
+                        created_by=actor,
+                        updated_by=actor,
+                    )
+                    .returning(teams)
+                ).one()
+        except IntegrityError as e:
+            raise ValueError(f"slug already exists: {payload.slug}") from e
         return _team_row_to_model(row)
 
     def get_team(self, team_id: UUID) -> Team | None:
@@ -187,15 +201,18 @@ class PostgresStorageAdapter:
         patch = payload.model_dump(exclude_unset=True)
         if not patch:
             return self.get_team(team_id)
-        patch["updated_at"] = datetime.utcnow()
+        patch["updated_at"] = _now()
         patch["updated_by"] = actor
-        with self._engine.begin() as conn:
-            row = conn.execute(
-                update(teams)
-                .where(teams.c.id == team_id)
-                .values(**patch)
-                .returning(teams)
-            ).one_or_none()
+        try:
+            with self._engine.begin() as conn:
+                row = conn.execute(
+                    update(teams)
+                    .where(teams.c.id == team_id)
+                    .values(**patch)
+                    .returning(teams)
+                ).one_or_none()
+        except IntegrityError as e:
+            raise ValueError(f"slug conflict on update: {patch.get('slug')}") from e
         return _team_row_to_model(row) if row else None
 
     # --- Role kinds ---
@@ -283,7 +300,7 @@ class PostgresStorageAdapter:
         patch = payload.model_dump(exclude_unset=True)
         if not patch:
             return self.get_membership(membership_id)
-        patch["updated_at"] = datetime.utcnow()
+        patch["updated_at"] = _now()
         patch["updated_by"] = actor
         with self._engine.begin() as conn:
             row = conn.execute(
