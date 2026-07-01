@@ -13,6 +13,17 @@ The documentation-system service is that canonical index. It exposes a REST API 
 
 Ingesting a URL is idempotent: re-submitting a known URL merges new tags onto the existing doc rather than creating a duplicate. Ownership (`owning_team_id` / `owning_person_id`) is validated against UTMIST's team-tracking service when reachable, and degrades gracefully (id stored, label resolved later) when it isn't — the catalog never blocks on a downstream directory outage.
 
+## Dependency on the team-tracking directory
+
+The documentation-system is the catalog; the [team-tracking](../team-tracking/) service is the **source of truth** for people and teams. When you ingest or update a doc with an `owning_team_id` or `owning_person_id`, this service calls team-tracking over HTTP (`GET /teams/{id}`, `GET /people/{id}`) to validate the id and cache its human-readable label.
+
+Two things follow from this:
+
+- **team-tracking is a runtime dependency.** For ownership validation you need a reachable directory at `DIRECTORY_BASE_URL` (default `http://localhost:8000`) and a directory API key (`DIRECTORY_API_KEY`).
+- **degrade-on-directory-down.** If the directory is unreachable (connection failure or 5xx), ingest does not fail. The owner id is stored, the label is left null with a warning, and a later read or update backfills the label once the directory is reachable again. A directory that *is* reachable but returns 404 for the id is a genuine "unknown owner" error (HTTP 400), not a degrade.
+
+See `docs/ARCHITECTURE.md` for the full data flow.
+
 ## Quick start
 
 Prerequisites: Docker, Python 3.11+, [uv](https://github.com/astral-sh/uv).
@@ -102,7 +113,7 @@ documentation-system/
 │       ├── 001_initial_schema.py   Creates docs, doc_tags, sources, api_keys tables
 │       └── 002_seed_sources.py     Seeds the 8 built-in sources
 │
-├── tests/                      Test suite (56 tests)
+├── tests/                      Test suite (59 fast + 7 Postgres, gated)
 │   ├── conftest.py              build_seed_sources() — shared seed matching migration 002
 │   ├── test_api_docs.py
 │   ├── test_api_sources.py
@@ -175,7 +186,9 @@ The test suite has two modes:
 uv run pytest --ignore=tests/test_postgres_adapter.py -q
 ```
 
-This runs 56 tests using `InMemoryStorageAdapter` injected via FastAPI's `dependency_overrides`, plus fakes for `Fetcher` and `DirectoryClient`. `tests/conftest.py` provides `build_seed_sources()`, a shared 8-source seed matching migration 002, used across the in-memory adapter, ingest, API, and OpenAPI tests. Runs in well under a second.
+This runs **59 tests** using `InMemoryStorageAdapter` injected via FastAPI's `dependency_overrides`, plus fakes for `Fetcher` and `DirectoryClient`. `tests/conftest.py` provides `build_seed_sources()`, a shared 8-source seed matching migration 002, used across the in-memory adapter, ingest, API, and OpenAPI tests. Runs in well under a second.
+
+Running the whole suite *without* `RUN_PG_TESTS` reports **59 passed, 7 skipped** — the 7 skipped are the Postgres integration tests in `tests/test_postgres_adapter.py`.
 
 **Full (includes Postgres integration):**
 ```bash
@@ -185,9 +198,24 @@ RUN_PG_TESTS=1 uv run pytest -q
 
 `tests/test_postgres_adapter.py` runs the same behavioral assertions against a live Postgres instance and is gated behind the `RUN_PG_TESTS=1` environment variable so it's skipped by default (and in the fast suite above). Requires `DATABASE_URL` in `.env` pointing at the running container on port 5434.
 
+Lint before committing:
+
+```bash
+uv run ruff check .
+```
+
+## Further documentation
+
+| Doc | Audience | Contents |
+|-----|----------|----------|
+| [`docs/API.md`](docs/API.md) | Consumers (bots, dashboards, HTTP clients) | Every endpoint, auth, scopes, ingest idempotency, degrade behavior, error semantics |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Contributors | The three Protocols, adapters, ingest orchestrator, URL normalization, fetcher registry, directory client, data model |
+| [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) | Contributors | Task walkthroughs: add an endpoint, add a fetcher, add an adapter method, write a migration, run the tests |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Operators | Running in prod: Postgres, env vars, migrations, issuing keys, enabling fetchers, the directory dependency |
+
 ## Status
 
-v1 covers: the docs + sources registry, idempotent ingest with dedup, best-effort content fetching with graceful degradation, team-tracking-backed ownership with label backfill, tag management, soft delete (`active` flag), Level 2 scoped API keys with an attested-actor audit trail, and both storage adapters — 56 passing tests.
+v1 covers: the docs + sources registry, idempotent ingest with dedup, best-effort content fetching with graceful degradation, team-tracking-backed ownership with label backfill, tag management, soft delete (`active` flag), Level 2 scoped API keys with an attested-actor audit trail, and both storage adapters — 59 passing fast tests (plus 7 Postgres integration tests behind `RUN_PG_TESTS`).
 
 **Deferred (per design §3/§11 non-goals):**
 

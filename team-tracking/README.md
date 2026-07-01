@@ -1,14 +1,27 @@
 # team-tracking
 
-Source-of-truth HTTP API for UTMIST's team directory: people, teams, roles, and memberships.
+Source-of-truth HTTP API for UTMIST's directory: people, teams, roles, memberships, external identity mapping, and scoped API-key auth.
 
 ## What this service does
 
-UTMIST runs a rotating volunteer org — people join teams, move between roles, and eventually hand off to successors. Without a canonical record of who is on what team right now (and who was on it six months ago), downstream systems have to guess. The team-tracking service is that canonical record.
+UTMIST runs a rotating volunteer org — people join teams, move between roles, and eventually hand off to successors. Without a canonical record of who is on what team right now (and who was on it six months ago), every downstream system has to guess. team-tracking is that canonical record — the **source of truth** for the directory.
 
-The service exposes a simple REST API over four tables: `people`, `teams`, `role_kinds`, and `team_memberships`. It answers questions like "who is currently on the Partnerships team," "who were the leads during fall semester," and "is Alex an admin of the Events team right now." Downstream systems — a Discord bot, a docs catalog, a sponsor CRM — call this API rather than each maintaining their own roster.
+It answers questions like "who is currently on the Partnerships team," "who were the leads during fall semester," "is Alex an admin of the Events team right now," and "which person owns this Discord account." Downstream systems — the [documentation-system](../documentation-system) catalog, a future Discord bot, dashboards, sync jobs — call this API rather than each maintaining their own roster.
 
-Membership rows are never deleted. When someone leaves a team, their row gains an `ended_at` date. This means the full history of who held what role survives across leadership transitions, and point-in-time queries ("roster as of 2024-12-15") work without any special logic.
+Two design choices shape everything:
+
+- **Membership rows are never deleted.** When someone leaves a team, their row gains an `ended_at` date. The full history of who held what role survives leadership transitions, and point-in-time queries ("roster as of 2024-12-15") work without special logic.
+- **External accounts are mapped, not embedded.** A person's Discord/GitHub/Notion/UofT-email accounts live in a `person_identifiers` table keyed by a `providers` vocabulary — so the Discord bot can reverse-look-up a person from a raw snowflake without the base `people` table ever gaining an integration-specific column.
+
+## The API-only principle
+
+**Nothing runs inside team-tracking.** It is an HTTP API and nothing else — no in-process consumers, no embedded jobs, no UI. Every consumer talks to it over HTTP and treats its internals as a black box. This is deliberate:
+
+- The directory's data model stays independent of any one integration's details.
+- Consumers can be written in any language, deployed anywhere, and revoked individually.
+- The service can be tested, versioned, and redeployed without coordinating with its consumers.
+
+Connectors (Discord sync, Google Workspace, etc.) are separate processes that speak the published HTTP API — they never import this codebase.
 
 ## Quick start
 
@@ -22,16 +35,16 @@ docker compose up -d postgres
 # 2. Install dependencies (including dev tools)
 uv sync --extra dev
 
-# 3. Apply database migrations
+# 3. Apply database migrations (creates all 7 tables + seeds)
 uv run alembic upgrade head
 
 # 4. Start the API server
 uv run uvicorn src.api.app:app --reload --port 8000
 ```
 
-The API is now running at `http://localhost:8000`. OpenAPI docs are at `http://localhost:8000/docs`.
+The API is now at `http://localhost:8000`. Interactive Swagger UI is at `http://localhost:8000/docs`; the machine-readable schema is at `http://localhost:8000/openapi.json`.
 
-The default dev API key is `dev-api-key-change-me` (set in `.env`). Pass it as `X-API-Key` on every request:
+The default dev bootstrap key is `dev-api-key-change-me` (set in `.env`). Pass it as `X-API-Key` on every request:
 
 ```bash
 curl -sS http://localhost:8000/role_kinds \
@@ -42,141 +55,153 @@ curl -sS http://localhost:8000/role_kinds \
 
 ```bash
 # Issue a read-only key for a Discord bot
-uv run team-tracking-keys issue --name discord-bot --scopes people:read memberships:read
+uv run team-tracking-keys issue --name discord-bot --scopes people:read memberships:read identifiers:read
 # Prints: tt_<prefix>_<secret>  (shown ONCE — capture it now)
 
 # List existing keys (metadata only, never plaintext)
 uv run team-tracking-keys list --active-only
 
-# Revoke a compromised key
+# Revoke a compromised key (soft-delete; history preserved)
 uv run team-tracking-keys revoke <api_key_id>
 ```
 
-Scopes: `people:{read,write}`, `teams:{read,write}`, `role_kinds:read`, `memberships:{read,write}`, `admin` (wildcard). See `docs/DEPLOYMENT.md` for the full auth model, rotation runbook, and audit log integration.
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full auth model, scopes, rotation runbook, and audit-log integration.
 
-## Folder tour
+## Repo layout
 
 ```
 team-tracking/
-├── contracts/              Domain models (Pydantic) + StorageAdapter Protocol
-│   ├── types.py            Person, Team, RoleKind, TeamMembership + Create/Update DTOs
-│   └── storage.py          StorageAdapter Protocol — the boundary the API depends on
+├── contracts/              The domain boundary — no framework imports
+│   ├── types.py            Pydantic models (Person, Team, RoleKind, TeamMembership,
+│   │                       Provider, PersonIdentifier, ApiKey) + Create/Update DTOs
+│   └── storage.py          StorageAdapter Protocol — the interface the API depends on
 │
 ├── src/
 │   ├── api/                FastAPI application
-│   │   ├── app.py          App factory; mounts all routers
-│   │   ├── auth.py         require_api_key + get_actor dependencies
-│   │   ├── deps.py         get_storage() FastAPI dependency (injects Postgres adapter)
-│   │   └── routers/        One file per resource: people, teams, role_kinds, memberships
+│   │   ├── app.py          App factory; mounts all 6 routers + audit middleware
+│   │   ├── auth.py         Scoped API-key auth: require_scope, get_actor (attested actor)
+│   │   ├── hashing.py      argon2 key hashing + tt_<prefix>_<secret> generation
+│   │   ├── middleware.py   AuditLogMiddleware — one JSON log line per request
+│   │   ├── deps.py         get_storage() dependency (injects the Postgres adapter)
+│   │   └── routers/        One file per resource:
+│   │                       people, teams, role_kinds, memberships, providers, identifiers
 │   │
-│   ├── storage/            Concrete StorageAdapter implementations
-│   │   ├── schema.py       SQLAlchemy Core table definitions (source of DB schema truth)
-│   │   ├── in_memory.py    InMemoryStorageAdapter — used in tests
+│   ├── storage/            StorageAdapter implementations
+│   │   ├── schema.py       SQLAlchemy Core table definitions (7 tables)
+│   │   ├── in_memory.py    InMemoryStorageAdapter — used in tests + prototyping
 │   │   └── postgres.py     PostgresStorageAdapter — used in production
 │   │
+│   ├── cli.py              team-tracking-keys CLI (issue / list / revoke API keys)
 │   └── config.py           Settings (DATABASE_URL, API_KEY) loaded from environment
 │
 ├── migrations/             Alembic migrations
 │   ├── env.py
 │   └── versions/
-│       ├── 001_initial_schema.py   Creates all four tables + indexes
-│       └── 002_seed_role_kinds.py  Seeds executive/director/lead/member
+│       ├── 001_initial_schema.py     people, teams, role_kinds, team_memberships + indexes
+│       ├── 002_seed_role_kinds.py    seeds executive / director / lead / member
+│       ├── 003_api_keys.py           api_keys table (Level-2 auth)
+│       └── 004_person_identifiers.py providers + person_identifiers; seeds 4 providers
 │
-├── tests/                  Test suite (150 tests)
-│   ├── conftest.py         Fixtures: in-memory adapter, test client, seeded role_kinds
-│   ├── test_api_people.py
-│   ├── test_api_teams.py
-│   ├── test_api_role_kinds.py
-│   ├── test_api_memberships.py
-│   ├── test_in_memory_adapter.py
-│   ├── test_postgres_adapter.py    Integration tests (requires running Postgres)
-│   ├── test_openapi.py
-│   └── test_types.py
+├── tests/                  Two-mode test suite (see Testing below)
 │
 ├── docs/
-│   ├── API.md              Full endpoint reference
-│   ├── ARCHITECTURE.md     Design decisions and extending guide
-│   ├── DEPLOYMENT.md       Production deployment + hardening guide
-│   └── archive/
-│       ├── 2026-06-30-DESIGN.md    Original design spec
-│       └── 2026-06-30-PLAN.md      Original implementation plan
+│   ├── API.md              Consumer-facing endpoint reference (all 23 endpoints)
+│   ├── ARCHITECTURE.md     Contributor orientation: boundaries, adapters, auth, data model
+│   ├── CONTRIBUTING.md     Task walkthroughs: add an endpoint, adapter method, migration, tests
+│   ├── DEPLOYMENT.md       Production: Postgres, Alembic, key issuance, reverse proxy
+│   └── archive/            Original design + plan specs
 │
 └── deploy/
-    ├── Caddyfile           Production reverse proxy (TLS + rate limit + headers)
-    └── nginx.conf.example  Alternative to Caddy
+    ├── Caddyfile           Production reverse proxy (auto TLS + rate limit + headers)
+    └── nginx.conf.example  nginx alternative
 ```
 
-**Dependency direction:** `contracts/` has no imports from `src/`. The API layer (`src/api/`) imports only from `contracts/` and `src/config`. The storage layer (`src/storage/`) imports from `contracts/` for types and defines its own schema. Nothing imports from `src/storage/` except `src/api/deps.py` (the wiring point).
+**Seven tables:** `people`, `teams`, `role_kinds`, `team_memberships`, `api_keys`, `providers`, `person_identifiers`.
+**Six routers, 23 endpoints.** **Four migrations (001–004).**
+
+**Dependency direction:** `contracts/` imports nothing from `src/`. The API layer imports only from `contracts/` and `src/config`. The storage layer imports `contracts/` for types and defines its own schema. Nothing imports from `src/storage/` except `src/api/deps.py` (the single wiring point). This is the **Protocol boundary** — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## API at a glance
 
-All endpoints require `X-API-Key`. Write endpoints also accept `X-Actor` (identifies the caller in audit fields; defaults to `"api"`).
+Every endpoint requires an `X-API-Key`. The actor stamped into `created_by`/`updated_by` is the **key's name** (attested by the key, not a self-declared header).
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/people` | Create a person |
-| GET | `/people` | List people (`?active_only=true`) |
-| GET | `/people/{id}` | Get one person |
-| PATCH | `/people/{id}` | Update a person |
-| GET | `/providers` | List identity providers |
-| GET | `/providers/{id}` | Get one provider |
-| GET | `/people/by-identifier/{provider}/{external_id}` | Reverse lookup → Person |
-| GET | `/people/{id}/identifiers` | List a person's linked accounts |
-| POST | `/people/{id}/identifiers` | Link an external account |
-| PATCH | `/people/{id}/identifiers/{provider}` | Update a link (external_id/handle) |
-| DELETE | `/people/{id}/identifiers/{provider}` | Unlink an account |
-| POST | `/teams` | Create a team |
-| GET | `/teams` | List teams (`?active_only=true`) |
-| GET | `/teams/{id}` | Get team by UUID |
-| GET | `/teams/by-slug/{slug}` | Get team by slug |
-| PATCH | `/teams/{id}` | Update a team |
-| GET | `/role_kinds` | List role kinds |
-| GET | `/role_kinds/{id}` | Get one role kind |
-| POST | `/memberships` | Create a membership |
-| GET | `/memberships` | List memberships (filterable) |
-| GET | `/memberships/{id}` | Get one membership |
-| PATCH | `/memberships/{id}` | Update a membership |
-| POST | `/memberships/{id}/end` | End a membership (set ended_at) |
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| POST | `/people` | `people:write` | Create a person |
+| GET | `/people` | `people:read` | List people (`?active_only=`) |
+| GET | `/people/{id}` | `people:read` | Get one person |
+| PATCH | `/people/{id}` | `people:write` | Update a person |
+| GET | `/people/by-identifier/{provider}/{external_id}` | `identifiers:read` | Reverse lookup → Person |
+| GET | `/people/{id}/identifiers` | `identifiers:read` | List a person's linked accounts |
+| POST | `/people/{id}/identifiers` | `identifiers:write` | Link an external account |
+| PATCH | `/people/{id}/identifiers/{provider}` | `identifiers:write` | Update a link |
+| DELETE | `/people/{id}/identifiers/{provider}` | `identifiers:write` | Unlink an account |
+| POST | `/teams` | `teams:write` | Create a team |
+| GET | `/teams` | `teams:read` | List teams (`?active_only=`) |
+| GET | `/teams/by-slug/{slug}` | `teams:read` | Get team by slug |
+| GET | `/teams/{id}` | `teams:read` | Get team by UUID |
+| PATCH | `/teams/{id}` | `teams:write` | Update a team |
+| GET | `/role_kinds` | `role_kinds:read` | List role kinds |
+| GET | `/role_kinds/{id}` | `role_kinds:read` | Get one role kind |
+| GET | `/providers` | `providers:read` | List identity providers |
+| GET | `/providers/{id}` | `providers:read` | Get one provider |
+| POST | `/memberships` | `memberships:write` | Create a membership |
+| GET | `/memberships` | `memberships:read` | List memberships (filterable) |
+| GET | `/memberships/{id}` | `memberships:read` | Get one membership |
+| PATCH | `/memberships/{id}` | `memberships:write` | Update a membership |
+| POST | `/memberships/{id}/end` | `memberships:write` | End a membership (set `ended_at`) |
 
 See [docs/API.md](docs/API.md) for full request/response shapes, query parameters, error codes, and curl examples.
 
 ## Testing
 
-The test suite has two modes:
+The suite runs in two modes.
 
 **Fast (in-memory, no Docker required):**
+
 ```bash
-uv run pytest --ignore=tests/test_postgres_adapter.py -v
+uv run pytest --ignore=tests/test_postgres_adapter.py
 ```
 
-This runs ~60 tests using `InMemoryStorageAdapter` injected via FastAPI's `dependency_overrides`. Tests cover all endpoints, error paths, and filter combinations. Runs in under 5 seconds.
+Runs **139 tests** against `InMemoryStorageAdapter`, injected into FastAPI via `app.dependency_overrides`. Covers every endpoint, auth path, error case, the CLI, hashing, and the audit log. Completes in a few seconds — no database needed.
 
-**Full (includes Postgres integration):**
+**Full (adds Postgres integration):**
+
 ```bash
 docker compose up -d postgres
-uv run pytest -v
+uv run pytest
 ```
 
-`tests/test_postgres_adapter.py` runs the same behavioral assertions against a live Postgres instance. Requires `DATABASE_URL` in `.env` pointing at the running container.
+Runs **154 tests** — the 139 above plus the 15 in `tests/test_postgres_adapter.py`, which replay the adapter's behavioral assertions against a live Postgres instance. Requires `DATABASE_URL` (in `.env`) pointing at the running container.
+
+Lint and format with ruff:
+
+```bash
+uv run ruff check .
+uv run ruff format .
+```
+
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for task walkthroughs.
 
 ## Where to find things
 
-- [docs/API.md](docs/API.md) — endpoint reference with curl examples and query recipes
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — layered design, key decisions, and how-to guides for extending the system
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — production deployment, TLS, rate limiting, secret handling
-- [docs/archive/2026-06-30-DESIGN.md](docs/archive/2026-06-30-DESIGN.md) — original design spec
-- [docs/archive/2026-06-30-PLAN.md](docs/archive/2026-06-30-PLAN.md) — original implementation plan
+- [docs/API.md](docs/API.md) — consumer-facing endpoint reference (all 23 endpoints, scopes, errors, curl)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — contributor orientation: Protocol boundary, adapters, temporal memberships, Level-2 auth, data model
+- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — task walkthroughs for adding endpoints, adapter methods, migrations
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — production deployment, TLS, rate limiting, key issuance, secret handling
+- [docs/archive/](docs/archive/) — original design spec and implementation plan
 
 Machine-readable OpenAPI schema: `GET /openapi.json`. Interactive Swagger UI: `GET /docs`.
 
 ## Status
 
-v1 shipped on 2026-06-30. Six tables (people, teams, role_kinds, team_memberships, providers, person_identifiers), 23 endpoints, two storage adapters, 150 passing tests.
+Seven tables (`people`, `teams`, `role_kinds`, `team_memberships`, `api_keys`, `providers`, `person_identifiers`), 23 endpoints across 6 routers, two storage adapters, migrations 001–004. Level-2 auth (DB-issued scoped argon2 keys + attested actor + audit log) is merged, as is the `person_identifiers`/providers identity-mapping feature.
 
-**Not in v1 (per design non-goals):**
+**Not implemented (by design):**
 
-- Connectors layer — no Discord, Google Workspace, GitHub, or Notion sync. Connectors are designed to hang off the HTTP API when built.
-- Extension tables — `team_metadata` is reserved but not implemented. Adding it does not require touching base tables.
-- Permission enforcement — the API exposes primitives (memberships, admin flag) from which downstream systems derive access rules. No policy engine lives here.
-- Admin UI — officer edits go through whatever admin surface is chosen (NocoDB, Directus, direct SQL, or a custom app).
-- Pagination — list endpoints return all matching rows. Adequate for UTMIST's roster size; add limit/offset when needed.
+- **Connectors layer** — no Discord/Google/GitHub/Notion sync. Connectors hang off the HTTP API when built.
+- **Permission enforcement** — the API exposes primitives (memberships, admin flag) from which downstream systems derive access rules. No policy engine lives here.
+- **Admin UI** — officer edits go through whatever admin surface is chosen (NocoDB, Directus, direct SQL, or a custom app).
+- **Pagination** — list endpoints return all matching rows. Adequate for UTMIST's roster size; add limit/offset when needed.
+</content>
+</invoke>
