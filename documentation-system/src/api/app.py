@@ -11,10 +11,10 @@ def create_app() -> FastAPI:
         docs_url="/swagger",
     )
     app.add_middleware(AuditLogMiddleware)
-    from src.api.routers import docs
+    from src.api.routers import docs, sources
 
     app.include_router(docs.router)
-    # sources router is mounted by its own task
+    app.include_router(sources.router)
     return app
 
 
