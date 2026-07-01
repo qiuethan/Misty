@@ -4,7 +4,14 @@ from src.api.middleware import AuditLogMiddleware
 
 
 def create_app() -> FastAPI:
-    from src.api.routers import memberships, people, providers, role_kinds, teams
+    from src.api.routers import (
+        identifiers,
+        memberships,
+        people,
+        providers,
+        role_kinds,
+        teams,
+    )
 
     app = FastAPI(
         title="UTMIST team-tracking",
@@ -17,6 +24,7 @@ def create_app() -> FastAPI:
     app.include_router(role_kinds.router)
     app.include_router(memberships.router)
     app.include_router(providers.router)
+    app.include_router(identifiers.router)
     return app
 
 
