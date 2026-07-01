@@ -1,0 +1,47 @@
+# UTMIST team-tracking — nginx alternative to Caddy
+#
+# If you'd rather not build Caddy with a plugin, nginx has built-in rate
+# limiting. This file is a starting point — you still need to obtain TLS
+# certs (e.g. via certbot).
+#
+# Assumes: certbot has already run and put certs at /etc/letsencrypt/live/...
+#          FastAPI app runs on localhost:8000.
+
+# 100 req/min per IP, burst allowance of 20
+limit_req_zone $binary_remote_addr zone=team_tracking:10m rate=100r/m;
+
+server {
+    listen 80;
+    server_name team-tracking.utmist.ca;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name team-tracking.utmist.ca;
+
+    ssl_certificate     /etc/letsencrypt/live/team-tracking.utmist.ca/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/team-tracking.utmist.ca/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    # HSTS + basic security headers
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    location / {
+        limit_req zone=team_tracking burst=20 nodelay;
+
+        proxy_pass         http://127.0.0.1:8000;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 3s;
+        proxy_read_timeout    30s;
+    }
+
+    access_log /var/log/nginx/team-tracking.access.log;
+}

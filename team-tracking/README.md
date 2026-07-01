@@ -77,12 +77,17 @@ team-tracking/
 │   ├── test_openapi.py
 │   └── test_types.py
 │
-└── docs/
-    ├── API.md              Full endpoint reference
-    ├── ARCHITECTURE.md     Design decisions and extending guide
-    └── archive/
-        ├── 2026-06-30-DESIGN.md    Original design spec
-        └── 2026-06-30-PLAN.md      Original implementation plan
+├── docs/
+│   ├── API.md              Full endpoint reference
+│   ├── ARCHITECTURE.md     Design decisions and extending guide
+│   ├── DEPLOYMENT.md       Production deployment + hardening guide
+│   └── archive/
+│       ├── 2026-06-30-DESIGN.md    Original design spec
+│       └── 2026-06-30-PLAN.md      Original implementation plan
+│
+└── deploy/
+    ├── Caddyfile           Production reverse proxy (TLS + rate limit + headers)
+    └── nginx.conf.example  Alternative to Caddy
 ```
 
 **Dependency direction:** `contracts/` has no imports from `src/`. The API layer (`src/api/`) imports only from `contracts/` and `src/config`. The storage layer (`src/storage/`) imports from `contracts/` for types and defines its own schema. Nothing imports from `src/storage/` except `src/api/deps.py` (the wiring point).
@@ -135,6 +140,7 @@ uv run pytest -v
 
 - [docs/API.md](docs/API.md) — endpoint reference with curl examples and query recipes
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — layered design, key decisions, and how-to guides for extending the system
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — production deployment, TLS, rate limiting, secret handling
 - [docs/archive/2026-06-30-DESIGN.md](docs/archive/2026-06-30-DESIGN.md) — original design spec
 - [docs/archive/2026-06-30-PLAN.md](docs/archive/2026-06-30-PLAN.md) — original implementation plan
 

@@ -1,0 +1,68 @@
+# UTMIST team-tracking — production reverse proxy
+#
+# Caddy handles TLS termination (auto Let's Encrypt), per-IP rate limiting,
+# and forwards to the FastAPI app on localhost:8000.
+#
+# Assumes:
+#   - This Caddy runs on a host with DNS pointing at it
+#   - team-tracking API is running on localhost:8000 (systemd service or
+#     docker compose)
+#   - Ports 80 and 443 are open to the internet
+#
+# Rate limiting requires the caddy-ratelimit module. Build with:
+#   xcaddy build --with github.com/mholt/caddy-ratelimit
+# (see docs/DEPLOYMENT.md for the full install path)
+#
+# Replace the domain with whatever DNS you point at this host.
+
+team-tracking.utmist.ca {
+    # ---- Rate limit ----
+    # 100 requests per minute per remote IP. Slows brute-force key guessing
+    # to a crawl without blocking legitimate consumers (a Discord bot doing
+    # 1 req/sec sits at 60/min, well under).
+    rate_limit {
+        zone per_ip {
+            key {remote_host}
+            events 100
+            window 1m
+        }
+    }
+
+    # ---- Security headers ----
+    header {
+        # Never allow this to be embedded in a frame
+        X-Frame-Options "DENY"
+        # Only allow browsers to load resources from the API's own origin
+        Content-Security-Policy "default-src 'self'"
+        # Don't allow browsers to guess MIME types (belt-and-suspenders)
+        X-Content-Type-Options "nosniff"
+        # HSTS for one year, include subdomains
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        # Don't leak the referrer to downstream sites
+        Referrer-Policy "no-referrer"
+    }
+
+    # ---- Proxy ----
+    reverse_proxy localhost:8000 {
+        # Forward the real client IP so the app-level audit log can see it
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+
+        # Fail fast if the upstream is down (don't hold the connection)
+        transport http {
+            dial_timeout 3s
+            response_header_timeout 30s
+        }
+    }
+
+    # ---- Logging ----
+    log {
+        output file /var/log/caddy/team-tracking.access.log {
+            roll_size 100mb
+            roll_keep 10
+            roll_keep_for 720h
+        }
+        format json
+    }
+}
