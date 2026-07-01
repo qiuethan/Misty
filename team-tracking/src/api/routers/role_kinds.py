@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from contracts.storage import StorageAdapter
 from contracts.types import RoleKind
-from src.api.auth import require_api_key
+from src.api.auth import AuthedKey, require_scope
 from src.api.deps import get_storage
 
 router = APIRouter(prefix="/role_kinds", tags=["role_kinds"])
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/role_kinds", tags=["role_kinds"])
 def list_role_kinds(
     active_only: bool = False,
     storage: StorageAdapter = Depends(get_storage),
-    _: str = Depends(require_api_key),
+    _: AuthedKey = Depends(require_scope("role_kinds:read")),
 ) -> list[RoleKind]:
     return storage.list_role_kinds(active_only=active_only)
 
@@ -21,7 +21,7 @@ def list_role_kinds(
 def get_role_kind(
     role_kind_id: str,
     storage: StorageAdapter = Depends(get_storage),
-    _: str = Depends(require_api_key),
+    _: AuthedKey = Depends(require_scope("role_kinds:read")),
 ) -> RoleKind:
     rk = storage.get_role_kind(role_kind_id)
     if rk is None:
