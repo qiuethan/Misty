@@ -15,6 +15,7 @@ import secrets
 from dataclasses import dataclass
 
 from fastapi import Depends, Header, HTTPException, status
+from starlette.requests import Request
 
 from contracts.storage import StorageAdapter
 from src.api.deps import get_storage
@@ -47,6 +48,7 @@ def _unauthorized() -> HTTPException:
 
 
 def require_api_key(
+    request: Request,
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     storage: StorageAdapter = Depends(get_storage),
 ) -> AuthedKey:
@@ -75,11 +77,13 @@ def require_api_key(
             row = storage.get_api_key_by_prefix(prefix)
             if row is not None and row.active and row.revoked_at is None:
                 storage.touch_api_key_last_used(row.id)
-                return AuthedKey(
+                authed = AuthedKey(
                     name=row.name,
                     scopes=frozenset(row.scopes),
                     is_bootstrap=False,
                 )
+                request.state.auth_key = authed
+                return authed
         # DB key present but failed — fall through to 401 (never fall through
         # to env-key check for a well-formed DB key attempt; prevents an
         # attacker mixing formats).
@@ -90,11 +94,13 @@ def require_api_key(
     if env_key and secrets.compare_digest(
         x_api_key.encode("utf-8"), env_key.encode("utf-8")
     ):
-        return AuthedKey(
+        authed = AuthedKey(
             name=_BOOTSTRAP_KEY_NAME,
             scopes=frozenset({ADMIN_SCOPE}),
             is_bootstrap=True,
         )
+        request.state.auth_key = authed
+        return authed
 
     raise _unauthorized()
 
