@@ -76,6 +76,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index("ix_team_memberships_dates", table_name="team_memberships")
+    op.drop_index("ix_team_memberships_person_ended", table_name="team_memberships")
+    op.drop_index("ix_team_memberships_team_ended", table_name="team_memberships")
     op.drop_table("team_memberships")
     op.drop_table("role_kinds")
     op.drop_table("teams")
