@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from contracts.types import Person, RoleKind, Team, TeamMembership
 
@@ -82,3 +82,44 @@ def test_team_membership_defaults():
     assert m.role_kind_id == "member"
     assert m.is_team_admin is False
     assert m.ended_at is None
+
+
+def test_extra_fields_are_forbidden():
+    """extra='forbid' rejects unknown fields at construction time."""
+    import pytest
+    from pydantic import ValidationError
+
+    from contracts.types import PersonCreate
+
+    with pytest.raises(ValidationError):
+        PersonCreate(
+            display_name="Alex",
+            primary_email="alex@utmist.ca",
+            rogue_field="nope",
+        )
+
+
+def test_person_create_normalizes_email():
+    """Regression test: PersonCreate applies the same normalization as Person."""
+    from contracts.types import PersonCreate
+
+    payload = PersonCreate(display_name="Alex", primary_email="  Alex@UTMIST.CA  ")
+    assert payload.primary_email == "alex@utmist.ca"
+
+
+def test_person_update_email_normalization_handles_none():
+    """PersonUpdate with primary_email=None must not raise on the normalizer."""
+    from contracts.types import PersonUpdate
+
+    patch = PersonUpdate(primary_email=None)
+    assert patch.primary_email is None
+
+
+def test_team_membership_create_started_at_defaults_to_none():
+    """The contract is 'defaults to today at storage layer' — the DTO holds None."""
+    from uuid import uuid4
+
+    from contracts.types import TeamMembershipCreate
+
+    m = TeamMembershipCreate(person_id=uuid4(), team_id=uuid4())
+    assert m.started_at is None

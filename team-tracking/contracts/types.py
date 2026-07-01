@@ -1,16 +1,23 @@
 from datetime import date, datetime
-from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
+
+
+def _normalize_email(v: str) -> str:
+    """Canonical email normalization: strip whitespace and lowercase."""
+    return v.strip().lower()
 
 
 class DirectoryBase(BaseModel):
-    """Common fields on every directory record."""
+    """Common audit fields on every directory record.
+
+    Subclasses declare their own `id` with the appropriate concrete type
+    (UUID for people/teams/memberships, str slug for role_kinds).
+    """
 
     model_config = ConfigDict(frozen=False, extra="forbid")
 
-    id: UUID | str
     created_at: datetime
     updated_at: datetime
     created_by: str
@@ -26,7 +33,7 @@ class Person(DirectoryBase):
     @field_validator("primary_email")
     @classmethod
     def normalize_email(cls, v: str) -> str:
-        return v.strip().lower()
+        return _normalize_email(v)
 
 
 class Team(DirectoryBase):
@@ -66,7 +73,7 @@ class PersonCreate(BaseModel):
     @field_validator("primary_email")
     @classmethod
     def normalize_email(cls, v: str) -> str:
-        return v.strip().lower()
+        return _normalize_email(v)
 
 
 class PersonUpdate(BaseModel):
@@ -78,7 +85,7 @@ class PersonUpdate(BaseModel):
     @field_validator("primary_email")
     @classmethod
     def normalize_email(cls, v: str | None) -> str | None:
-        return v.strip().lower() if v is not None else None
+        return _normalize_email(v) if v is not None else None
 
 
 class TeamCreate(BaseModel):
