@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from contracts.directory import DirectoryClient, DirectoryUnavailable
 from contracts.fetcher import FetchError
 from contracts.storage import StorageAdapter
-from contracts.types import Doc, DocIngest, IngestResult
+from contracts.types import DocIngest, IngestResult
 from src.fetch.registry import FetcherRegistry
 from src.url_norm import derive_source, normalize_url
 

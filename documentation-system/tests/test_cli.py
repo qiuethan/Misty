@@ -1,4 +1,4 @@
-from src.cli import cmd_issue, cmd_list, cmd_revoke, build_parser
+from src.cli import cmd_issue, cmd_revoke, build_parser
 from src.storage.in_memory import InMemoryStorageAdapter
 
 
