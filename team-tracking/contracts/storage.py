@@ -6,7 +6,11 @@ from contracts.types import (
     ApiKey,
     Person,
     PersonCreate,
+    PersonIdentifier,
+    PersonIdentifierCreate,
+    PersonIdentifierUpdate,
     PersonUpdate,
+    Provider,
     RoleKind,
     Team,
     TeamCreate,
@@ -121,4 +125,35 @@ class StorageAdapter(Protocol):
     def touch_api_key_last_used(self, api_key_id: UUID) -> None:
         """Idempotently update last_used_at. Callers should invoke on every
         successful auth. Failure to update should not fail the request (best-effort)."""
+        ...
+
+    # Providers (identity vocabulary — read-only through the API)
+    def list_providers(self, *, active_only: bool = False) -> list[Provider]: ...
+    def get_provider(self, provider_id: str) -> Provider | None: ...
+
+    # Person identifiers (external account links)
+    def list_person_identifiers(self, person_id: UUID) -> list[PersonIdentifier]: ...
+    def create_person_identifier(
+        self, person_id: UUID, payload: PersonIdentifierCreate, *, actor: str
+    ) -> PersonIdentifier:
+        """Link an external account to a person. Raises ValueError if the person
+        already has this provider linked, or the (provider, external_id) already
+        belongs to another person. Does not validate person/provider existence —
+        the router pre-checks those to map 404 vs 400."""
+        ...
+    def update_person_identifier(
+        self, person_id: UUID, provider: str, payload: PersonIdentifierUpdate, *, actor: str
+    ) -> PersonIdentifier | None:
+        """Update external_id/handle of the (person_id, provider) link. Returns
+        None if no such link. Raises ValueError if a new external_id collides
+        with another person's link on the same provider."""
+        ...
+    def delete_person_identifier(self, person_id: UUID, provider: str) -> bool:
+        """Hard-delete the (person_id, provider) link. True if removed, False if
+        no such link. Identity mappings are current state, not history."""
+        ...
+    def get_person_by_identifier(
+        self, provider: str, external_id: str
+    ) -> Person | None:
+        """Reverse lookup: resolve an external account to its Person, or None."""
         ...

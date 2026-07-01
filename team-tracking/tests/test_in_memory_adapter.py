@@ -1,10 +1,13 @@
 from datetime import date, timedelta
+from uuid import uuid4
 
 import pytest
 
-from conftest import build_seed_role_kinds
+from conftest import build_seed_providers, build_seed_role_kinds
 from contracts.types import (
     PersonCreate,
+    PersonIdentifierCreate,
+    PersonIdentifierUpdate,
     PersonUpdate,
     TeamCreate,
     TeamMembershipCreate,
@@ -359,3 +362,69 @@ def test_list_api_keys_active_only(adapter):
     adapter.revoke_api_key(k1.id, actor="admin")
     assert len(adapter.list_api_keys()) == 2
     assert len(adapter.list_api_keys(active_only=True)) == 1
+
+
+def _adapter():
+    return InMemoryStorageAdapter(
+        seed_role_kinds=build_seed_role_kinds(),
+        seed_providers=build_seed_providers(),
+    )
+
+
+def _person(a):
+    return a.create_person(PersonCreate(display_name="Alex", primary_email="alex@utmist.ca"), actor="t")
+
+
+def test_list_and_get_providers():
+    a = _adapter()
+    assert {p.id for p in a.list_providers()} == {"discord", "github", "notion", "uoft_email"}
+    assert a.get_provider("discord").label == "Discord"
+    assert a.get_provider("nope") is None
+
+
+def test_create_and_list_identifier():
+    a = _adapter()
+    p = _person(a)
+    pi = a.create_person_identifier(
+        p.id, PersonIdentifierCreate(provider="discord", external_id="123", handle="alex"), actor="bot"
+    )
+    assert pi.provider == "discord" and pi.external_id == "123"
+    assert pi.created_by == "bot"
+    assert [i.id for i in a.list_person_identifiers(p.id)] == [pi.id]
+
+
+def test_duplicate_provider_for_person_raises():
+    a = _adapter()
+    p = _person(a)
+    a.create_person_identifier(p.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t")
+    with pytest.raises(ValueError):
+        a.create_person_identifier(p.id, PersonIdentifierCreate(provider="discord", external_id="2"), actor="t")
+
+
+def test_external_id_owned_by_another_person_raises():
+    a = _adapter()
+    p1 = _person(a)
+    p2 = a.create_person(PersonCreate(display_name="Bo", primary_email="bo@utmist.ca"), actor="t")
+    a.create_person_identifier(p1.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t")
+    with pytest.raises(ValueError):
+        a.create_person_identifier(p2.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t")
+
+
+def test_reverse_lookup_returns_person():
+    a = _adapter()
+    p = _person(a)
+    a.create_person_identifier(p.id, PersonIdentifierCreate(provider="discord", external_id="999"), actor="t")
+    found = a.get_person_by_identifier("discord", "999")
+    assert found is not None and found.id == p.id
+    assert a.get_person_by_identifier("discord", "absent") is None
+
+
+def test_update_and_delete_identifier():
+    a = _adapter()
+    p = _person(a)
+    a.create_person_identifier(p.id, PersonIdentifierCreate(provider="discord", external_id="1", handle="old"), actor="t")
+    updated = a.update_person_identifier(p.id, "discord", PersonIdentifierUpdate(handle="new"), actor="t")
+    assert updated.handle == "new" and updated.external_id == "1"
+    assert a.update_person_identifier(p.id, "github", PersonIdentifierUpdate(handle="x"), actor="t") is None
+    assert a.delete_person_identifier(p.id, "discord") is True
+    assert a.delete_person_identifier(p.id, "discord") is False

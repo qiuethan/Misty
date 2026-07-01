@@ -5,7 +5,11 @@ from contracts.types import (
     ApiKey,
     Person,
     PersonCreate,
+    PersonIdentifier,
+    PersonIdentifierCreate,
+    PersonIdentifierUpdate,
     PersonUpdate,
+    Provider,
     RoleKind,
     Team,
     TeamCreate,
@@ -27,7 +31,11 @@ class InMemoryStorageAdapter:
     the Postgres adapter (email uniqueness, slug uniqueness, no schema surprises).
     """
 
-    def __init__(self, seed_role_kinds: list[RoleKind] | None = None) -> None:
+    def __init__(
+        self,
+        seed_role_kinds: list[RoleKind] | None = None,
+        seed_providers: list[Provider] | None = None,
+    ) -> None:
         self._people: dict[UUID, Person] = {}
         self._teams: dict[UUID, Team] = {}
         self._role_kinds: dict[str, RoleKind] = {
@@ -36,6 +44,10 @@ class InMemoryStorageAdapter:
         self._memberships: dict[UUID, TeamMembership] = {}
         self._api_keys: dict[UUID, ApiKey] = {}
         self._api_key_hashes: dict[UUID, str] = {}
+        self._providers: dict[str, Provider] = {
+            pr.id: pr for pr in (seed_providers or [])
+        }
+        self._identifiers: dict[UUID, PersonIdentifier] = {}
 
     # --- People ---
 
@@ -324,3 +336,94 @@ class InMemoryStorageAdapter:
         data = existing.model_dump()
         data["last_used_at"] = _now()
         self._api_keys[api_key_id] = ApiKey(**data)
+
+    # --- Providers ---
+
+    def list_providers(self, *, active_only: bool = False) -> list[Provider]:
+        providers = list(self._providers.values())
+        if active_only:
+            providers = [p for p in providers if p.active]
+        return providers
+
+    def get_provider(self, provider_id: str) -> Provider | None:
+        return self._providers.get(provider_id)
+
+    # --- Person identifiers ---
+
+    def list_person_identifiers(self, person_id: UUID) -> list[PersonIdentifier]:
+        return [i for i in self._identifiers.values() if i.person_id == person_id]
+
+    def create_person_identifier(
+        self, person_id: UUID, payload: PersonIdentifierCreate, *, actor: str
+    ) -> PersonIdentifier:
+        for i in self._identifiers.values():
+            if i.person_id == person_id and i.provider == payload.provider:
+                raise ValueError(
+                    f"person already has an identifier for provider: {payload.provider}"
+                )
+            if i.provider == payload.provider and i.external_id == payload.external_id:
+                raise ValueError(
+                    f"identifier already linked to another person: "
+                    f"{payload.provider}/{payload.external_id}"
+                )
+        now = _now()
+        pi = PersonIdentifier(
+            id=uuid4(),
+            person_id=person_id,
+            provider=payload.provider,
+            external_id=payload.external_id,
+            handle=payload.handle,
+            created_at=now,
+            updated_at=now,
+            created_by=actor,
+            updated_by=actor,
+        )
+        self._identifiers[pi.id] = pi
+        return pi
+
+    def update_person_identifier(
+        self, person_id: UUID, provider: str, payload: PersonIdentifierUpdate, *, actor: str
+    ) -> PersonIdentifier | None:
+        existing = next(
+            (i for i in self._identifiers.values()
+             if i.person_id == person_id and i.provider == provider),
+            None,
+        )
+        if existing is None:
+            return None
+        patch = payload.model_dump(exclude_unset=True)
+        new_external = patch.get("external_id")
+        if new_external is not None and new_external != existing.external_id:
+            if any(
+                i.provider == provider and i.external_id == new_external and i.id != existing.id
+                for i in self._identifiers.values()
+            ):
+                raise ValueError(
+                    f"identifier already linked to another person: {provider}/{new_external}"
+                )
+        data = existing.model_dump()
+        data.update(patch)
+        data["updated_at"] = _now()
+        data["updated_by"] = actor
+        updated = PersonIdentifier(**data)
+        self._identifiers[existing.id] = updated
+        return updated
+
+    def delete_person_identifier(self, person_id: UUID, provider: str) -> bool:
+        target = next(
+            (i for i in self._identifiers.values()
+             if i.person_id == person_id and i.provider == provider),
+            None,
+        )
+        if target is None:
+            return False
+        del self._identifiers[target.id]
+        return True
+
+    def get_person_by_identifier(
+        self, provider: str, external_id: str
+    ) -> Person | None:
+        for i in self._identifiers.values():
+            if i.provider == provider and i.external_id == external_id:
+                return self._people.get(i.person_id)
+        return None
