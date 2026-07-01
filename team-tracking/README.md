@@ -44,3 +44,47 @@ team-tracking/
 ## Status
 
 Design phase complete. Implementation stack not yet chosen — the concrete language / framework for `contracts/` and `src/` is the next decision.
+
+## Local development
+
+Prereqs: Docker (for Postgres), Python 3.11+, [uv](https://github.com/astral-sh/uv).
+
+```bash
+# One-time setup
+cp .env.example .env
+docker compose up -d postgres
+uv sync --extra dev
+uv run alembic upgrade head
+
+# Run the API server
+uv run uvicorn src.api.app:app --reload --port 8000
+
+# Run tests (fast — in-memory only)
+uv run pytest --ignore=tests/test_postgres_adapter.py -v
+
+# Run tests including Postgres integration (requires docker compose up)
+uv run pytest -v
+
+# Open OpenAPI docs
+open http://localhost:8000/docs
+```
+
+## Sample curl usage
+
+```bash
+# Create a person
+curl -sS -X POST http://localhost:8000/people \
+  -H "X-API-Key: dev-api-key-change-me" \
+  -H "X-Actor: bootstrap-script" \
+  -H "Content-Type: application/json" \
+  -d '{"display_name": "Alex Chen", "primary_email": "alex@utmist.ca"}'
+
+# Create a team
+curl -sS -X POST http://localhost:8000/teams \
+  -H "X-API-Key: dev-api-key-change-me" \
+  -H "Content-Type: application/json" \
+  -d '{"slug": "partnerships", "label": "Partnerships"}'
+
+# List role kinds
+curl -sS http://localhost:8000/role_kinds -H "X-API-Key: dev-api-key-change-me"
+```
