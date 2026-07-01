@@ -519,7 +519,7 @@ Link an external account to a person.
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
 | `provider` | string | yes | Must be an active provider ID |
-| `external_id` | string | yes | The external identifier (e.g. snowflake, username, email) |
+| `external_id` | string | yes | The stable external identifier (e.g. snowflake, numeric id, email) |
 | `handle` | string | no | Optional human-readable handle or display name |
 
 **Response:** `PersonIdentifier` object, HTTP 201.

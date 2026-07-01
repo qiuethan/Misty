@@ -206,7 +206,23 @@ def test_pg_duplicate_provider_raises(adapter):
     adapter.create_person_identifier(
         person.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t"
     )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="already has an identifier for provider"):
         adapter.create_person_identifier(
             person.id, PersonIdentifierCreate(provider="discord", external_id="2"), actor="t"
+        )
+
+
+def test_pg_external_id_owned_by_another_person_raises(adapter):
+    person_a = adapter.create_person(
+        PersonCreate(display_name="Alex", primary_email="alex@utmist.ca"), actor="t"
+    )
+    person_b = adapter.create_person(
+        PersonCreate(display_name="Blair", primary_email="blair@utmist.ca"), actor="t"
+    )
+    adapter.create_person_identifier(
+        person_a.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t"
+    )
+    with pytest.raises(ValueError, match="linked to another person"):
+        adapter.create_person_identifier(
+            person_b.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t"
         )

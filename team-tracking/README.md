@@ -82,7 +82,7 @@ team-tracking/
 │       ├── 001_initial_schema.py   Creates all four tables + indexes
 │       └── 002_seed_role_kinds.py  Seeds executive/director/lead/member
 │
-├── tests/                  Test suite (63 tests)
+├── tests/                  Test suite (150 tests)
 │   ├── conftest.py         Fixtures: in-memory adapter, test client, seeded role_kinds
 │   ├── test_api_people.py
 │   ├── test_api_teams.py
@@ -171,7 +171,7 @@ Machine-readable OpenAPI schema: `GET /openapi.json`. Interactive Swagger UI: `G
 
 ## Status
 
-v1 shipped on 2026-06-30. Six tables (people, teams, role_kinds, team_memberships, providers, person_identifiers), 23 endpoints, two storage adapters, 63+ passing tests.
+v1 shipped on 2026-06-30. Six tables (people, teams, role_kinds, team_memberships, providers, person_identifiers), 23 endpoints, two storage adapters, 150 passing tests.
 
 **Not in v1 (per design non-goals):**
 

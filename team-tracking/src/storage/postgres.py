@@ -420,10 +420,20 @@ class PostgresStorageAdapter:
                     .returning(person_identifiers)
                 ).one()
         except IntegrityError as e:
-            # Either UNIQUE(person_id, provider) or UNIQUE(provider, external_id).
+            constraint = getattr(
+                getattr(getattr(e, "orig", None), "diag", None), "constraint_name", None
+            )
+            if constraint == "uq_person_identifiers_person_provider":
+                raise ValueError(
+                    f"person already has an identifier for provider: {payload.provider}"
+                ) from e
+            if constraint == "uq_person_identifiers_provider_external":
+                raise ValueError(
+                    f"identifier already linked to another person: "
+                    f"{payload.provider}/{payload.external_id}"
+                ) from e
             raise ValueError(
-                f"identifier conflict for provider {payload.provider}: "
-                f"person already linked, or {payload.external_id} belongs to another person"
+                f"identifier conflict for provider {payload.provider}"
             ) from e
         return _identifier_row_to_model(row)
 
