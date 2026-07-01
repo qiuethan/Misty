@@ -428,3 +428,28 @@ def test_update_and_delete_identifier():
     assert a.update_person_identifier(p.id, "github", PersonIdentifierUpdate(handle="x"), actor="t") is None
     assert a.delete_person_identifier(p.id, "discord") is True
     assert a.delete_person_identifier(p.id, "discord") is False
+
+
+def test_update_person_identifier_external_id_collision_raises():
+    """Updating external_id to a value owned by another person raises ValueError."""
+    a = _adapter()
+    p1 = _person(a)
+    p2 = a.create_person(PersonCreate(display_name="Bo", primary_email="bo@utmist.ca"), actor="t")
+    a.create_person_identifier(p1.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t")
+    a.create_person_identifier(p2.id, PersonIdentifierCreate(provider="discord", external_id="2"), actor="t")
+    with pytest.raises(ValueError):
+        a.update_person_identifier(p2.id, "discord", PersonIdentifierUpdate(external_id="1"), actor="t")
+
+
+def test_update_person_identifier_external_id_change_succeeds():
+    """Updating external_id to a new unclaimed value succeeds and updates reverse lookup."""
+    a = _adapter()
+    p = _person(a)
+    a.create_person_identifier(p.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t")
+    updated = a.update_person_identifier(p.id, "discord", PersonIdentifierUpdate(external_id="2"), actor="t")
+    assert updated is not None
+    assert updated.external_id == "2"
+    found_by_new = a.get_person_by_identifier("discord", "2")
+    assert found_by_new is not None and found_by_new.id == p.id
+    found_by_old = a.get_person_by_identifier("discord", "1")
+    assert found_by_old is None
