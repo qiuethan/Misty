@@ -3,6 +3,7 @@ from typing import Protocol
 from uuid import UUID
 
 from contracts.types import (
+    ApiKey,
     Person,
     PersonCreate,
     PersonUpdate,
@@ -89,4 +90,35 @@ class StorageAdapter(Protocol):
         at the call site. `update_membership` accepts `ended_at` too, but is
         semantically the general edit path.
         """
+        ...
+
+    # API keys (Level 2 security)
+    def create_api_key(
+        self,
+        *,
+        name: str,
+        prefix: str,
+        key_hash: str,
+        scopes: list[str],
+        actor: str,
+    ) -> ApiKey: ...
+    def get_api_key_by_prefix(self, prefix: str) -> ApiKey | None:
+        """Return the ApiKey row for a given prefix. Includes the key_hash for
+        the caller to verify against a candidate plaintext.
+
+        The prefix is a public identifier (first 8 chars of the key) — lookup
+        by prefix is safe."""
+        ...
+    def get_api_key_hash(self, prefix: str) -> str | None:
+        """Return the argon2 key_hash for a prefix, or None if not found or revoked.
+        Separate from get_api_key_by_prefix so the public ApiKey model never has
+        to carry the hash string in its Pydantic shape."""
+        ...
+    def list_api_keys(self, *, active_only: bool = False) -> list[ApiKey]: ...
+    def revoke_api_key(self, api_key_id: UUID, *, actor: str) -> ApiKey | None:
+        """Mark a key revoked (sets revoked_at, active=false). Never hard-deletes."""
+        ...
+    def touch_api_key_last_used(self, api_key_id: UUID) -> None:
+        """Idempotently update last_used_at. Callers should invoke on every
+        successful auth. Failure to update should not fail the request (best-effort)."""
         ...

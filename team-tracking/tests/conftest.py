@@ -40,6 +40,6 @@ def clean_db(engine: Engine) -> Iterator[Engine]:
     """
     with engine.begin() as conn:
         conn.execute(
-            text("TRUNCATE team_memberships, teams, people RESTART IDENTITY CASCADE")
+            text("TRUNCATE team_memberships, teams, people, api_keys RESTART IDENTITY CASCADE")
         )
     yield engine

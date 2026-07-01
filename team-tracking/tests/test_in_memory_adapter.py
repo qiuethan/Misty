@@ -281,3 +281,81 @@ def test_list_memberships_active_only_direct(adapter):
     assert len(all_rows) == 2
     assert len(active_rows) == 1
     assert active_rows[0].id == m_active.id
+
+
+def test_api_key_create_and_lookup(adapter):
+    key = adapter.create_api_key(
+        name="discord-bot",
+        prefix="tt_abc123",
+        key_hash="$argon2id$v=19$fake_hash",
+        scopes=["people:read", "memberships:write"],
+        actor="admin",
+    )
+    assert key.name == "discord-bot"
+    assert key.prefix == "tt_abc123"
+    assert key.scopes == ["people:read", "memberships:write"]
+    assert key.active is True
+
+    fetched = adapter.get_api_key_by_prefix("tt_abc123")
+    assert fetched is not None
+    assert fetched.id == key.id
+
+    h = adapter.get_api_key_hash("tt_abc123")
+    assert h == "$argon2id$v=19$fake_hash"
+
+
+def test_api_key_name_unique(adapter):
+    adapter.create_api_key(
+        name="bot", prefix="tt_a", key_hash="h1", scopes=[], actor="admin"
+    )
+    with pytest.raises(ValueError):
+        adapter.create_api_key(
+            name="bot", prefix="tt_b", key_hash="h2", scopes=[], actor="admin"
+        )
+
+
+def test_api_key_prefix_unique(adapter):
+    adapter.create_api_key(
+        name="a", prefix="tt_x", key_hash="h1", scopes=[], actor="admin"
+    )
+    with pytest.raises(ValueError):
+        adapter.create_api_key(
+            name="b", prefix="tt_x", key_hash="h2", scopes=[], actor="admin"
+        )
+
+
+def test_revoke_api_key(adapter):
+    key = adapter.create_api_key(
+        name="bot", prefix="tt_p", key_hash="h", scopes=[], actor="admin"
+    )
+    revoked = adapter.revoke_api_key(key.id, actor="admin")
+    assert revoked is not None
+    assert revoked.active is False
+    assert revoked.revoked_at is not None
+    # get_api_key_hash returns None for revoked keys (auth path)
+    assert adapter.get_api_key_hash("tt_p") is None
+    # get_api_key_by_prefix still returns it (admin visibility)
+    assert adapter.get_api_key_by_prefix("tt_p") is not None
+
+
+def test_touch_api_key_last_used(adapter):
+    key = adapter.create_api_key(
+        name="bot", prefix="tt_l", key_hash="h", scopes=[], actor="admin"
+    )
+    assert key.last_used_at is None
+    adapter.touch_api_key_last_used(key.id)
+    assert adapter.get_api_key_by_prefix("tt_l").last_used_at is not None
+
+
+def test_touch_api_key_nonexistent_is_noop(adapter):
+    from uuid import uuid4
+    # Must not raise
+    adapter.touch_api_key_last_used(uuid4())
+
+
+def test_list_api_keys_active_only(adapter):
+    k1 = adapter.create_api_key(name="a", prefix="tt_a", key_hash="h", scopes=[], actor="admin")
+    adapter.create_api_key(name="b", prefix="tt_b", key_hash="h", scopes=[], actor="admin")
+    adapter.revoke_api_key(k1.id, actor="admin")
+    assert len(adapter.list_api_keys()) == 2
+    assert len(adapter.list_api_keys(active_only=True)) == 1

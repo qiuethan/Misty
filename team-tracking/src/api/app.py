@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 
+from src.api.middleware import AuditLogMiddleware
+
 
 def create_app() -> FastAPI:
     from src.api.routers import memberships, people, role_kinds, teams
@@ -9,6 +11,7 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description="Source of truth for people, teams, and memberships.",
     )
+    app.add_middleware(AuditLogMiddleware)
     app.include_router(people.router)
     app.include_router(teams.router)
     app.include_router(role_kinds.router)

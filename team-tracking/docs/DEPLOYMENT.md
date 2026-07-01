@@ -2,22 +2,28 @@
 
 Production deployment guide for the team-tracking service.
 
-This guide covers the **Level 1 security posture** — enough to run the service on the public internet without embarrassing yourself. It does not cover per-consumer API keys or scoped permissions; those are Level 2 (see `docs/ARCHITECTURE.md` for the roadmap).
+This guide covers **Levels 1 + 2** of the security posture:
+
+- **Level 1** (infrastructure): TLS termination, per-IP rate limiting, HSTS/CSP headers, constant-time key comparison, secret handling outside `.env`.
+- **Level 2** (auth model): per-consumer API keys stored hashed with argon2, per-endpoint scope enforcement, revocation without a flag day, structured JSON audit log for every request.
 
 ## Threat model
 
-What Level 1 protects against:
+What this posture protects against:
 
 - **Casual scanning / opportunistic bots.** TLS + rate limit + strict headers means drive-by scanners find nothing exploitable.
-- **Timing attacks on the API key.** Constant-time comparison in `src/api/auth.py` means an attacker cannot narrow the key by measuring response latency.
-- **Traffic interception on the network.** HTTPS with modern TLS (1.2/1.3) via Let's Encrypt.
-- **Key leakage via git or config accidents.** `.env` is gitignored; production secrets never live in a file that could reach a repo.
+- **Timing attacks on any API key.** All key comparisons are constant-time (`secrets.compare_digest` for the env bootstrap key, argon2 for DB-issued keys).
+- **Traffic interception.** HTTPS with modern TLS (1.2/1.3) via Let's Encrypt.
+- **A leaked API key.** DB-issued keys are per-consumer, scoped, and revocable in seconds — no flag day, no other consumers affected.
+- **A compromised consumer.** Scopes limit blast radius. A leaked `discord-bot` key with only `people:read` can't create memberships or leak person emails via a mutation.
+- **Key theft from disk.** Only argon2 hashes are stored in the DB — plaintext is shown once at issuance and never persisted.
+- **Silent abuse.** Every request lands in the structured audit log with `key_name` attributed cryptographically (not self-declared).
 
-What Level 1 does **not** protect against:
+What this posture does **not** protect against:
 
-- **A leaked API key.** There's only one, and it grants full access. If it leaks, you rotate the env var and restart. Level 2 (per-consumer keys) fixes this.
-- **A malicious consumer.** Any key holder can call any endpoint. Level 2 (scopes) fixes this.
-- **Insider-level abuse.** If someone with prod access exfiltrates the DB, no in-band protection stops it. This is a hosting/access-control concern, not an API concern.
+- **Insider-level abuse.** If someone with prod DB access exfiltrates the whole table, no in-band protection stops it. This is a hosting/access-control concern.
+- **A compromised admin key.** The `admin` scope is a wildcard. Only grant it to keys you trust, and rotate them promptly if suspicious.
+- **DDoS beyond the rate-limiter's throughput.** Caddy's per-IP limit trips casual abusers; a real DDoS needs upstream mitigation (Cloudflare, etc.).
 
 ## Prerequisites
 
@@ -202,15 +208,101 @@ sudo nginx -t && sudo systemctl reload nginx
 
 Whatever you pick, the flow is always: secret manager → environment variables at startup → `pydantic-settings` reads env → app never sees a file.
 
-### Rotating the API key
+### Rotating the env `API_KEY` (Level 1 bootstrap key)
 
-1. Generate a new key: `python -c "import secrets; print('tt_' + secrets.token_urlsafe(32))"`
+The env `API_KEY` is now a **grace-period bootstrap key** — it exists so brand-new deployments can hit the API before any DB-issued keys exist. It has admin scope. Rotate it the same way you rotate any env secret:
+
+1. Generate a new value: `python -c "import secrets; print(secrets.token_urlsafe(32))"`
 2. Update `API_KEY` in the secret store
 3. `sudo systemctl restart team-tracking`
-4. Update every consumer with the new key
-5. Once every consumer is verified working, the old key is gone
+4. Update any consumer still using the env key
 
-Because there's only one key today, rotation is a **flag day** — every consumer must be updated in a narrow window. Level 2 (per-consumer keys) removes this pain by letting keys overlap during a rotation window.
+Ideally, only your bootstrap tooling ever uses the env key. Every real consumer should have its own DB-issued key (see next section) so it can be revoked without disturbing others.
+
+### Issuing DB-issued keys (Level 2 — recommended for every real consumer)
+
+Each consumer (Discord bot, docs catalog, sync job, etc.) should have its own scoped key.
+
+**Issue a key** via the CLI, which talks directly to Postgres:
+
+```bash
+uv run team-tracking-keys issue --name discord-bot --scopes people:read memberships:read
+```
+
+The plaintext key is printed **once** to stdout. Capture it and hand it to the consumer:
+
+```bash
+uv run team-tracking-keys issue --name discord-bot --scopes people:read memberships:read > /tmp/key.txt
+# The file now contains: tt_<prefix>_<secret>
+# Hand this to the consumer, then delete the file.
+```
+
+**Available scopes:**
+
+| Scope | Grants |
+|---|---|
+| `people:read` | GET /people, GET /people/{id} |
+| `people:write` | POST /people, PATCH /people/{id} |
+| `teams:read` | GET /teams, GET /teams/{id}, GET /teams/by-slug/{slug} |
+| `teams:write` | POST /teams, PATCH /teams/{id} |
+| `role_kinds:read` | GET /role_kinds, GET /role_kinds/{id} |
+| `memberships:read` | GET /memberships, GET /memberships/{id} |
+| `memberships:write` | POST /memberships, PATCH /memberships/{id}, POST /memberships/{id}/end |
+| `admin` | Wildcard — grants every scope. Use only for trusted operators / migrations. |
+
+**List issued keys:**
+
+```bash
+uv run team-tracking-keys list                # all keys, including revoked
+uv run team-tracking-keys list --active-only  # only active + non-revoked
+```
+
+The CLI never prints plaintext or hashes on list — only metadata (name, prefix, active flag, scopes).
+
+**Revoke a key** (soft-delete — history is preserved for audit):
+
+```bash
+uv run team-tracking-keys revoke <api_key_id>
+```
+
+Revocation is instant — the next request with the revoked key returns 401.
+
+### Rotating a DB-issued key (no flag day)
+
+Because each consumer has its own key, rotation is safe and staged:
+
+1. Issue a NEW key for the same consumer: `... issue --name discord-bot-v2 --scopes ...`
+2. Update the consumer to use the new key (deploy, restart, whatever)
+3. Verify the consumer is working via the audit log (grep for `"key_name":"discord-bot-v2"`)
+4. Revoke the OLD key: `... revoke <old-key-id>`
+
+Zero downtime, no coordination window with other consumers.
+
+### Reading the audit log
+
+Every request emits one JSON line to stdout. Ship stdout to your log aggregator (journald + `journalctl -u team-tracking`, Loki, CloudWatch, Datadog — anything works). Each line looks like:
+
+```json
+{"ts":"2026-07-01T05:41:20.606Z","request_id":"682e63ff-...","method":"POST","path":"/people","status":201,"duration_ms":52,"key_name":"discord-bot","is_bootstrap":false,"remote":"203.0.113.7"}
+```
+
+**Useful greps:**
+
+```bash
+# Everything discord-bot did in the last hour
+journalctl -u team-tracking --since '1 hour ago' | grep '"key_name":"discord-bot"'
+
+# All failed auth attempts (401s)
+journalctl -u team-tracking --since today | grep '"status":401'
+
+# All scope denials (403s) — spot a consumer trying to over-reach
+journalctl -u team-tracking --since today | grep '"status":403'
+
+# Requests using the deprecated env bootstrap key
+journalctl -u team-tracking --since today | grep '"is_bootstrap":true'
+```
+
+That last one is your migration progress bar — as consumers move to DB-issued keys, `is_bootstrap:true` lines should drop to zero.
 
 ## Step 5: Backups
 
@@ -229,22 +321,24 @@ After deploying, run through this list from an external machine:
 
 - [ ] `curl -v http://team-tracking.utmist.ca/openapi.json` — returns 301 to HTTPS
 - [ ] `curl https://team-tracking.utmist.ca/openapi.json` — returns the OpenAPI JSON
-- [ ] Request without `X-API-Key` returns 401
+- [ ] Request without `X-API-Key` returns 401 (with an audit line for it)
 - [ ] Request with wrong key returns 401
-- [ ] Request with correct key returns data
+- [ ] Request with a scope-limited DB key to an out-of-scope endpoint returns 403
+- [ ] Request with correct scoped key returns 200/201
 - [ ] `curl -sSI https://team-tracking.utmist.ca/openapi.json` shows `strict-transport-security`, `x-frame-options: DENY`, etc.
 - [ ] TLS grade check: `https://www.ssllabs.com/ssltest/analyze.html?d=team-tracking.utmist.ca` should be A or A+
 - [ ] Rate limit: hammer 200 requests fast; the tail should get 429s
-- [ ] Log files exist and are being written to
+- [ ] Audit log lines are landing in your aggregator (grep for a recent `request_id`)
 - [ ] `sudo systemctl status team-tracking` shows active + recent restart absent
+- [ ] Revoke a test key and verify 401 on the next request
 
-## When it's time to level up
+## When it's time to level up further
 
-Once you have more than one consumer (e.g. Discord bot + docs catalog + one human dashboard), move to Level 2:
+- **Level 3 (context-dependent):**
+  - OAuth2/OIDC for human users of a web UI backed by this API
+  - HMAC request signing or mTLS for the highest-trust callers
+  - IP allowlisting per key
+  - `api_request_log` DB-backed audit table (in addition to stdout log) for queryable investigations
+  - Compliance-driven controls (SOC2 audit trail retention, key rotation SLA, etc.)
 
-- Per-consumer API keys table (`api_keys` — hashed at rest, revocable, named)
-- Scopes per key (`people:read`, `memberships:write`, `admin`)
-- Structured request audit log middleware
-- Key rotation without flag days
-
-See `docs/ARCHITECTURE.md` for the design sketch. Level 2 is a separable sub-project.
+Most of these are only worth the work if a compliance requirement forces them.

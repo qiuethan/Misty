@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from contracts.storage import StorageAdapter
 from contracts.types import Team, TeamCreate, TeamUpdate
-from src.api.auth import get_actor, require_api_key
+from src.api.auth import AuthedKey, get_actor, require_scope
 from src.api.deps import get_storage
 
 router = APIRouter(prefix="/teams", tags=["teams"])
@@ -15,6 +15,7 @@ def create_team(
     payload: TeamCreate,
     storage: StorageAdapter = Depends(get_storage),
     actor: str = Depends(get_actor),
+    _: AuthedKey = Depends(require_scope("teams:write")),
 ) -> Team:
     try:
         return storage.create_team(payload, actor=actor)
@@ -26,7 +27,7 @@ def create_team(
 def list_teams(
     active_only: bool = False,
     storage: StorageAdapter = Depends(get_storage),
-    _: str = Depends(require_api_key),
+    _: AuthedKey = Depends(require_scope("teams:read")),
 ) -> list[Team]:
     return storage.list_teams(active_only=active_only)
 
@@ -35,7 +36,7 @@ def list_teams(
 def get_team_by_slug(
     slug: str,
     storage: StorageAdapter = Depends(get_storage),
-    _: str = Depends(require_api_key),
+    _: AuthedKey = Depends(require_scope("teams:read")),
 ) -> Team:
     team = storage.get_team_by_slug(slug)
     if team is None:
@@ -47,7 +48,7 @@ def get_team_by_slug(
 def get_team(
     team_id: UUID,
     storage: StorageAdapter = Depends(get_storage),
-    _: str = Depends(require_api_key),
+    _: AuthedKey = Depends(require_scope("teams:read")),
 ) -> Team:
     team = storage.get_team(team_id)
     if team is None:
@@ -61,6 +62,7 @@ def update_team(
     payload: TeamUpdate,
     storage: StorageAdapter = Depends(get_storage),
     actor: str = Depends(get_actor),
+    _: AuthedKey = Depends(require_scope("teams:write")),
 ) -> Team:
     try:
         updated = storage.update_team(team_id, payload, actor=actor)

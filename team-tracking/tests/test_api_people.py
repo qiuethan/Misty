@@ -113,3 +113,25 @@ def test_x_actor_header_used_for_created_by(client):
         headers={**AUTH, "X-Actor": "discord-bot"},
     ).json()
     assert created["created_by"] == "discord-bot"
+
+
+def test_people_write_denied_without_scope(client):
+    """A DB-issued key with only people:read scope gets 403 on POST /people."""
+    from src.api.hashing import generate_key
+
+    adapter = client.app.dependency_overrides[get_storage]()
+    plaintext, prefix, key_hash = generate_key()
+    adapter.create_api_key(
+        name="reader",
+        prefix=prefix,
+        key_hash=key_hash,
+        scopes=["people:read"],
+        actor="admin",
+    )
+    resp = client.post(
+        "/people",
+        json={"display_name": "Alex", "primary_email": "alex@utmist.ca"},
+        headers={"X-API-Key": plaintext},
+    )
+    assert resp.status_code == 403
+    assert "people:write" in resp.json()["detail"]

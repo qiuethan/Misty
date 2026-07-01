@@ -38,6 +38,22 @@ curl -sS http://localhost:8000/role_kinds \
   -H "X-API-Key: dev-api-key-change-me" | python3 -m json.tool
 ```
 
+**For production, use per-consumer scoped keys instead of the shared env key.** Issue them via the CLI:
+
+```bash
+# Issue a read-only key for a Discord bot
+uv run team-tracking-keys issue --name discord-bot --scopes people:read memberships:read
+# Prints: tt_<prefix>_<secret>  (shown ONCE — capture it now)
+
+# List existing keys (metadata only, never plaintext)
+uv run team-tracking-keys list --active-only
+
+# Revoke a compromised key
+uv run team-tracking-keys revoke <api_key_id>
+```
+
+Scopes: `people:{read,write}`, `teams:{read,write}`, `role_kinds:read`, `memberships:{read,write}`, `admin` (wildcard). See `docs/DEPLOYMENT.md` for the full auth model, rotation runbook, and audit log integration.
+
 ## Folder tour
 
 ```

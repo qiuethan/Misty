@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 from contracts.storage import StorageAdapter
 from contracts.types import TeamMembership, TeamMembershipCreate, TeamMembershipUpdate
-from src.api.auth import get_actor, require_api_key
+from src.api.auth import AuthedKey, get_actor, require_scope
 from src.api.deps import get_storage
 
 router = APIRouter(prefix="/memberships", tags=["memberships"])
@@ -22,6 +22,7 @@ def create_membership(
     payload: TeamMembershipCreate,
     storage: StorageAdapter = Depends(get_storage),
     actor: str = Depends(get_actor),
+    _: AuthedKey = Depends(require_scope("memberships:write")),
 ) -> TeamMembership:
     try:
         return storage.create_membership(payload, actor=actor)
@@ -37,7 +38,7 @@ def list_memberships(
     as_of: date | None = None,
     is_team_admin: bool | None = None,
     storage: StorageAdapter = Depends(get_storage),
-    _: str = Depends(require_api_key),
+    _: AuthedKey = Depends(require_scope("memberships:read")),
 ) -> list[TeamMembership]:
     return storage.list_memberships(
         team_id=team_id,
@@ -52,7 +53,7 @@ def list_memberships(
 def get_membership(
     membership_id: UUID,
     storage: StorageAdapter = Depends(get_storage),
-    _: str = Depends(require_api_key),
+    _: AuthedKey = Depends(require_scope("memberships:read")),
 ) -> TeamMembership:
     m = storage.get_membership(membership_id)
     if m is None:
@@ -66,6 +67,7 @@ def update_membership(
     payload: TeamMembershipUpdate,
     storage: StorageAdapter = Depends(get_storage),
     actor: str = Depends(get_actor),
+    _: AuthedKey = Depends(require_scope("memberships:write")),
 ) -> TeamMembership:
     try:
         updated = storage.update_membership(membership_id, payload, actor=actor)
@@ -82,6 +84,7 @@ def end_membership(
     payload: EndMembershipPayload,
     storage: StorageAdapter = Depends(get_storage),
     actor: str = Depends(get_actor),
+    _: AuthedKey = Depends(require_scope("memberships:write")),
 ) -> TeamMembership:
     ended = storage.end_membership(membership_id, payload.ended_at, actor=actor)
     if ended is None:

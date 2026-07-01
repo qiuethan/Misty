@@ -76,3 +76,25 @@ def test_create_team_requires_api_key(client):
 def test_get_team_by_slug_not_found(client):
     resp = client.get("/teams/by-slug/nonexistent", headers=AUTH)
     assert resp.status_code == 404
+
+
+def test_teams_write_denied_without_scope(client):
+    """A DB-issued key with only teams:read scope gets 403 on POST /teams."""
+    from src.api.hashing import generate_key
+
+    adapter = client.app.dependency_overrides[get_storage]()
+    plaintext, prefix, key_hash = generate_key()
+    adapter.create_api_key(
+        name="reader",
+        prefix=prefix,
+        key_hash=key_hash,
+        scopes=["teams:read"],
+        actor="admin",
+    )
+    resp = client.post(
+        "/teams",
+        json={"slug": "readonly-test", "label": "Read Only Test"},
+        headers={"X-API-Key": plaintext},
+    )
+    assert resp.status_code == 403
+    assert "teams:write" in resp.json()["detail"]
