@@ -194,10 +194,14 @@ def test_update_membership_role_kind_validation(adapter):
 
 
 def test_get_person_by_email_case_insensitive(adapter):
-    adapter.create_person(PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t")
-    found = adapter.get_person_by_email("A@UTMIST.CA")
+    created = adapter.create_person(
+        PersonCreate(display_name="Sam", primary_email="sam@utmist.ca"),
+        actor="test",
+    )
+    found = adapter.get_person_by_email("SAM@utmist.ca")
     assert found is not None
-    assert found.primary_email == "a@utmist.ca"
+    assert found.id == created.id
+    assert adapter.get_person_by_email("missing@utmist.ca") is None
 
 
 def test_get_team_by_slug(adapter):

@@ -32,6 +32,20 @@ def list_people(
     return storage.list_people(active_only=active_only)
 
 
+# Declared before /{person_id} (literal-first convention) so "by-email" is
+# not parsed as a UUID.
+@router.get("/by-email/{email}", response_model=Person)
+def get_person_by_email(
+    email: str,
+    storage: StorageAdapter = Depends(get_storage),
+    _: AuthedKey = Depends(require_scope("people:read")),
+) -> Person:
+    person = storage.get_person_by_email(email)
+    if person is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="person not found")
+    return person
+
+
 @router.get("/{person_id}", response_model=Person)
 def get_person(
     person_id: UUID,
