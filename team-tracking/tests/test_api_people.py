@@ -135,3 +135,35 @@ def test_people_write_denied_without_scope(client):
     )
     assert resp.status_code == 403
     assert "people:write" in resp.json()["detail"]
+
+
+def test_get_person_by_email(client):
+    client.post(
+        "/people",
+        json={"display_name": "Alex", "primary_email": "alex@utmist.ca"},
+        headers=AUTH,
+    )
+    resp = client.get("/people/by-email/alex@utmist.ca", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["display_name"] == "Alex"
+
+
+def test_get_person_by_email_not_found(client):
+    resp = client.get("/people/by-email/nobody@utmist.ca", headers=AUTH)
+    assert resp.status_code == 404
+
+
+def test_get_person_by_email_is_case_insensitive(client):
+    client.post(
+        "/people",
+        json={"display_name": "Alex", "primary_email": "alex@utmist.ca"},
+        headers=AUTH,
+    )
+    resp = client.get("/people/by-email/Alex@UTMIST.ca", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["primary_email"] == "alex@utmist.ca"
+
+
+def test_get_person_by_email_requires_api_key(client):
+    resp = client.get("/people/by-email/alex@utmist.ca")
+    assert resp.status_code == 401

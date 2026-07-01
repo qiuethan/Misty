@@ -111,6 +111,25 @@ curl -sS -X POST http://localhost:8000/people \
 
 ---
 
+### GET /people/by-email/{email}
+
+Resolve a person by their `primary_email` (case-insensitive). Declared before
+`GET /people/{person_id}` so the literal path is not parsed as a UUID.
+
+- **Scope:** `people:read`
+- **200** → `Person`
+- **404** → no person with that email
+
+Used by the Discord bot to resolve a member's email to their directory Person
+during `/link`.
+
+```bash
+curl -sS "http://localhost:8000/people/by-email/alex@utmist.ca" \
+  -H "X-API-Key: dev-api-key-change-me"
+```
+
+---
+
 ### GET /people
 
 List all people. **Scope:** `people:read`.
