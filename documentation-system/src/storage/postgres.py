@@ -86,8 +86,11 @@ class PostgresStorageAdapter:
     def get_doc_by_normalized_url(self, url_normalized: str) -> Doc | None:
         with self._engine.connect() as conn:
             row = conn.execute(
-                select(docs).where(docs.c.url_normalized == url_normalized)
-            ).one_or_none()
+                select(docs)
+                .where(docs.c.url_normalized == url_normalized)
+                .order_by(docs.c.created_at)
+                .limit(1)
+            ).first()
             return self._row_to_doc(conn, row) if row else None
 
     def list_docs(
@@ -129,10 +132,13 @@ class PostgresStorageAdapter:
             exists = conn.execute(select(docs.c.id).where(docs.c.id == doc_id)).one_or_none()
             if exists is None:
                 return False
-            try:
+            already = conn.execute(
+                select(doc_tags.c.tag).where(
+                    doc_tags.c.doc_id == doc_id, doc_tags.c.tag == tag
+                )
+            ).one_or_none()
+            if already is None:
                 conn.execute(insert(doc_tags).values(doc_id=doc_id, tag=tag))
-            except IntegrityError:
-                pass  # already present — idempotent
             return True
 
     def remove_tag(self, doc_id: UUID, tag: str) -> bool:

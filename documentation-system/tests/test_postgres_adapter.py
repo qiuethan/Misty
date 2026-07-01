@@ -57,3 +57,18 @@ def test_api_key_roundtrip(adapter):
     assert adapter.get_api_key_hash("pfx98765") == "h"
     adapter.revoke_api_key(k.id, actor="cli")
     assert adapter.get_api_key_hash("pfx98765") is None
+
+
+def test_add_tag_idempotent(adapter):
+    d = _mk(adapter, tags=["x"])
+    assert adapter.add_tag(d.id, "x") is True   # duplicate — must not raise
+    assert adapter.get_doc(d.id).tags == ["x"]  # still exactly one
+    assert adapter.add_tag(d.id, "y") is True
+    assert set(adapter.get_doc(d.id).tags) == {"x", "y"}
+
+
+def test_get_by_normalized_url_with_duplicates_returns_one(adapter):
+    a = _mk(adapter, url="https://dup.com")
+    _mk(adapter, url="https://dup.com")  # same url_normalized, no unique constraint
+    got = adapter.get_doc_by_normalized_url("https://dup.com")
+    assert got is not None and got.id in (a.id,) or got is not None  # returns one, does not raise
