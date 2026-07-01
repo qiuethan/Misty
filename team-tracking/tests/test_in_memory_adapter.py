@@ -1,11 +1,11 @@
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import pytest
 
+from conftest import build_seed_role_kinds
 from contracts.types import (
     PersonCreate,
     PersonUpdate,
-    RoleKind,
     TeamCreate,
     TeamMembershipCreate,
     TeamMembershipUpdate,
@@ -13,31 +13,9 @@ from contracts.types import (
 from src.storage.in_memory import InMemoryStorageAdapter
 
 
-def _seed_role_kinds() -> list[RoleKind]:
-    now = datetime.utcnow()
-    return [
-        RoleKind(
-            id=rid,
-            label=rlabel,
-            description=None,
-            active=True,
-            created_at=now,
-            updated_at=now,
-            created_by="system",
-            updated_by="system",
-        )
-        for rid, rlabel in [
-            ("executive", "Executive"),
-            ("director", "Director"),
-            ("lead", "Lead"),
-            ("member", "Member"),
-        ]
-    ]
-
-
 @pytest.fixture
 def adapter() -> InMemoryStorageAdapter:
-    return InMemoryStorageAdapter(seed_role_kinds=_seed_role_kinds())
+    return InMemoryStorageAdapter(seed_role_kinds=build_seed_role_kinds())
 
 
 def test_create_and_get_person(adapter):

@@ -1,10 +1,30 @@
 from collections.abc import Iterator
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
+from contracts.types import RoleKind
 from src.config import get_settings
+
+
+def build_seed_role_kinds() -> list[RoleKind]:
+    """Standard role_kinds seed set for tests — matches migration 002."""
+    now = datetime.now(timezone.utc)
+    return [
+        RoleKind(
+            id=rid, label=rlabel, description=None, active=True,
+            created_at=now, updated_at=now,
+            created_by="system", updated_by="system",
+        )
+        for rid, rlabel in [
+            ("executive", "Executive"),
+            ("director", "Director"),
+            ("lead", "Lead"),
+            ("member", "Member"),
+        ]
+    ]
 
 
 @pytest.fixture(scope="session")

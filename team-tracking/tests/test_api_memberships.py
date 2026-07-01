@@ -1,30 +1,12 @@
-from datetime import date, datetime
+from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
 
-from contracts.types import RoleKind
+from conftest import build_seed_role_kinds
 from src.api.app import create_app
 from src.api.deps import get_storage
 from src.storage.in_memory import InMemoryStorageAdapter
-
-
-def _seed_role_kinds() -> list[RoleKind]:
-    now = datetime.utcnow()
-    return [
-        RoleKind(
-            id=rid, label=rlabel, description=None, active=True,
-            created_at=now, updated_at=now,
-            created_by="system", updated_by="system",
-        )
-        for rid, rlabel in [
-            ("executive", "Executive"),
-            ("director", "Director"),
-            ("lead", "Lead"),
-            ("member", "Member"),
-        ]
-    ]
-
 
 AUTH = {"X-API-Key": "test-key"}
 
@@ -36,7 +18,7 @@ def client(monkeypatch):
 
     get_settings.cache_clear()
 
-    adapter = InMemoryStorageAdapter(seed_role_kinds=_seed_role_kinds())
+    adapter = InMemoryStorageAdapter(seed_role_kinds=build_seed_role_kinds())
     app = create_app()
     app.dependency_overrides[get_storage] = lambda: adapter
     with TestClient(app) as c:
