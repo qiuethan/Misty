@@ -1,27 +1,33 @@
 import { REST, Routes } from 'discord.js';
 import { loadConfig } from './config.js';
-import { commands } from './commands/index.js';
+import { commands, partitionCommands } from './commands/index.js';
 
 const config = loadConfig();
-const body = [...commands.values()].map((c) => c.data.toJSON());
+const { stable, beta } = partitionCommands([...commands.values()]);
+const stableBody = stable.map((c) => c.data.toJSON());
+const betaBody = beta.map((c) => c.data.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(config.discordToken);
 
-// Always register globally so the bot's commands work in every server it joins
-// (production). Global commands can take up to ~1 hour to propagate.
-await rest.put(Routes.applicationCommands(config.discordClientId), { body });
-console.log(`Registered ${body.length} commands globally (all servers).`);
+// Stable commands register GLOBALLY — available in every server (production).
+// Global commands can take up to ~1 hour to propagate.
+await rest.put(Routes.applicationCommands(config.discordClientId), { body: stableBody });
+console.log(`Registered ${stableBody.length} stable commands globally (all servers).`);
 
-// If a dedicated testing guild is configured, ALSO register there so command
-// changes appear instantly while developing. Note: the testing guild will list
-// these commands twice — once from this guild registration and once from the
-// global set — which is expected and harmless in a throwaway test server.
+// Beta commands register ONLY to the dedicated testing guild, so they stay
+// exclusive to that server and never reach production.
 if (config.discordGuildId) {
+  // Registering betaBody (which may be empty) also CLEARS any previously
+  // registered guild commands, so promoted/removed beta commands don't linger.
   await rest.put(
     Routes.applicationGuildCommands(config.discordClientId, config.discordGuildId),
-    { body },
+    { body: betaBody },
   );
   console.log(
-    `Also registered ${body.length} commands to testing guild ${config.discordGuildId} (instant).`,
+    `Registered ${betaBody.length} beta commands to testing guild ${config.discordGuildId} (exclusive).`,
+  );
+} else if (betaBody.length > 0) {
+  console.warn(
+    `${betaBody.length} beta command(s) NOT registered: set DISCORD_GUILD_ID to a testing guild to register them.`,
   );
 }

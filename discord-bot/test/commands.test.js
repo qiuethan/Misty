@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as link from '../src/commands/link.js';
 import * as whoami from '../src/commands/whoami.js';
-import { commands } from '../src/commands/index.js';
+import { commands, partitionCommands } from '../src/commands/index.js';
 
 function fakeInteraction({ email } = {}) {
   const replies = [];
@@ -43,4 +43,21 @@ test('whoami is linked-gated and renders the principal person', async () => {
 test('registry contains both commands keyed by name', () => {
   assert.equal(commands.get('link'), link);
   assert.equal(commands.get('whoami'), whoami);
+});
+
+test('partitionCommands splits stable (global) from beta (test-guild only)', () => {
+  const a = { data: { name: 'a' } }; // no beta flag → stable
+  const b = { data: { name: 'b' }, beta: false }; // explicit stable
+  const c = { data: { name: 'c' }, beta: true }; // beta
+  const { stable, beta } = partitionCommands([a, b, c]);
+  assert.deepEqual(stable, [a, b]);
+  assert.deepEqual(beta, [c]);
+});
+
+test('current commands are all stable (registered globally, none beta-exclusive)', () => {
+  const { stable, beta } = partitionCommands([...commands.values()]);
+  assert.equal(beta.length, 0);
+  assert.equal(stable.length, commands.size);
+  assert.equal(link.beta, false);
+  assert.equal(whoami.beta, false);
 });

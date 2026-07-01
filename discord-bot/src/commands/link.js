@@ -9,6 +9,7 @@ export const data = new SlashCommandBuilder()
   );
 
 export const auth = 'public'; // you are not linked yet when you run /link
+export const beta = false; // stable → registered globally (all prod servers)
 
 export async function execute(interaction, ctx) {
   const email = interaction.options.getString('email');

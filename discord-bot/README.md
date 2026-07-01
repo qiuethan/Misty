@@ -16,6 +16,21 @@ gated purely by the auth layer — an unlinked user can't run gated commands, a
 linked user can. Identity is a Discord user's **global** account (snowflake), so
 a linked person is recognized in every server the bot shares with them.
 
+### Release channels (beta vs stable)
+
+Commands are split into two channels by an `export const beta` flag:
+
+- **Stable** (`beta = false` or omitted) — registered **globally**, available in
+  every server the bot is in (production).
+- **Beta** (`beta = true`) — registered **only** to the dedicated testing guild
+  (`DISCORD_GUILD_ID`), so a new command can be trialed in the test server without
+  ever reaching production. Promote it by flipping `beta` to `false`.
+
+`npm run register` sends stable commands globally and beta commands to the test
+guild exclusively (re-running also clears stale/promoted beta commands from the
+guild). If any command is beta and `DISCORD_GUILD_ID` is unset, registration warns
+and skips them.
+
 ## Commands
 
 - `/link email:<your UTMIST email>` (public) — links your Discord account to your
@@ -44,9 +59,9 @@ parallel to team-tracking's scoped-key auth.
 1. **Node 20+** required.
 2. `cp .env.example .env` and fill in:
    - Discord app credentials (`DISCORD_TOKEN`, `DISCORD_CLIENT_ID`).
-   - `DISCORD_GUILD_ID` — **optional** dedicated testing guild. Commands always
-     register globally (production); if this is set they *also* register to this
-     guild for instant updates while developing. Leave blank in production.
+   - `DISCORD_GUILD_ID` — dedicated testing guild ID. **Beta** commands register
+     exclusively here; stable commands are always global. Required only if you
+     have beta commands (see "Release channels" above).
    - `DIRECTORY_BASE_URL` (e.g. `http://localhost:8000`).
    - `DIRECTORY_API_KEY` — issue one from team-tracking:
      ```bash
@@ -56,10 +71,9 @@ parallel to team-tracking's scoped-key auth.
      ```
 3. `npm install`
 4. `npm run register` — registers the slash commands (run once, or whenever
-   command definitions change). Always registers **globally** (works in every
-   server the bot joins; can take ~1h to propagate). If `DISCORD_GUILD_ID` is set,
-   it *also* registers to that testing guild for instant updates (that guild will
-   then list the commands twice — expected, harmless in a test server).
+   command definitions change). **Stable** commands go global (can take ~1h to
+   propagate); **beta** commands go only to the testing guild. See "Release
+   channels" above.
 5. `npm start` — then invite the bot to any server via its OAuth2 URL.
 
 ## Architecture
@@ -76,7 +90,7 @@ parallel to team-tracking's scoped-key auth.
 | `src/messages.js` | Pure reply-string rendering. |
 | `src/commands/*.js` | Thin discord.js interaction handlers + registry. |
 | `src/index.js` | Client setup + interaction routing. |
-| `src/registerCommands.js` | One-shot slash-command registration (always global; also the testing guild when `DISCORD_GUILD_ID` is set). |
+| `src/registerCommands.js` | One-shot slash-command registration (stable → global; beta → testing guild only). |
 
 ## Testing
 
