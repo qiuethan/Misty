@@ -16,6 +16,7 @@ from src.storage.in_memory import InMemoryStorageAdapter
 def env_setup(monkeypatch):
     monkeypatch.setenv("API_KEY", "env-test-key")
     from src.config import get_settings
+
     get_settings.cache_clear()
 
 

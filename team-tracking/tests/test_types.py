@@ -165,8 +165,12 @@ def test_person_identifier_model_roundtrips():
     from contracts.types import PersonIdentifier
 
     pi = PersonIdentifier(
-        id=uuid4(), person_id=uuid4(), provider="discord",
-        external_id="123456789", handle="alex#0001", **_audit(),
+        id=uuid4(),
+        person_id=uuid4(),
+        provider="discord",
+        external_id="123456789",
+        handle="alex#0001",
+        **_audit(),
     )
     assert pi.provider == "discord"
     assert pi.external_id == "123456789"

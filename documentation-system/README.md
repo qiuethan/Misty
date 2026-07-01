@@ -57,7 +57,7 @@ curl -sS http://localhost:8001/sources \
 ```bash
 # Issue a read/write key for an ingestion bot
 uv run doc-keys issue --name slack-bot --scopes docs:read docs:write
-# Prints: <prefix>_<secret>  (shown ONCE — capture it now)
+# Prints: doc_<prefix>_<secret>  (shown ONCE — capture it now)
 
 # List existing keys (metadata only, never plaintext)
 uv run doc-keys list --active-only

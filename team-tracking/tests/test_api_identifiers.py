@@ -89,22 +89,40 @@ def test_duplicate_provider_for_person_409(client):
     p = _make_person(client)
     body = {"provider": "discord", "external_id": "1"}
     client.post(f"/people/{p['id']}/identifiers", json=body, headers=AUTH)
-    resp = client.post(f"/people/{p['id']}/identifiers", json={"provider": "discord", "external_id": "2"}, headers=AUTH)
+    resp = client.post(
+        f"/people/{p['id']}/identifiers",
+        json={"provider": "discord", "external_id": "2"},
+        headers=AUTH,
+    )
     assert resp.status_code == 409
 
 
 def test_external_id_owned_by_another_person_409(client):
     p1 = _make_person(client, "a@utmist.ca")
     p2 = _make_person(client, "b@utmist.ca")
-    client.post(f"/people/{p1['id']}/identifiers", json={"provider": "discord", "external_id": "1"}, headers=AUTH)
-    resp = client.post(f"/people/{p2['id']}/identifiers", json={"provider": "discord", "external_id": "1"}, headers=AUTH)
+    client.post(
+        f"/people/{p1['id']}/identifiers",
+        json={"provider": "discord", "external_id": "1"},
+        headers=AUTH,
+    )
+    resp = client.post(
+        f"/people/{p2['id']}/identifiers",
+        json={"provider": "discord", "external_id": "1"},
+        headers=AUTH,
+    )
     assert resp.status_code == 409
 
 
 def test_patch_handle(client):
     p = _make_person(client)
-    client.post(f"/people/{p['id']}/identifiers", json={"provider": "discord", "external_id": "1", "handle": "old"}, headers=AUTH)
-    resp = client.patch(f"/people/{p['id']}/identifiers/discord", json={"handle": "new"}, headers=AUTH)
+    client.post(
+        f"/people/{p['id']}/identifiers",
+        json={"provider": "discord", "external_id": "1", "handle": "old"},
+        headers=AUTH,
+    )
+    resp = client.patch(
+        f"/people/{p['id']}/identifiers/discord", json={"handle": "new"}, headers=AUTH
+    )
     assert resp.status_code == 200
     assert resp.json()["handle"] == "new"
 
@@ -117,7 +135,11 @@ def test_patch_unknown_link_404(client):
 
 def test_delete_identifier(client):
     p = _make_person(client)
-    client.post(f"/people/{p['id']}/identifiers", json={"provider": "discord", "external_id": "1"}, headers=AUTH)
+    client.post(
+        f"/people/{p['id']}/identifiers",
+        json={"provider": "discord", "external_id": "1"},
+        headers=AUTH,
+    )
     resp = client.delete(f"/people/{p['id']}/identifiers/discord", headers=AUTH)
     assert resp.status_code == 204
     assert client.delete(f"/people/{p['id']}/identifiers/discord", headers=AUTH).status_code == 404
@@ -143,8 +165,16 @@ def test_delete_unknown_person_404(client):
 def test_patch_external_id_collision_409(client):
     p1 = _make_person(client, "a@utmist.ca")
     p2 = _make_person(client, "b@utmist.ca")
-    client.post(f"/people/{p1['id']}/identifiers", json={"provider": "discord", "external_id": "1"}, headers=AUTH)
-    client.post(f"/people/{p2['id']}/identifiers", json={"provider": "discord", "external_id": "2"}, headers=AUTH)
+    client.post(
+        f"/people/{p1['id']}/identifiers",
+        json={"provider": "discord", "external_id": "1"},
+        headers=AUTH,
+    )
+    client.post(
+        f"/people/{p2['id']}/identifiers",
+        json={"provider": "discord", "external_id": "2"},
+        headers=AUTH,
+    )
     resp = client.patch(
         f"/people/{p2['id']}/identifiers/discord", json={"external_id": "1"}, headers=AUTH
     )
@@ -158,8 +188,11 @@ def test_identifier_write_denied_without_scope(client):
     adapter = client.app.dependency_overrides[get_storage]()
     plaintext, prefix, key_hash = generate_key()
     adapter.create_api_key(
-        name="reader", prefix=prefix, key_hash=key_hash,
-        scopes=["identifiers:read"], actor="admin",
+        name="reader",
+        prefix=prefix,
+        key_hash=key_hash,
+        scopes=["identifiers:read"],
+        actor="admin",
     )
     resp = client.post(
         f"/people/{p['id']}/identifiers",

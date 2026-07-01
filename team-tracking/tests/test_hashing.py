@@ -29,9 +29,9 @@ def test_verify_malformed_hash_returns_false():
 
 def test_parse_prefix_rejects_bad_formats():
     assert parse_prefix("no-envelope") is None
-    assert parse_prefix("tt_") is None                    # no body
-    assert parse_prefix("tt_ab_secret") is None           # prefix too short
-    assert parse_prefix("tt_abcdefghij_secret") is None   # prefix too long
+    assert parse_prefix("tt_") is None  # no body
+    assert parse_prefix("tt_ab_secret") is None  # prefix too short
+    assert parse_prefix("tt_abcdefghij_secret") is None  # prefix too long
     assert parse_prefix("tt_12345678_secret") == "12345678"
 
 

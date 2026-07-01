@@ -4,16 +4,29 @@ from src.storage.schema import person_identifiers, providers
 def test_providers_table_columns():
     cols = set(providers.c.keys())
     assert cols == {
-        "id", "label", "description", "active",
-        "created_at", "updated_at", "created_by", "updated_by",
+        "id",
+        "label",
+        "description",
+        "active",
+        "created_at",
+        "updated_at",
+        "created_by",
+        "updated_by",
     }
 
 
 def test_person_identifiers_columns():
     cols = set(person_identifiers.c.keys())
     assert cols == {
-        "id", "person_id", "provider", "external_id", "handle",
-        "created_at", "updated_at", "created_by", "updated_by",
+        "id",
+        "person_id",
+        "provider",
+        "external_id",
+        "handle",
+        "created_at",
+        "updated_at",
+        "created_by",
+        "updated_by",
     }
 
 

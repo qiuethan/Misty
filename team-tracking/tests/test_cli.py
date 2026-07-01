@@ -32,9 +32,7 @@ def test_issue_prints_plaintext_and_stores_hash(adapter, capsys):
 
 
 def test_issue_multiple_scopes(adapter, capsys):
-    rc = main([
-        "issue", "--name", "many", "--scopes", "people:read", "memberships:write", "admin"
-    ])
+    rc = main(["issue", "--name", "many", "--scopes", "people:read", "memberships:write", "admin"])
     assert rc == 0
     keys = adapter.list_api_keys()
     assert keys[0].scopes == ["people:read", "memberships:write", "admin"]
@@ -89,6 +87,7 @@ def test_revoke_bad_uuid_returns_2(adapter, capsys):
 
 def test_revoke_missing_returns_1(adapter, capsys):
     from uuid import uuid4
+
     rc = main(["revoke", str(uuid4())])
     assert rc == 1
     out = capsys.readouterr()

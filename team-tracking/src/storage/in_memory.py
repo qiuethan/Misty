@@ -38,15 +38,11 @@ class InMemoryStorageAdapter:
     ) -> None:
         self._people: dict[UUID, Person] = {}
         self._teams: dict[UUID, Team] = {}
-        self._role_kinds: dict[str, RoleKind] = {
-            rk.id: rk for rk in (seed_role_kinds or [])
-        }
+        self._role_kinds: dict[str, RoleKind] = {rk.id: rk for rk in (seed_role_kinds or [])}
         self._memberships: dict[UUID, TeamMembership] = {}
         self._api_keys: dict[UUID, ApiKey] = {}
         self._api_key_hashes: dict[UUID, str] = {}
-        self._providers: dict[str, Provider] = {
-            pr.id: pr for pr in (seed_providers or [])
-        }
+        self._providers: dict[str, Provider] = {pr.id: pr for pr in (seed_providers or [])}
         self._identifiers: dict[UUID, PersonIdentifier] = {}
 
     # --- People ---
@@ -85,9 +81,7 @@ class InMemoryStorageAdapter:
             people = [p for p in people if p.active]
         return people
 
-    def update_person(
-        self, person_id: UUID, payload: PersonUpdate, *, actor: str
-    ) -> Person | None:
+    def update_person(self, person_id: UUID, payload: PersonUpdate, *, actor: str) -> Person | None:
         existing = self._people.get(person_id)
         if existing is None:
             return None
@@ -96,8 +90,7 @@ class InMemoryStorageAdapter:
         if "primary_email" in patch and patch["primary_email"] != existing.primary_email:
             new_email = patch["primary_email"]
             if any(
-                p.primary_email == new_email and p.id != person_id
-                for p in self._people.values()
+                p.primary_email == new_email and p.id != person_id for p in self._people.values()
             ):
                 raise ValueError(f"primary_email already exists: {new_email}")
         data.update(patch)
@@ -143,19 +136,14 @@ class InMemoryStorageAdapter:
             teams = [t for t in teams if t.active]
         return teams
 
-    def update_team(
-        self, team_id: UUID, payload: TeamUpdate, *, actor: str
-    ) -> Team | None:
+    def update_team(self, team_id: UUID, payload: TeamUpdate, *, actor: str) -> Team | None:
         existing = self._teams.get(team_id)
         if existing is None:
             return None
         data = existing.model_dump()
         patch = payload.model_dump(exclude_unset=True)
         if "slug" in patch and patch["slug"] != existing.slug:
-            if any(
-                t.slug == patch["slug"] and t.id != team_id
-                for t in self._teams.values()
-            ):
+            if any(t.slug == patch["slug"] and t.id != team_id for t in self._teams.values()):
                 raise ValueError(f"slug already exists: {patch['slug']}")
         data.update(patch)
         data["updated_at"] = _now()
@@ -177,9 +165,7 @@ class InMemoryStorageAdapter:
 
     # --- Team memberships ---
 
-    def create_membership(
-        self, payload: TeamMembershipCreate, *, actor: str
-    ) -> TeamMembership:
+    def create_membership(self, payload: TeamMembershipCreate, *, actor: str) -> TeamMembership:
         if payload.person_id not in self._people:
             raise ValueError(f"person_id not found: {payload.person_id}")
         if payload.team_id not in self._teams:
@@ -226,8 +212,7 @@ class InMemoryStorageAdapter:
             results = [
                 m
                 for m in results
-                if m.started_at <= as_of
-                and (m.ended_at is None or m.ended_at > as_of)
+                if m.started_at <= as_of and (m.ended_at is None or m.ended_at > as_of)
             ]
         if is_team_admin is not None:
             results = [m for m in results if m.is_team_admin == is_team_admin]
@@ -385,8 +370,11 @@ class InMemoryStorageAdapter:
         self, person_id: UUID, provider: str, payload: PersonIdentifierUpdate, *, actor: str
     ) -> PersonIdentifier | None:
         existing = next(
-            (i for i in self._identifiers.values()
-             if i.person_id == person_id and i.provider == provider),
+            (
+                i
+                for i in self._identifiers.values()
+                if i.person_id == person_id and i.provider == provider
+            ),
             None,
         )
         if existing is None:
@@ -411,8 +399,11 @@ class InMemoryStorageAdapter:
 
     def delete_person_identifier(self, person_id: UUID, provider: str) -> bool:
         target = next(
-            (i for i in self._identifiers.values()
-             if i.person_id == person_id and i.provider == provider),
+            (
+                i
+                for i in self._identifiers.values()
+                if i.person_id == person_id and i.provider == provider
+            ),
             None,
         )
         if target is None:
@@ -420,9 +411,7 @@ class InMemoryStorageAdapter:
         del self._identifiers[target.id]
         return True
 
-    def get_person_by_identifier(
-        self, provider: str, external_id: str
-    ) -> Person | None:
+    def get_person_by_identifier(self, provider: str, external_id: str) -> Person | None:
         for i in self._identifiers.values():
             if i.provider == provider and i.external_id == external_id:
                 return self._people.get(i.person_id)

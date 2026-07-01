@@ -14,12 +14,20 @@ def build_seed_providers() -> list[Provider]:
     now = datetime.now(timezone.utc)
     return [
         Provider(
-            id=pid, label=plabel, description=None, active=True,
-            created_at=now, updated_at=now, created_by="system", updated_by="system",
+            id=pid,
+            label=plabel,
+            description=None,
+            active=True,
+            created_at=now,
+            updated_at=now,
+            created_by="system",
+            updated_by="system",
         )
         for pid, plabel in [
-            ("discord", "Discord"), ("github", "GitHub"),
-            ("notion", "Notion"), ("uoft_email", "UofT Email"),
+            ("discord", "Discord"),
+            ("github", "GitHub"),
+            ("notion", "Notion"),
+            ("uoft_email", "UofT Email"),
         ]
     ]
 
@@ -29,9 +37,14 @@ def build_seed_role_kinds() -> list[RoleKind]:
     now = datetime.now(timezone.utc)
     return [
         RoleKind(
-            id=rid, label=rlabel, description=None, active=True,
-            created_at=now, updated_at=now,
-            created_by="system", updated_by="system",
+            id=rid,
+            label=rlabel,
+            description=None,
+            active=True,
+            created_at=now,
+            updated_at=now,
+            created_by="system",
+            updated_by="system",
         )
         for rid, rlabel in [
             ("executive", "Executive"),

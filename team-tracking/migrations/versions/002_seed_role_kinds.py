@@ -4,6 +4,7 @@ Revision ID: 002
 Revises: 001
 Create Date: 2026-06-30
 """
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -39,6 +40,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     ids = [rid for rid, _ in ROLE_KINDS]
-    op.execute(
-        sa.text("DELETE FROM role_kinds WHERE id = ANY(:ids)").bindparams(ids=ids)
-    )
+    op.execute(sa.text("DELETE FROM role_kinds WHERE id = ANY(:ids)").bindparams(ids=ids))
