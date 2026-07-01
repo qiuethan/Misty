@@ -2,7 +2,7 @@ from fastapi import FastAPI
 
 
 def create_app() -> FastAPI:
-    from src.api.routers import people, teams  # add role_kinds, memberships in later tasks
+    from src.api.routers import people, role_kinds, teams  # memberships coming in Task 12
 
     app = FastAPI(
         title="UTMIST team-tracking",
@@ -11,6 +11,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(people.router)
     app.include_router(teams.router)
+    app.include_router(role_kinds.router)
     return app
 
 
