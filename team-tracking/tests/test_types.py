@@ -123,3 +123,21 @@ def test_team_membership_create_started_at_defaults_to_none():
 
     m = TeamMembershipCreate(person_id=uuid4(), team_id=uuid4())
     assert m.started_at is None
+
+
+def test_team_create_rejects_bad_slug():
+    """Slugs must match [a-z0-9_.]+ per DESIGN.md."""
+    import pytest
+    from pydantic import ValidationError
+
+    from contracts.types import TeamCreate
+
+    with pytest.raises(ValidationError):
+        TeamCreate(slug="My Team!", label="x")
+
+
+def test_team_create_accepts_good_slug():
+    from contracts.types import TeamCreate
+
+    ok = TeamCreate(slug="events.agi_workshop_2025", label="AGI")
+    assert ok.slug == "events.agi_workshop_2025"

@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime
 from uuid import UUID
 
@@ -95,6 +96,13 @@ class TeamCreate(BaseModel):
     description: str | None = None
     parent_id: UUID | None = None
 
+    @field_validator("slug")
+    @classmethod
+    def validate_slug(cls, v: str) -> str:
+        if not re.fullmatch(r"[a-z0-9_.]+", v):
+            raise ValueError("slug must match [a-z0-9_.]+")
+        return v
+
 
 class TeamUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -103,6 +111,13 @@ class TeamUpdate(BaseModel):
     description: str | None = None
     parent_id: UUID | None = None
     active: bool | None = None
+
+    @field_validator("slug")
+    @classmethod
+    def validate_slug(cls, v: str | None) -> str | None:
+        if v is not None and not re.fullmatch(r"[a-z0-9_.]+", v):
+            raise ValueError("slug must match [a-z0-9_.]+")
+        return v
 
 
 class TeamMembershipCreate(BaseModel):
