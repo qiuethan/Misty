@@ -1,7 +1,11 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from uuid import uuid4
 
 from contracts.types import Person, RoleKind, Team, TeamMembership
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def test_person_has_expected_fields():
@@ -10,8 +14,8 @@ def test_person_has_expected_fields():
         display_name="Alex Chen",
         primary_email="alex@utmist.ca",
         active=True,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=_now(),
+        updated_at=_now(),
         created_by="system",
         updated_by="system",
     )
@@ -26,8 +30,8 @@ def test_person_primary_email_lowercased():
         display_name="Alex",
         primary_email="Alex@UTMIST.CA",
         active=True,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=_now(),
+        updated_at=_now(),
         created_by="system",
         updated_by="system",
     )
@@ -43,8 +47,8 @@ def test_team_hierarchy_field():
         description=None,
         parent_id=parent_id,
         active=True,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=_now(),
+        updated_at=_now(),
         created_by="system",
         updated_by="system",
     )
@@ -57,8 +61,8 @@ def test_role_kind_uses_slug_id():
         label="Lead",
         description=None,
         active=True,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=_now(),
+        updated_at=_now(),
         created_by="system",
         updated_by="system",
     )
@@ -74,8 +78,8 @@ def test_team_membership_defaults():
         is_team_admin=False,
         started_at=date.today(),
         ended_at=None,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=_now(),
+        updated_at=_now(),
         created_by="system",
         updated_by="system",
     )
