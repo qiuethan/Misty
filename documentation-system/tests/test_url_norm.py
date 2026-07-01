@@ -52,5 +52,12 @@ def test_derive_google_split_by_path_most_specific_wins():
     assert derive_source("https://drive.google.com/file/d/abc", SOURCES) == "gdrive"
 
 
+def test_derive_source_path_prefix_respects_segment_boundary():
+    # /documentXYZ is NOT under /document — must not resolve to gdocs
+    assert derive_source("https://docs.google.com/documentXYZ/foo", SOURCES) == "web"
+    # exact prefix (no trailing path) still matches
+    assert derive_source("https://docs.google.com/document", SOURCES) == "gdocs"
+
+
 def test_derive_falls_back_to_web():
     assert derive_source("https://example.org/whatever", SOURCES) == "web"

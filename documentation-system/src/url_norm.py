@@ -66,7 +66,7 @@ def derive_source(url: str, sources: list[Source]) -> str:
             phost, _, ppath = pattern.partition("/")
             ppath = f"/{ppath}" if ppath else ""
             host_ok = host == phost or host.endswith(f".{phost}")
-            path_ok = path.startswith(ppath) if ppath else True
+            path_ok = (path == ppath or path.startswith(ppath + "/")) if ppath else True
             if host_ok and path_ok and len(pattern) > best_len:
                 best_id = source.id
                 best_len = len(pattern)
