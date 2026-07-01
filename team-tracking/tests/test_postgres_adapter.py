@@ -5,6 +5,8 @@ from sqlalchemy.engine import Engine
 
 from contracts.types import (
     PersonCreate,
+    PersonIdentifierCreate,
+    PersonIdentifierUpdate,
     PersonUpdate,
     TeamCreate,
     TeamMembershipCreate,
@@ -165,3 +167,46 @@ def test_revoke_and_touch_pg(adapter):
     assert adapter.get_api_key_by_prefix("tt_pg_r").last_used_at is not None
     adapter.revoke_api_key(key.id, actor="admin")
     assert adapter.get_api_key_hash("tt_pg_r") is None
+
+
+def test_pg_provider_seed_present(adapter):
+    assert {p.id for p in adapter.list_providers()} >= {"discord", "github", "notion", "uoft_email"}
+    assert adapter.get_provider("discord").label == "Discord"
+
+
+def test_pg_identifier_crud_and_reverse_lookup(adapter):
+    person = adapter.create_person(
+        PersonCreate(display_name="Alex", primary_email="alex@utmist.ca"), actor="t"
+    )
+    pi = adapter.create_person_identifier(
+        person.id,
+        PersonIdentifierCreate(provider="discord", external_id="123", handle="alex"),
+        actor="bot",
+    )
+    assert pi.external_id == "123"
+    assert [i.id for i in adapter.list_person_identifiers(person.id)] == [pi.id]
+
+    found = adapter.get_person_by_identifier("discord", "123")
+    assert found is not None and found.id == person.id
+
+    updated = adapter.update_person_identifier(
+        person.id, "discord", PersonIdentifierUpdate(handle="new"), actor="t"
+    )
+    assert updated.handle == "new"
+
+    assert adapter.delete_person_identifier(person.id, "discord") is True
+    assert adapter.delete_person_identifier(person.id, "discord") is False
+    assert adapter.get_person_by_identifier("discord", "123") is None
+
+
+def test_pg_duplicate_provider_raises(adapter):
+    person = adapter.create_person(
+        PersonCreate(display_name="Alex", primary_email="alex@utmist.ca"), actor="t"
+    )
+    adapter.create_person_identifier(
+        person.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t"
+    )
+    with pytest.raises(ValueError):
+        adapter.create_person_identifier(
+            person.id, PersonIdentifierCreate(provider="discord", external_id="2"), actor="t"
+        )
