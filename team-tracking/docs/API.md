@@ -439,7 +439,7 @@ curl -sS "http://localhost:8000/providers/discord" \
 
 ## Person identifiers
 
-A `PersonIdentifier` row records that a person has an external account on a given provider (e.g., Discord account snowflake, GitHub username). Each person can have at most one link per provider. Identifiers are never deleted; they are marked inactive by the provider's `active` flag at the read level.
+A `PersonIdentifier` row records that a person holds an external account on a given provider (e.g., Discord account snowflake, GitHub username). Each person can have at most one link per provider. Identity mappings are current state, not history: unlinking hard-deletes the row via the DELETE endpoint (a deliberate exception to the "never hard-delete" convention for people/teams/memberships). Re-linking requires unlink-then-relink.
 
 Identity operations require scopes `identifiers:read` (for GET) and `identifiers:write` (for POST/PATCH/DELETE).
 
