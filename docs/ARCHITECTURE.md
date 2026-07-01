@@ -1,0 +1,152 @@
+# Platform Architecture
+
+How the UTMIST ops platform's services fit together. This document is for someone
+deciding *how the pieces relate* — not the internals of either service. For those,
+see each service's own `docs/ARCHITECTURE.md`:
+
+- [`team-tracking/docs/ARCHITECTURE.md`](../team-tracking/docs/ARCHITECTURE.md)
+- [`documentation-system/docs/ARCHITECTURE.md`](../documentation-system/docs/ARCHITECTURE.md)
+
+## The core principle: a source of truth is API-only
+
+Each service is a **source of truth** for one domain — the directory owns the org
+model (people/teams/roles/memberships); the catalog owns the index of the org's URLs.
+The defining rule is that **nothing runs inside a source of truth**. There are no
+in-process plugins, no shared library that consumers import, no batch jobs reaching
+into the database. Every consumer — a Discord bot, a dashboard, the docs catalog
+itself — talks to the service the same way: over HTTP, against its published OpenAPI
+contract.
+
+Why enforce this:
+
+- **The internal language stays invisible.** A service's Pydantic types, its storage
+  schema, its `Protocol` boundaries — none of that leaks to consumers. Consumers see
+  only the HTTP surface. That means the team can refactor internals (swap a storage
+  adapter, restructure tables, rename a class) without breaking anyone downstream.
+- **The OpenAPI contract *is* the boundary.** If it's not in `/openapi.json`, it's
+  not part of the contract. This gives a rotating, mixed-fluency org a single, honest,
+  machine-readable description of what each service promises — no tribal knowledge
+  required, no "ask the person who wrote it."
+- **One integration pattern everywhere.** Because there's no privileged in-process
+  path, the docs catalog integrates with the directory exactly the way a third-party
+  bot would: authenticated HTTP calls. Nothing gets special access it shouldn't have.
+
+## Cross-service data flow: cataloguing a doc
+
+The one place the two services touch today is **ownership validation**. When someone
+ingests a URL into the catalog and attributes it to a team or person, the catalog
+resolves that owner against the directory. Here's the path:
+
+```
+  ┌──────────────┐        POST /docs           ┌───────────────────────┐
+  │   consumer   │  (url, owner ids, tags)      │  documentation-system │
+  │ (bot / human │ ───────────────────────────▶ │     (docs catalog)    │
+  │  via curl)   │                              │                       │
+  └──────────────┘                              │   ingest_doc():       │
+         ▲                                       │   normalize → dedup   │
+         │  201/200 + warnings                   │   → source → fetch    │
+         │                                       │   → resolve owner ────┼──┐
+         └───────────────────────────────────────┤                       │  │ GET /teams/{id}
+                                                 └───────────────────────┘  │ GET /people/{id}
+                                                                            │ X-API-Key
+                                                                            ▼
+                                                          ┌────────────────────────────┐
+                                                          │        team-tracking       │
+                                                          │  (directory / source of    │
+                                                          │   truth for the org)       │
+                                                          └────────────────────────────┘
+```
+
+Step by step, when `POST /docs` arrives at the catalog
+([`documentation-system/src/ingest.py`](../documentation-system/src/ingest.py)):
+
+1. **Normalize + dedup.** The URL is normalized; if it's already catalogued, ingest
+   is idempotent — new tags merge onto the existing doc and nothing else happens.
+2. **Derive source + fetch.** The URL's source kind (`web`, `github`, `gdrive`, …) is
+   derived, and if that source has fetching enabled the catalog grabs a best-effort
+   title/content snapshot. Fetch failures become warnings, not errors.
+3. **Validate ownership against the directory.** For each supplied `owning_team_id` /
+   `owning_person_id`, the catalog calls the directory over HTTP
+   ([`src/directory/http_client.py`](../documentation-system/src/directory/http_client.py))
+   — `GET /teams/{id}` or `GET /people/{id}` — to fetch a display label. Three
+   outcomes:
+   - **Found (2xx):** the label is stored alongside the id. The doc now carries a
+     human-readable owner.
+   - **Not found (404):** the id is genuinely wrong. Ingest rejects the request with
+     `400 Bad Reference` — the directory was reachable enough to *confirm* the id
+     doesn't exist.
+   - **Directory unavailable (connection error / 5xx):** this is
+     `degrade-on-directory-down`. The client raises `DirectoryUnavailable`, ingest
+     catches it, **stores the owner id, leaves the label null, and attaches a
+     warning**. The doc is still created.
+4. **Backfill later.** A degraded label isn't permanent. The next time that doc is
+   read or updated while the directory is reachable, the catalog resolves and
+   persists the missing label (`_backfill_labels` in
+   `documentation-system/src/api/routers/docs.py`).
+
+The crucial distinction: **a wrong id is a client error; an unreachable directory is
+not.** The catalog refuses to invent ownership, but it also refuses to let a
+directory outage block cataloguing work. Availability of the catalog never depends on
+availability of the directory.
+
+## Shared architectural conventions
+
+Both services are built to the same template, so learning one transfers to the other.
+These are platform-wide conventions; each service's own `docs/ARCHITECTURE.md`
+describes how it applies them concretely.
+
+- **`contracts/` Protocol boundary.** Each service has a `contracts/` package holding
+  Pydantic domain types and `Protocol` interfaces. Application code (ingest, routers)
+  depends on the Protocol, never a concrete class. `contracts/` imports nothing from
+  `src/`, so the boundary can't erode. The catalog has three such Protocols —
+  `StorageAdapter`, `Fetcher`, and `DirectoryClient` — and the directory dependency
+  described above is just the `DirectoryClient` Protocol with an HTTP implementation.
+- **Storage adapter swap.** Every Protocol has a fast in-memory implementation for
+  tests and a real one for production. `InMemoryStorageAdapter` vs
+  `PostgresStorageAdapter` is the canonical example: swapping to Postgres required
+  zero changes to ingest logic or routers. The concrete adapter is wired to its
+  Protocol in exactly one place per service (`src/api/deps.py`).
+- **Scoped API-key auth.** Every request carries `X-API-Key`. Keys are Argon2-hashed
+  in the database and carry a set of per-resource scopes (e.g. `people:read`,
+  `docs:write`, with `admin` as a wildcard). A shared bootstrap env key exists for
+  local dev; production uses per-consumer keys issued via each service's CLI
+  (`team-tracking-keys`, `doc-keys`).
+- **Attested actor.** The actor recorded on audit fields (`created_by` / `updated_by`)
+  is the authenticated key's own identity — not a value the caller supplies. A
+  consumer cannot claim to be someone else. (The directory additionally accepts an
+  `X-Actor` hint; the catalog does not — it always stamps the key's name.)
+- **Per-request audit middleware.** An audit-log middleware records every request with
+  its resolved actor, giving a per-request trail across a org where the operator set
+  turns over.
+- **Alembic migrations.** Schema is versioned as Alembic migrations applied with
+  `alembic upgrade head`. The SQLAlchemy Core table definitions in
+  `src/storage/schema.py` are the schema source of truth.
+
+## Why the directory is built first
+
+The build order — **directory → docs catalog → search** — isn't arbitrary. It follows
+a hidden dependency:
+
+> You can't tag a doc with a *meaningful* org owner until there's an org model to
+> point at.
+
+Ownership is the whole reason the catalog is more than a bookmark folder. "The
+Partnerships team owns this budget sheet" is only useful if "the Partnerships team" is
+a real, resolvable, durable entity — one that outlives the person who added the doc.
+That entity lives in the directory. Build the catalog first and "owner" degenerates
+into a free-text string that rots exactly the way the links it's trying to organize
+do.
+
+So the directory comes first because it supplies *identity and meaning* to everything
+downstream. The catalog comes second because it consumes that meaning. Search comes
+last (and is deferred) because it indexes what the catalog has already captured —
+there's nothing to search until docs are catalogued, and the content snapshots search
+will index are already being stored in anticipation.
+
+## What's deferred
+
+The **search / retrieval plugin** is designed but not built. When it lands it will
+index the catalog's stored content snapshots for full-text and semantic search.
+Consistent with the API-only principle, it will be another HTTP consumer of the
+catalog — not something running inside it. It is out of scope until the catalog has
+enough content to make search worthwhile.

@@ -6,29 +6,48 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions. The machine-readabl
 
 ## Base URL and auth
 
-Local development: `http://localhost:8000`
+Local development: `http://localhost:8000`. In production the base URL is whatever host fronts the API (e.g. `https://team-tracking.utmist.ca`).
 
-Every request must include a valid API key:
+Every request — read or write — must include a valid **scoped API key** in the `X-API-Key` header:
 
 ```
-X-API-Key: <your-api-key>
+X-API-Key: tt_<prefix>_<secret>
 ```
 
-If the key is missing or wrong, every endpoint returns `401 Unauthorized`.
+Keys are issued by an operator via the `team-tracking-keys` CLI (see [DEPLOYMENT.md](DEPLOYMENT.md)) and have the format `tt_<prefix>_<secret>`: an 8-char public prefix used for lookup, and a secret verified against a stored argon2 hash. The plaintext is shown once at issuance and never recoverable. A legacy env bootstrap key (the `API_KEY` setting) is also accepted with `admin` scope, but is deprecated — real consumers get their own scoped key.
 
-Write endpoints (`POST`, `PATCH`) also accept an optional `X-Actor` header that identifies the caller. This value is stored in the `created_by` and `updated_by` audit fields. If omitted, it defaults to `"api"`. Use descriptive values like `"discord-bot"`, `"sync-job"`, or `"bootstrap-script"` so the audit trail is useful.
+If the key is missing, malformed, or unrecognized, the endpoint returns `401 Unauthorized`. Every failure mode returns the same 401 body — the API never leaks which check failed.
 
-The API uses fine-grained scopes. Base scopes are `people:{read,write}`, `teams:{read,write}`, `role_kinds:read`, `memberships:{read,write}`. Identity scopes are `providers:read`, `identifiers:{read,write}`. The special `admin` scope grants access to all endpoints.
+### Scopes
+
+Each endpoint requires a specific scope. A key only reaches an endpoint if its scopes include the required one (or the wildcard `admin`); otherwise the response is `403 Forbidden`.
+
+| Domain | Scopes |
+|--------|--------|
+| People | `people:read`, `people:write` |
+| Teams | `teams:read`, `teams:write` |
+| Role kinds | `role_kinds:read` |
+| Memberships | `memberships:read`, `memberships:write` |
+| Providers | `providers:read` |
+| Identifiers | `identifiers:read`, `identifiers:write` |
+| Wildcard | `admin` — grants every scope |
+
+The required scope for each endpoint is listed in its section below.
+
+### Attested actor (`created_by` / `updated_by`)
+
+Writes stamp `created_by` and `updated_by` with the **name of the key that made the request** — cryptographically attested, not self-declared. There is no need to send an actor header: if you issue a key named `discord-bot`, every write it makes is recorded as `discord-bot`.
+
+> The `X-Actor` header exists only for backward compatibility with the deprecated env bootstrap key, and is **ignored for DB-issued keys**. A leaked key can no longer impersonate someone else by setting a header. The `X-Actor` values shown in some curl examples below are inert for scoped keys — they document the legacy behavior only.
 
 ```bash
-# Read request — only X-API-Key required
+# Read request — the key must carry the endpoint's :read scope
 curl -sS http://localhost:8000/people \
-  -H "X-API-Key: dev-api-key-change-me"
+  -H "X-API-Key: tt_ab12cd34_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
-# Write request — X-Actor is optional but recommended
+# Write request — actor is taken from the key name; no header needed
 curl -sS -X POST http://localhost:8000/people \
-  -H "X-API-Key: dev-api-key-change-me" \
-  -H "X-Actor: bootstrap-script" \
+  -H "X-API-Key: tt_ab12cd34_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
   -H "Content-Type: application/json" \
   -d '{"display_name": "Alex Chen", "primary_email": "alex@utmist.ca"}'
 ```
@@ -38,12 +57,15 @@ curl -sS -X POST http://localhost:8000/people \
 | Status | When |
 |--------|------|
 | `400 Bad Request` | Invalid FK on membership create/update (person_id, team_id, or role_kind_id not found); unknown provider on identifier create |
-| `401 Unauthorized` | Missing or incorrect `X-API-Key` |
+| `401 Unauthorized` | Missing, malformed, or unrecognized `X-API-Key` |
+| `403 Forbidden` | Key is valid but lacks the scope the endpoint requires |
 | `404 Not Found` | Resource with the given ID or slug does not exist; unknown person/identifier link, or unlinked reverse lookup |
 | `409 Conflict` | Uniqueness violation: `primary_email` already taken, team `slug` already taken, person already has that provider linked, or (provider, external_id) belongs to another person |
 | `422 Unprocessable Entity` | Pydantic validation failure: wrong type, missing required field, or field rejected by validator (e.g., slug contains uppercase) |
 
 Error responses always include a `detail` field in the JSON body describing the problem.
+
+> The curl examples below use the dev bootstrap key `dev-api-key-change-me` so they work against a fresh local `.env`. In production, substitute a real issued `tt_<prefix>_<secret>` key with the scope the endpoint requires.
 
 ---
 
@@ -51,7 +73,7 @@ Error responses always include a `detail` field in the JSON body describing the 
 
 ### POST /people
 
-Create a new person.
+Create a new person. **Scope:** `people:write`.
 
 **Request body:**
 
@@ -91,7 +113,7 @@ curl -sS -X POST http://localhost:8000/people \
 
 ### GET /people
 
-List all people.
+List all people. **Scope:** `people:read`.
 
 **Query parameters:**
 
@@ -115,7 +137,7 @@ curl -sS "http://localhost:8000/people?active_only=true" \
 
 ### GET /people/{person_id}
 
-Get a single person by UUID.
+Get a single person by UUID. **Scope:** `people:read`.
 
 **Path parameters:**
 
@@ -136,7 +158,7 @@ curl -sS "http://localhost:8000/people/550e8400-e29b-41d4-a716-446655440000" \
 
 ### PATCH /people/{person_id}
 
-Update one or more fields on a person. Only fields present in the request body are changed (standard partial-update semantics).
+Update one or more fields on a person. Only fields present in the request body are changed (standard partial-update semantics). **Scope:** `people:write`.
 
 **Path parameters:**
 
@@ -177,7 +199,7 @@ curl -sS -X PATCH "http://localhost:8000/people/550e8400-e29b-41d4-a716-44665544
 
 ### POST /teams
 
-Create a new team.
+Create a new team. **Scope:** `teams:write`.
 
 **Request body:**
 
@@ -221,7 +243,7 @@ curl -sS -X POST http://localhost:8000/teams \
 
 ### GET /teams
 
-List all teams.
+List all teams. **Scope:** `teams:read`.
 
 **Query parameters:**
 
@@ -240,7 +262,7 @@ curl -sS "http://localhost:8000/teams?active_only=true" \
 
 ### GET /teams/{team_id}
 
-Get a single team by UUID.
+Get a single team by UUID. **Scope:** `teams:read`.
 
 **Path parameters:**
 
@@ -261,7 +283,7 @@ curl -sS "http://localhost:8000/teams/660e8400-e29b-41d4-a716-446655440001" \
 
 ### GET /teams/by-slug/{slug}
 
-Get a team by its slug. Useful when you know the slug but not the UUID.
+Get a team by its slug. Useful when you know the slug but not the UUID. **Scope:** `teams:read`.
 
 **Path parameters:**
 
@@ -284,7 +306,7 @@ curl -sS "http://localhost:8000/teams/by-slug/partnerships" \
 
 ### PATCH /teams/{team_id}
 
-Update one or more fields on a team.
+Update one or more fields on a team. **Scope:** `teams:write`.
 
 **Path parameters:**
 
@@ -317,7 +339,7 @@ curl -sS -X PATCH "http://localhost:8000/teams/660e8400-e29b-41d4-a716-446655440
 
 ## Role kinds
 
-Role kinds are the controlled vocabulary for the seniority axis of team roles. The four seed values are `executive`, `director`, `lead`, and `member`. Role kinds are read-only through the API in v1 (no create/update endpoints).
+Role kinds are the controlled vocabulary for the seniority axis of team roles. The four seed values are `executive`, `director`, `lead`, and `member`. Role kinds are read-only through the API (no create/update endpoints). Both endpoints require scope `role_kinds:read`.
 
 ### GET /role_kinds
 
@@ -376,7 +398,7 @@ curl -sS "http://localhost:8000/role_kinds/lead" \
 
 ## Providers
 
-Providers are the controlled vocabulary of identity provider types (e.g., Discord, GitHub, Notion). They are read-only through the API in v1 (no create/update endpoints). Requires scope `providers:read`.
+Providers are the controlled vocabulary of identity provider types. The four seed values are `discord`, `github`, `notion`, and `uoft_email`. They are read-only through the API (no create/update endpoints). Both endpoints require scope `providers:read`.
 
 ### GET /providers
 
@@ -610,7 +632,7 @@ A `TeamMembership` row records that a person holds a role on a team for a date r
 
 ### POST /memberships
 
-Create a new membership.
+Create a new membership. **Scope:** `memberships:write`.
 
 **Request body:**
 
@@ -663,7 +685,7 @@ curl -sS -X POST http://localhost:8000/memberships \
 
 ### GET /memberships
 
-List memberships, with optional filters. All filters are AND-combined.
+List memberships, with optional filters. All filters are AND-combined. **Scope:** `memberships:read`.
 
 **Query parameters:**
 
@@ -701,7 +723,7 @@ curl -sS "http://localhost:8000/memberships?team_id=660e8400-e29b-41d4-a716-4466
 
 ### GET /memberships/{membership_id}
 
-Get a single membership by UUID.
+Get a single membership by UUID. **Scope:** `memberships:read`.
 
 **Path parameters:**
 
@@ -722,7 +744,7 @@ curl -sS "http://localhost:8000/memberships/770e8400-e29b-41d4-a716-446655440002
 
 ### PATCH /memberships/{membership_id}
 
-Update one or more fields on a membership. Use this for general edits (changing role, toggling admin flag, or setting `ended_at`). For the specific action of closing a membership, `POST /memberships/{id}/end` is more semantically explicit.
+Update one or more fields on a membership. Use this for general edits (changing role, toggling admin flag, or setting `ended_at`). For the specific action of closing a membership, `POST /memberships/{id}/end` is more semantically explicit. **Scope:** `memberships:write`.
 
 **Path parameters:**
 
@@ -761,7 +783,7 @@ curl -sS -X PATCH "http://localhost:8000/memberships/770e8400-e29b-41d4-a716-446
 
 ### POST /memberships/{membership_id}/end
 
-End a membership by setting its `ended_at` date. This is a semantic shortcut over `PATCH /memberships/{id}` with only `ended_at` — it is clearer at the call site that you are closing the membership, not making a general edit.
+End a membership by setting its `ended_at` date. This is a semantic shortcut over `PATCH /memberships/{id}` with only `ended_at` — it is clearer at the call site that you are closing the membership, not making a general edit. **Scope:** `memberships:write`.
 
 **Path parameters:**
 

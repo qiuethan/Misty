@@ -122,11 +122,13 @@ DATABASE_URL=postgresql+psycopg://team_tracking:PASSWORD@localhost:5433/team_tra
 API_KEY=GENERATED-STRONG-KEY-HERE
 ```
 
-Generate the API key:
+Generate the env bootstrap `API_KEY` (a plain random string — **do not** give it a `tt_` prefix):
 
 ```bash
-python -c "import secrets; print('tt_' + secrets.token_urlsafe(32))"
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
+
+> Why no `tt_` prefix: the auth layer routes any key shaped like `tt_<prefix>_<secret>` to the DB-issued-key path and verifies it against the `api_keys` table. A `tt_`-prefixed env key would take that path, find no matching row, and be rejected — it would never be compared against `API_KEY`. Keep the env bootstrap key in a plain format so it falls through to the env check.
 
 Then:
 
@@ -248,7 +250,12 @@ uv run team-tracking-keys issue --name discord-bot --scopes people:read membersh
 | `role_kinds:read` | GET /role_kinds, GET /role_kinds/{id} |
 | `memberships:read` | GET /memberships, GET /memberships/{id} |
 | `memberships:write` | POST /memberships, PATCH /memberships/{id}, POST /memberships/{id}/end |
+| `providers:read` | GET /providers, GET /providers/{id} |
+| `identifiers:read` | GET /people/by-identifier/{provider}/{external_id}, GET /people/{id}/identifiers |
+| `identifiers:write` | POST / PATCH / DELETE /people/{id}/identifiers[/{provider}] |
 | `admin` | Wildcard — grants every scope. Use only for trusted operators / migrations. |
+
+Example: a Discord bot that resolves users and reads rosters needs `people:read memberships:read identifiers:read`.
 
 **List issued keys:**
 
