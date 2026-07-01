@@ -47,9 +47,7 @@ def test_update_person(adapter):
     p = adapter.create_person(
         PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
     )
-    updated = adapter.update_person(
-        p.id, PersonUpdate(display_name="Alexandra"), actor="editor"
-    )
+    updated = adapter.update_person(p.id, PersonUpdate(display_name="Alexandra"), actor="editor")
     assert updated is not None
     assert updated.display_name == "Alexandra"
     assert updated.updated_by == "editor"
@@ -74,9 +72,7 @@ def test_membership_full_cycle(adapter):
         PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
     )
     team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
-    m = adapter.create_membership(
-        TeamMembershipCreate(person_id=p.id, team_id=team.id), actor="t"
-    )
+    m = adapter.create_membership(TeamMembershipCreate(person_id=p.id, team_id=team.id), actor="t")
     assert m.role_kind_id == "member"
     assert m.is_team_admin is False
 
@@ -150,13 +146,9 @@ def test_api_key_create_and_lookup_pg(adapter):
 
 
 def test_api_key_name_conflict_pg(adapter):
-    adapter.create_api_key(
-        name="dup", prefix="tt_pg_x", key_hash="h", scopes=[], actor="admin"
-    )
+    adapter.create_api_key(name="dup", prefix="tt_pg_x", key_hash="h", scopes=[], actor="admin")
     with pytest.raises(ValueError):
-        adapter.create_api_key(
-            name="dup", prefix="tt_pg_y", key_hash="h", scopes=[], actor="admin"
-        )
+        adapter.create_api_key(name="dup", prefix="tt_pg_y", key_hash="h", scopes=[], actor="admin")
 
 
 def test_revoke_and_touch_pg(adapter):

@@ -39,9 +39,7 @@ def test_get_team_by_slug(client):
 
 
 def test_team_hierarchy(client):
-    parent = client.post(
-        "/teams", json={"slug": "events", "label": "Events"}, headers=AUTH
-    ).json()
+    parent = client.post("/teams", json={"slug": "events", "label": "Events"}, headers=AUTH).json()
     child_resp = client.post(
         "/teams",
         json={"slug": "events.agi", "label": "AGI", "parent_id": parent["id"]},
@@ -58,12 +56,8 @@ def test_duplicate_slug_returns_409(client):
 
 
 def test_update_team(client):
-    created = client.post(
-        "/teams", json={"slug": "ops", "label": "Ops"}, headers=AUTH
-    ).json()
-    resp = client.patch(
-        f"/teams/{created['id']}", json={"label": "Internal Ops"}, headers=AUTH
-    )
+    created = client.post("/teams", json={"slug": "ops", "label": "Ops"}, headers=AUTH).json()
+    resp = client.patch(f"/teams/{created['id']}", json={"label": "Internal Ops"}, headers=AUTH)
     assert resp.status_code == 200
     assert resp.json()["label"] == "Internal Ops"
 

@@ -50,18 +50,14 @@ def test_update_person(adapter):
         PersonCreate(display_name="Alex", primary_email="alex@utmist.ca"),
         actor="test",
     )
-    updated = adapter.update_person(
-        p.id, PersonUpdate(display_name="Alexandra"), actor="editor"
-    )
+    updated = adapter.update_person(p.id, PersonUpdate(display_name="Alexandra"), actor="editor")
     assert updated is not None
     assert updated.display_name == "Alexandra"
     assert updated.updated_by == "editor"
 
 
 def test_create_and_list_teams(adapter):
-    parent = adapter.create_team(
-        TeamCreate(slug="events", label="Events"), actor="test"
-    )
+    parent = adapter.create_team(TeamCreate(slug="events", label="Events"), actor="test")
     child = adapter.create_team(
         TeamCreate(
             slug="events.agi_workshop_2025",
@@ -105,15 +101,9 @@ def test_membership_list_filters(adapter):
     )
     team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
     other = adapter.create_team(TeamCreate(slug="ev", label="Events"), actor="t")
-    adapter.create_membership(
-        TeamMembershipCreate(person_id=p1.id, team_id=team.id), actor="t"
-    )
-    adapter.create_membership(
-        TeamMembershipCreate(person_id=p2.id, team_id=team.id), actor="t"
-    )
-    adapter.create_membership(
-        TeamMembershipCreate(person_id=p1.id, team_id=other.id), actor="t"
-    )
+    adapter.create_membership(TeamMembershipCreate(person_id=p1.id, team_id=team.id), actor="t")
+    adapter.create_membership(TeamMembershipCreate(person_id=p2.id, team_id=team.id), actor="t")
+    adapter.create_membership(TeamMembershipCreate(person_id=p1.id, team_id=other.id), actor="t")
     assert len(adapter.list_memberships(team_id=team.id)) == 2
     assert len(adapter.list_memberships(person_id=p1.id)) == 2
 
@@ -123,9 +113,7 @@ def test_end_membership_sets_ended_at(adapter):
         PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
     )
     team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
-    m = adapter.create_membership(
-        TeamMembershipCreate(person_id=p.id, team_id=team.id), actor="t"
-    )
+    m = adapter.create_membership(TeamMembershipCreate(person_id=p.id, team_id=team.id), actor="t")
     end_date = date.today() + timedelta(days=30)
     ended = adapter.end_membership(m.id, end_date, actor="t")
     assert ended is not None
@@ -182,7 +170,6 @@ def test_is_team_admin_filter(adapter):
 
 def test_fk_checks_on_membership_create(adapter):
     """Membership create fails cleanly when FKs don't exist."""
-    from uuid import uuid4
 
     with pytest.raises(ValueError):
         adapter.create_membership(
@@ -197,9 +184,7 @@ def test_update_membership_role_kind_validation(adapter):
         PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
     )
     team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
-    m = adapter.create_membership(
-        TeamMembershipCreate(person_id=p.id, team_id=team.id), actor="t"
-    )
+    m = adapter.create_membership(TeamMembershipCreate(person_id=p.id, team_id=team.id), actor="t")
     with pytest.raises(ValueError):
         adapter.update_membership(
             m.id,
@@ -209,9 +194,7 @@ def test_update_membership_role_kind_validation(adapter):
 
 
 def test_get_person_by_email_case_insensitive(adapter):
-    adapter.create_person(
-        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
-    )
+    adapter.create_person(PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t")
     found = adapter.get_person_by_email("A@UTMIST.CA")
     assert found is not None
     assert found.primary_email == "a@utmist.ca"
@@ -234,16 +217,12 @@ def test_get_role_kind(adapter):
 
 def test_update_person_email_conflict(adapter):
     """update_person with an email that conflicts with another person raises."""
-    adapter.create_person(
-        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
-    )
+    adapter.create_person(PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t")
     p2 = adapter.create_person(
         PersonCreate(display_name="B", primary_email="b@utmist.ca"), actor="t"
     )
     with pytest.raises(ValueError):
-        adapter.update_person(
-            p2.id, PersonUpdate(primary_email="A@UTMIST.CA"), actor="t"
-        )
+        adapter.update_person(p2.id, PersonUpdate(primary_email="A@UTMIST.CA"), actor="t")
 
 
 def test_update_team_slug_conflict(adapter):
@@ -258,7 +237,6 @@ def test_update_team_slug_conflict(adapter):
 
 def test_end_membership_on_nonexistent_returns_none(adapter):
     """end_membership on a nonexistent id returns None, does not raise."""
-    from uuid import uuid4
 
     result = adapter.end_membership(uuid4(), date.today(), actor="t")
     assert result is None
@@ -274,9 +252,7 @@ def test_list_memberships_active_only_direct(adapter):
         TeamMembershipCreate(person_id=p.id, team_id=team.id), actor="t"
     )
     adapter.create_membership(
-        TeamMembershipCreate(
-            person_id=p.id, team_id=team.id, ended_at=date(2020, 1, 1)
-        ),
+        TeamMembershipCreate(person_id=p.id, team_id=team.id, ended_at=date(2020, 1, 1)),
         actor="t",
     )
     all_rows = adapter.list_memberships()
@@ -308,29 +284,19 @@ def test_api_key_create_and_lookup(adapter):
 
 
 def test_api_key_name_unique(adapter):
-    adapter.create_api_key(
-        name="bot", prefix="tt_a", key_hash="h1", scopes=[], actor="admin"
-    )
+    adapter.create_api_key(name="bot", prefix="tt_a", key_hash="h1", scopes=[], actor="admin")
     with pytest.raises(ValueError):
-        adapter.create_api_key(
-            name="bot", prefix="tt_b", key_hash="h2", scopes=[], actor="admin"
-        )
+        adapter.create_api_key(name="bot", prefix="tt_b", key_hash="h2", scopes=[], actor="admin")
 
 
 def test_api_key_prefix_unique(adapter):
-    adapter.create_api_key(
-        name="a", prefix="tt_x", key_hash="h1", scopes=[], actor="admin"
-    )
+    adapter.create_api_key(name="a", prefix="tt_x", key_hash="h1", scopes=[], actor="admin")
     with pytest.raises(ValueError):
-        adapter.create_api_key(
-            name="b", prefix="tt_x", key_hash="h2", scopes=[], actor="admin"
-        )
+        adapter.create_api_key(name="b", prefix="tt_x", key_hash="h2", scopes=[], actor="admin")
 
 
 def test_revoke_api_key(adapter):
-    key = adapter.create_api_key(
-        name="bot", prefix="tt_p", key_hash="h", scopes=[], actor="admin"
-    )
+    key = adapter.create_api_key(name="bot", prefix="tt_p", key_hash="h", scopes=[], actor="admin")
     revoked = adapter.revoke_api_key(key.id, actor="admin")
     assert revoked is not None
     assert revoked.active is False
@@ -342,16 +308,13 @@ def test_revoke_api_key(adapter):
 
 
 def test_touch_api_key_last_used(adapter):
-    key = adapter.create_api_key(
-        name="bot", prefix="tt_l", key_hash="h", scopes=[], actor="admin"
-    )
+    key = adapter.create_api_key(name="bot", prefix="tt_l", key_hash="h", scopes=[], actor="admin")
     assert key.last_used_at is None
     adapter.touch_api_key_last_used(key.id)
     assert adapter.get_api_key_by_prefix("tt_l").last_used_at is not None
 
 
 def test_touch_api_key_nonexistent_is_noop(adapter):
-    from uuid import uuid4
     # Must not raise
     adapter.touch_api_key_last_used(uuid4())
 
@@ -372,7 +335,9 @@ def _adapter():
 
 
 def _person(a):
-    return a.create_person(PersonCreate(display_name="Alex", primary_email="alex@utmist.ca"), actor="t")
+    return a.create_person(
+        PersonCreate(display_name="Alex", primary_email="alex@utmist.ca"), actor="t"
+    )
 
 
 def test_list_and_get_providers():
@@ -386,7 +351,9 @@ def test_create_and_list_identifier():
     a = _adapter()
     p = _person(a)
     pi = a.create_person_identifier(
-        p.id, PersonIdentifierCreate(provider="discord", external_id="123", handle="alex"), actor="bot"
+        p.id,
+        PersonIdentifierCreate(provider="discord", external_id="123", handle="alex"),
+        actor="bot",
     )
     assert pi.provider == "discord" and pi.external_id == "123"
     assert pi.created_by == "bot"
@@ -396,24 +363,34 @@ def test_create_and_list_identifier():
 def test_duplicate_provider_for_person_raises():
     a = _adapter()
     p = _person(a)
-    a.create_person_identifier(p.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t")
+    a.create_person_identifier(
+        p.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t"
+    )
     with pytest.raises(ValueError):
-        a.create_person_identifier(p.id, PersonIdentifierCreate(provider="discord", external_id="2"), actor="t")
+        a.create_person_identifier(
+            p.id, PersonIdentifierCreate(provider="discord", external_id="2"), actor="t"
+        )
 
 
 def test_external_id_owned_by_another_person_raises():
     a = _adapter()
     p1 = _person(a)
     p2 = a.create_person(PersonCreate(display_name="Bo", primary_email="bo@utmist.ca"), actor="t")
-    a.create_person_identifier(p1.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t")
+    a.create_person_identifier(
+        p1.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t"
+    )
     with pytest.raises(ValueError):
-        a.create_person_identifier(p2.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t")
+        a.create_person_identifier(
+            p2.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t"
+        )
 
 
 def test_reverse_lookup_returns_person():
     a = _adapter()
     p = _person(a)
-    a.create_person_identifier(p.id, PersonIdentifierCreate(provider="discord", external_id="999"), actor="t")
+    a.create_person_identifier(
+        p.id, PersonIdentifierCreate(provider="discord", external_id="999"), actor="t"
+    )
     found = a.get_person_by_identifier("discord", "999")
     assert found is not None and found.id == p.id
     assert a.get_person_by_identifier("discord", "absent") is None
@@ -422,10 +399,17 @@ def test_reverse_lookup_returns_person():
 def test_update_and_delete_identifier():
     a = _adapter()
     p = _person(a)
-    a.create_person_identifier(p.id, PersonIdentifierCreate(provider="discord", external_id="1", handle="old"), actor="t")
-    updated = a.update_person_identifier(p.id, "discord", PersonIdentifierUpdate(handle="new"), actor="t")
+    a.create_person_identifier(
+        p.id, PersonIdentifierCreate(provider="discord", external_id="1", handle="old"), actor="t"
+    )
+    updated = a.update_person_identifier(
+        p.id, "discord", PersonIdentifierUpdate(handle="new"), actor="t"
+    )
     assert updated.handle == "new" and updated.external_id == "1"
-    assert a.update_person_identifier(p.id, "github", PersonIdentifierUpdate(handle="x"), actor="t") is None
+    assert (
+        a.update_person_identifier(p.id, "github", PersonIdentifierUpdate(handle="x"), actor="t")
+        is None
+    )
     assert a.delete_person_identifier(p.id, "discord") is True
     assert a.delete_person_identifier(p.id, "discord") is False
 
@@ -435,18 +419,28 @@ def test_update_person_identifier_external_id_collision_raises():
     a = _adapter()
     p1 = _person(a)
     p2 = a.create_person(PersonCreate(display_name="Bo", primary_email="bo@utmist.ca"), actor="t")
-    a.create_person_identifier(p1.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t")
-    a.create_person_identifier(p2.id, PersonIdentifierCreate(provider="discord", external_id="2"), actor="t")
+    a.create_person_identifier(
+        p1.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t"
+    )
+    a.create_person_identifier(
+        p2.id, PersonIdentifierCreate(provider="discord", external_id="2"), actor="t"
+    )
     with pytest.raises(ValueError):
-        a.update_person_identifier(p2.id, "discord", PersonIdentifierUpdate(external_id="1"), actor="t")
+        a.update_person_identifier(
+            p2.id, "discord", PersonIdentifierUpdate(external_id="1"), actor="t"
+        )
 
 
 def test_update_person_identifier_external_id_change_succeeds():
     """Updating external_id to a new unclaimed value succeeds and updates reverse lookup."""
     a = _adapter()
     p = _person(a)
-    a.create_person_identifier(p.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t")
-    updated = a.update_person_identifier(p.id, "discord", PersonIdentifierUpdate(external_id="2"), actor="t")
+    a.create_person_identifier(
+        p.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t"
+    )
+    updated = a.update_person_identifier(
+        p.id, "discord", PersonIdentifierUpdate(external_id="2"), actor="t"
+    )
     assert updated is not None
     assert updated.external_id == "2"
     found_by_new = a.get_person_by_identifier("discord", "2")

@@ -61,7 +61,7 @@ def parse_prefix(candidate: str) -> str | None:
     """
     if not candidate.startswith(KEY_ENVELOPE):
         return None
-    body = candidate[len(KEY_ENVELOPE):]
+    body = candidate[len(KEY_ENVELOPE) :]
     parts = body.split("_", 1)
     if len(parts) != 2 or len(parts[0]) != PREFIX_LENGTH:
         return None

@@ -168,9 +168,7 @@ class PostgresStorageAdapter:
 
     def get_person(self, person_id: UUID) -> Person | None:
         with self._engine.connect() as conn:
-            row = conn.execute(
-                select(people).where(people.c.id == person_id)
-            ).one_or_none()
+            row = conn.execute(select(people).where(people.c.id == person_id)).one_or_none()
         return _person_row_to_model(row) if row else None
 
     def get_person_by_email(self, primary_email: str) -> Person | None:
@@ -188,9 +186,7 @@ class PostgresStorageAdapter:
             rows = conn.execute(stmt).all()
         return [_person_row_to_model(r) for r in rows]
 
-    def update_person(
-        self, person_id: UUID, payload: PersonUpdate, *, actor: str
-    ) -> Person | None:
+    def update_person(self, person_id: UUID, payload: PersonUpdate, *, actor: str) -> Person | None:
         patch = payload.model_dump(exclude_unset=True)
         if not patch:
             return self.get_person(person_id)
@@ -199,13 +195,12 @@ class PostgresStorageAdapter:
         try:
             with self._engine.begin() as conn:
                 row = conn.execute(
-                    update(people)
-                    .where(people.c.id == person_id)
-                    .values(**patch)
-                    .returning(people)
+                    update(people).where(people.c.id == person_id).values(**patch).returning(people)
                 ).one_or_none()
         except IntegrityError as e:
-            raise ValueError(f"primary_email conflict on update: {patch.get('primary_email')}") from e
+            raise ValueError(
+                f"primary_email conflict on update: {patch.get('primary_email')}"
+            ) from e
         return _person_row_to_model(row) if row else None
 
     # --- Teams ---
@@ -231,16 +226,12 @@ class PostgresStorageAdapter:
 
     def get_team(self, team_id: UUID) -> Team | None:
         with self._engine.connect() as conn:
-            row = conn.execute(
-                select(teams).where(teams.c.id == team_id)
-            ).one_or_none()
+            row = conn.execute(select(teams).where(teams.c.id == team_id)).one_or_none()
         return _team_row_to_model(row) if row else None
 
     def get_team_by_slug(self, slug: str) -> Team | None:
         with self._engine.connect() as conn:
-            row = conn.execute(
-                select(teams).where(teams.c.slug == slug)
-            ).one_or_none()
+            row = conn.execute(select(teams).where(teams.c.slug == slug)).one_or_none()
         return _team_row_to_model(row) if row else None
 
     def list_teams(self, *, active_only: bool = False) -> list[Team]:
@@ -251,9 +242,7 @@ class PostgresStorageAdapter:
             rows = conn.execute(stmt).all()
         return [_team_row_to_model(r) for r in rows]
 
-    def update_team(
-        self, team_id: UUID, payload: TeamUpdate, *, actor: str
-    ) -> Team | None:
+    def update_team(self, team_id: UUID, payload: TeamUpdate, *, actor: str) -> Team | None:
         patch = payload.model_dump(exclude_unset=True)
         if not patch:
             return self.get_team(team_id)
@@ -262,10 +251,7 @@ class PostgresStorageAdapter:
         try:
             with self._engine.begin() as conn:
                 row = conn.execute(
-                    update(teams)
-                    .where(teams.c.id == team_id)
-                    .values(**patch)
-                    .returning(teams)
+                    update(teams).where(teams.c.id == team_id).values(**patch).returning(teams)
                 ).one_or_none()
         except IntegrityError as e:
             raise ValueError(f"slug conflict on update: {patch.get('slug')}") from e
@@ -290,9 +276,7 @@ class PostgresStorageAdapter:
 
     # --- Team memberships ---
 
-    def create_membership(
-        self, payload: TeamMembershipCreate, *, actor: str
-    ) -> TeamMembership:
+    def create_membership(self, payload: TeamMembershipCreate, *, actor: str) -> TeamMembership:
         values = {
             "person_id": payload.person_id,
             "team_id": payload.team_id,
@@ -386,9 +370,7 @@ class PostgresStorageAdapter:
 
     def get_provider(self, provider_id: str) -> Provider | None:
         with self._engine.connect() as conn:
-            row = conn.execute(
-                select(providers).where(providers.c.id == provider_id)
-            ).one_or_none()
+            row = conn.execute(select(providers).where(providers.c.id == provider_id)).one_or_none()
         return _provider_row_to_model(row) if row else None
 
     # --- Person identifiers ---
@@ -396,9 +378,7 @@ class PostgresStorageAdapter:
     def list_person_identifiers(self, person_id: UUID) -> list[PersonIdentifier]:
         with self._engine.connect() as conn:
             rows = conn.execute(
-                select(person_identifiers).where(
-                    person_identifiers.c.person_id == person_id
-                )
+                select(person_identifiers).where(person_identifiers.c.person_id == person_id)
             ).all()
         return [_identifier_row_to_model(r) for r in rows]
 
@@ -432,9 +412,7 @@ class PostgresStorageAdapter:
                     f"identifier already linked to another person: "
                     f"{payload.provider}/{payload.external_id}"
                 ) from e
-            raise ValueError(
-                f"identifier conflict for provider {payload.provider}"
-            ) from e
+            raise ValueError(f"identifier conflict for provider {payload.provider}") from e
         return _identifier_row_to_model(row)
 
     def update_person_identifier(
@@ -455,9 +433,7 @@ class PostgresStorageAdapter:
                     .returning(person_identifiers)
                 ).one_or_none()
         except IntegrityError as e:
-            raise ValueError(
-                f"external_id conflict on update for provider {provider}"
-            ) from e
+            raise ValueError(f"external_id conflict on update for provider {provider}") from e
         return _identifier_row_to_model(row) if row else None
 
     def delete_person_identifier(self, person_id: UUID, provider: str) -> bool:
@@ -470,16 +446,12 @@ class PostgresStorageAdapter:
             )
         return result.rowcount > 0
 
-    def get_person_by_identifier(
-        self, provider: str, external_id: str
-    ) -> Person | None:
+    def get_person_by_identifier(self, provider: str, external_id: str) -> Person | None:
         with self._engine.connect() as conn:
             row = conn.execute(
                 select(people)
                 .select_from(
-                    person_identifiers.join(
-                        people, person_identifiers.c.person_id == people.c.id
-                    )
+                    person_identifiers.join(people, person_identifiers.c.person_id == people.c.id)
                 )
                 .where(
                     person_identifiers.c.provider == provider,
@@ -519,9 +491,7 @@ class PostgresStorageAdapter:
 
     def get_api_key_by_prefix(self, prefix: str) -> ApiKey | None:
         with self._engine.connect() as conn:
-            row = conn.execute(
-                select(api_keys).where(api_keys.c.prefix == prefix)
-            ).one_or_none()
+            row = conn.execute(select(api_keys).where(api_keys.c.prefix == prefix)).one_or_none()
         return _api_key_row_to_model(row) if row else None
 
     def get_api_key_hash(self, prefix: str) -> str | None:
@@ -561,9 +531,7 @@ class PostgresStorageAdapter:
         try:
             with self._engine.begin() as conn:
                 conn.execute(
-                    update(api_keys)
-                    .where(api_keys.c.id == api_key_id)
-                    .values(last_used_at=_now())
+                    update(api_keys).where(api_keys.c.id == api_key_id).values(last_used_at=_now())
                 )
         except Exception:
             pass  # best-effort; DB blips must not fail the auth path

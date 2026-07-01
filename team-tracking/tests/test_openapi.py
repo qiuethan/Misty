@@ -66,6 +66,9 @@ def test_openapi_has_title_and_version(client):
 def test_openapi_tags_present(client):
     schema = client.get("/openapi.json").json()
     tags_used = {
-        tag for path in schema["paths"].values() for op in path.values() for tag in op.get("tags", [])
+        tag
+        for path in schema["paths"].values()
+        for op in path.values()
+        for tag in op.get("tags", [])
     }
     assert tags_used >= {"people", "teams", "role_kinds", "memberships"}

@@ -91,9 +91,7 @@ def require_api_key(
 
     # Path 2: env grace-period key
     env_key = get_settings().api_key
-    if env_key and secrets.compare_digest(
-        x_api_key.encode("utf-8"), env_key.encode("utf-8")
-    ):
+    if env_key and secrets.compare_digest(x_api_key.encode("utf-8"), env_key.encode("utf-8")):
         authed = AuthedKey(
             name=_BOOTSTRAP_KEY_NAME,
             scopes=frozenset({ADMIN_SCOPE}),

@@ -52,8 +52,11 @@ def test_providers_read_denied_without_scope(client):
     adapter = client.app.dependency_overrides[get_storage]()
     plaintext, prefix, key_hash = generate_key()
     adapter.create_api_key(
-        name="people-only", prefix=prefix, key_hash=key_hash,
-        scopes=["people:read"], actor="admin",
+        name="people-only",
+        prefix=prefix,
+        key_hash=key_hash,
+        scopes=["people:read"],
+        actor="admin",
     )
     resp = client.get("/providers", headers={"X-API-Key": plaintext})
     assert resp.status_code == 403

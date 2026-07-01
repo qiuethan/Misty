@@ -6,7 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+psycopg://team_tracking:dev_password@localhost:5433/team_tracking"
+    database_url: str = (
+        "postgresql+psycopg://team_tracking:dev_password@localhost:5433/team_tracking"
+    )
     api_key: str = "dev-api-key-change-me"
 
 

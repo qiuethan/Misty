@@ -45,6 +45,7 @@ class StorageAdapter(Protocol):
         """List every person. To fetch people for a specific team, use
         `list_memberships(team_id=...)` and resolve `person_id` values."""
         ...
+
     def update_person(
         self, person_id: UUID, payload: PersonUpdate, *, actor: str
     ) -> Person | None: ...
@@ -54,18 +55,14 @@ class StorageAdapter(Protocol):
     def get_team(self, team_id: UUID) -> Team | None: ...
     def get_team_by_slug(self, slug: str) -> Team | None: ...
     def list_teams(self, *, active_only: bool = False) -> list[Team]: ...
-    def update_team(
-        self, team_id: UUID, payload: TeamUpdate, *, actor: str
-    ) -> Team | None: ...
+    def update_team(self, team_id: UUID, payload: TeamUpdate, *, actor: str) -> Team | None: ...
 
     # Role kinds
     def get_role_kind(self, role_kind_id: str) -> RoleKind | None: ...
     def list_role_kinds(self, *, active_only: bool = False) -> list[RoleKind]: ...
 
     # Team memberships
-    def create_membership(
-        self, payload: TeamMembershipCreate, *, actor: str
-    ) -> TeamMembership: ...
+    def create_membership(self, payload: TeamMembershipCreate, *, actor: str) -> TeamMembership: ...
     def get_membership(self, membership_id: UUID) -> TeamMembership | None: ...
     def list_memberships(
         self,
@@ -82,6 +79,7 @@ class StorageAdapter(Protocol):
         `started_at <= as_of` AND (`ended_at IS NULL` OR `ended_at > as_of`).
         """
         ...
+
     def update_membership(
         self, membership_id: UUID, payload: TeamMembershipUpdate, *, actor: str
     ) -> TeamMembership | None: ...
@@ -113,15 +111,18 @@ class StorageAdapter(Protocol):
         The prefix is a public identifier (first 8 chars of the key) — lookup
         by prefix is safe."""
         ...
+
     def get_api_key_hash(self, prefix: str) -> str | None:
         """Return the argon2 key_hash for a prefix, or None if not found or revoked.
         Separate from get_api_key_by_prefix so the public ApiKey model never has
         to carry the hash string in its Pydantic shape."""
         ...
+
     def list_api_keys(self, *, active_only: bool = False) -> list[ApiKey]: ...
     def revoke_api_key(self, api_key_id: UUID, *, actor: str) -> ApiKey | None:
         """Mark a key revoked (sets revoked_at, active=false). Never hard-deletes."""
         ...
+
     def touch_api_key_last_used(self, api_key_id: UUID) -> None:
         """Idempotently update last_used_at. Callers should invoke on every
         successful auth. Failure to update should not fail the request (best-effort)."""
@@ -141,6 +142,7 @@ class StorageAdapter(Protocol):
         belongs to another person. Does not validate person/provider existence —
         the router pre-checks those to map 404 vs 400."""
         ...
+
     def update_person_identifier(
         self, person_id: UUID, provider: str, payload: PersonIdentifierUpdate, *, actor: str
     ) -> PersonIdentifier | None:
@@ -148,12 +150,12 @@ class StorageAdapter(Protocol):
         None if no such link. Raises ValueError if a new external_id collides
         with another person's link on the same provider."""
         ...
+
     def delete_person_identifier(self, person_id: UUID, provider: str) -> bool:
         """Hard-delete the (person_id, provider) link. True if removed, False if
         no such link. Identity mappings are current state, not history."""
         ...
-    def get_person_by_identifier(
-        self, provider: str, external_id: str
-    ) -> Person | None:
+
+    def get_person_by_identifier(self, provider: str, external_id: str) -> Person | None:
         """Reverse lookup: resolve an external account to its Person, or None."""
         ...
