@@ -81,6 +81,14 @@ Auth lives in `src/api/auth.py` and `src/api/hashing.py`. The model is "Level 2"
 
 **Audit middleware.** `AuditLogMiddleware` (`src/api/middleware.py`) emits exactly one JSON line to stdout per request — method, path, status, duration, the resolved `key_name`, `is_bootstrap`, and the real client IP (read from `X-Real-IP`/`X-Forwarded-For` set by the reverse proxy). Auth stashes the resolved key on `request.state.auth_key`; the middleware reads it after the handler runs. Logging never fails the request. Ship stdout to any aggregator; grep by `key_name`/`status` for investigations (see [DEPLOYMENT.md](DEPLOYMENT.md)).
 
+**Self-introspection.** `GET /api-keys/self` returns the calling key's `{name, scopes}` sorted alphabetically. No additional scope required. The discord-bot uses this at startup to decide whether it holds `dev:spoof` and can therefore enable its "act as any Discord ID" web playground mode.
+
+**The `dev:spoof` scope.** A new dev-only scope guarded by the environment tier config (`TT_ENV`, see [DEPLOYMENT.md](DEPLOYMENT.md)). The scope itself gates nothing on team-tracking's HTTP surface — no endpoint requires it. Its purpose is to be a *declaration* that a caller (typically the discord-bot playground) intends to run in a spoofable dev environment. Two defense-in-depth guards fire only when `TT_ENV=production`:
+1. The `team-tracking-keys issue` CLI refuses to grant `dev:spoof` on issuance.
+2. Request-time auth (`_enforce_dev_scope_environment` in `src/api/auth.py`) 403s any request whose key has literal `dev:spoof` scope — the `admin` wildcard does NOT satisfy this literal check, precisely so an accidental admin+dev:spoof key against production is trapped, not bypassed.
+
+The result: a `dev:spoof` key cannot be created against a production directory, and if one leaks in via a copied backup or bug, every request it makes is refused at the door. Local dev (`TT_ENV=local` or unset) permits the scope freely.
+
 ## The data model (7 tables)
 
 All tables carry the four audit columns (`created_at`, `updated_at` as `timestamptz`; `created_by`, `updated_by` as text). Only the distinguishing columns are shown below.

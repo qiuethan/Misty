@@ -6,6 +6,11 @@ see each service's own `docs/ARCHITECTURE.md`:
 
 - [`team-tracking/docs/ARCHITECTURE.md`](../team-tracking/docs/ARCHITECTURE.md)
 - [`documentation-system/docs/ARCHITECTURE.md`](../documentation-system/docs/ARCHITECTURE.md)
+- [`discord-bot/README.md`](../discord-bot/README.md) — the Discord bot doesn't have a
+  standalone ARCHITECTURE.md yet; the README covers its neutral command shape (a
+  single handler serves both the Discord surface and a browser-based web
+  playground), and its own "Consumer" section below sketches how it sits atop the
+  directory.
 
 ## The core principle: a source of truth is API-only
 

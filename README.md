@@ -19,6 +19,7 @@ domain and each reachable only over HTTP:
 |---------|--------|--------|
 | [`team-tracking/`](team-tracking/README.md) | People, teams, roles, memberships + external identity mapping | Shipped (v1) |
 | [`documentation-system/`](documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, snapshots | Shipped (v1) |
+| [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend for the directory (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`) — plus a Discord-shaped web playground for iteration without a Discord token | Shipped (v1) |
 | Search / retrieval plugin | Full-text + semantic search over the catalog | Deferred (not built) |
 
 ## How the two services relate
@@ -75,9 +76,13 @@ UTMIST-Prototypes/
 │   ├── README.md             Service overview + quick start
 │   └── docs/                 API.md, ARCHITECTURE.md, DEPLOYMENT.md, CONTRIBUTING.md
 │
-└── documentation-system/     Documentation catalog service
-    ├── README.md             Service overview + quick start
-    └── docs/                 API.md, ARCHITECTURE.md, DEPLOYMENT.md, CONTRIBUTING.md
+├── documentation-system/     Documentation catalog service
+│   ├── README.md             Service overview + quick start
+│   └── docs/                 API.md, ARCHITECTURE.md, DEPLOYMENT.md, CONTRIBUTING.md
+│
+└── discord-bot/              Discord frontend + web playground for the directory
+    ├── README.md             Service overview + complete startup guide
+    └── src/                  Node.js — thin over team-tracking, no local DB
 ```
 
 Each service is self-contained: its own dependencies, its own Postgres, its own
@@ -94,6 +99,12 @@ re-deriving the steps here:
 - **Catalog:** [`documentation-system/README.md` → Quick start](documentation-system/README.md#quick-start).
   Runs on port **8001**; its Postgres is on **5434**. Ports are chosen so both
   services can run side by side locally.
+- **Discord bot:** [`discord-bot/README.md` → Complete startup](discord-bot/README.md#complete-startup-from-cold).
+  Two modes — a real Discord surface (`npm start`, needs a bot token) and a
+  browser-based web playground (`npm run dev:web`, no token needed). The
+  playground orchestrator manages its own ephemeral team-tracking on port
+  **8001** — the same port `documentation-system` uses, so don't run both at
+  once locally without changing one of the ports.
 
 If you want the catalog to actually validate ownership against a live directory, run
 `team-tracking` first and point the catalog's `DIRECTORY_*` config at it (see the
@@ -134,6 +145,10 @@ and how they play out across service boundaries.
 - **Catalog service** — [`documentation-system/README.md`](documentation-system/README.md)
   and its [`docs/`](documentation-system/docs/) (`API.md`, `ARCHITECTURE.md`,
   `DEPLOYMENT.md`, `CONTRIBUTING.md`).
+- **Discord bot** — [`discord-bot/README.md`](discord-bot/README.md). Covers the
+  bot's neutral command shape (a single handler serves both Discord and web
+  surfaces), the `dev:spoof` scope safety model, and the orchestrated web
+  playground with its ephemeral scratch DB.
 
 New contributor? Start with this README for orientation, read
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) to see how the pieces fit, then dive

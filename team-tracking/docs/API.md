@@ -30,9 +30,19 @@ Each endpoint requires a specific scope. A key only reaches an endpoint if its s
 | Memberships | `memberships:read`, `memberships:write` |
 | Providers | `providers:read` |
 | Identifiers | `identifiers:read`, `identifiers:write` |
-| Wildcard | `admin` — grants every scope |
+| Dev-only | `dev:spoof` — local-dev only; refused against `TT_ENV=production` at both issuance and request time |
+| Wildcard | `admin` — grants every scope, but does NOT satisfy the `dev:spoof` guard |
 
 The required scope for each endpoint is listed in its section below.
+
+The **`dev:spoof`** scope is the discord-bot playground's declaration that it
+runs in a spoofable dev environment. It is not required by any endpoint; its
+presence gates the discord-bot's own startup guard (which refuses to enable
+its "Acting as any Discord ID" mode without it). Team-tracking, in turn,
+refuses to *issue* keys with this scope against `TT_ENV=production` — and
+refuses to *serve* requests bearing them against production, even if the key
+somehow slipped in via a copied DB. See [DEPLOYMENT.md](DEPLOYMENT.md) for
+`TT_ENV` semantics.
 
 ### Attested actor (`created_by` / `updated_by`)
 
@@ -66,6 +76,40 @@ curl -sS -X POST http://localhost:8000/people \
 Error responses always include a `detail` field in the JSON body describing the problem.
 
 > The curl examples below use the dev bootstrap key `dev-api-key-change-me` so they work against a fresh local `.env`. In production, substitute a real issued `tt_<prefix>_<secret>` key with the scope the endpoint requires.
+
+---
+
+## API keys (self-introspection)
+
+### GET /api-keys/self
+
+Return the calling key's own name and scopes. **Scope:** none beyond a valid
+API key — any authenticated caller can introspect its own key.
+
+Used primarily by consumers (e.g., the discord-bot) to decide at startup
+whether they hold the scopes required for the mode they intend to run in.
+
+**Response** (`200 OK`):
+
+```json
+{
+  "name": "discord-bot-playground",
+  "scopes": ["dev:spoof", "identifiers:read", "identifiers:write", "people:read", "people:write"]
+}
+```
+
+`scopes` is sorted alphabetically. `name` is the exact string used when the
+key was issued via `team-tracking-keys issue --name ...`.
+
+**Example:**
+
+```bash
+curl -sS http://localhost:8000/api-keys/self \
+  -H "X-API-Key: dev-api-key-change-me"
+```
+
+Returns `401` if the key is missing or invalid. Never returns `403` (there
+is no scope to lack).
 
 ---
 

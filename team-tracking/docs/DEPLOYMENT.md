@@ -120,7 +120,18 @@ WantedBy=multi-user.target
 ```
 DATABASE_URL=postgresql+psycopg://team_tracking:PASSWORD@localhost:5433/team_tracking
 API_KEY=GENERATED-STRONG-KEY-HERE
+TT_ENV=production
 ```
+
+**`TT_ENV`** declares which environment tier this instance represents. Values
+are `local` | `staging` | `production` (typed `Literal` in `src/config.py`, so
+a typo like `Production` or trailing whitespace crashes at startup instead of
+silently disabling safety gates). In production it MUST be `production` — this
+enables two defense-in-depth gates around the `dev:spoof` scope: the
+`team-tracking-keys issue` CLI refuses to issue keys with that scope, and the
+request-time middleware 403s any request bearing such a key. Both fire only
+when `TT_ENV=production`. Local dev omits `TT_ENV` and gets the default
+(`local`), which permits `dev:spoof`.
 
 Generate the env bootstrap `API_KEY` (a plain random string — **do not** give it a `tt_` prefix):
 

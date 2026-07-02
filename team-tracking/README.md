@@ -192,7 +192,7 @@ The suite runs in two modes.
 uv run pytest --ignore=tests/test_postgres_adapter.py
 ```
 
-Runs **139 tests** against `InMemoryStorageAdapter`, injected into FastAPI via `app.dependency_overrides`. Covers every endpoint, auth path, error case, the CLI, hashing, and the audit log. Completes in a few seconds — no database needed.
+Runs **176 tests** against `InMemoryStorageAdapter`, injected into FastAPI via `app.dependency_overrides`. Covers every endpoint (including `/api-keys/self`), auth path (including the `dev:spoof` × `TT_ENV=production` guard), error case, the CLI, hashing, and the audit log. Completes in a few seconds — no database needed.
 
 **Full (adds Postgres integration):**
 
@@ -201,7 +201,7 @@ docker compose up -d postgres
 uv run pytest
 ```
 
-Runs **154 tests** — the 139 above plus the 15 in `tests/test_postgres_adapter.py`, which replay the adapter's behavioral assertions against a live Postgres instance. Requires `DATABASE_URL` (in `.env`) pointing at the running container.
+Runs **191 tests** — the 176 above plus the 15 in `tests/test_postgres_adapter.py`, which replay the adapter's behavioral assertions against a live Postgres instance. Requires `DATABASE_URL` (in `.env`) pointing at the running container.
 
 Lint and format with ruff:
 
