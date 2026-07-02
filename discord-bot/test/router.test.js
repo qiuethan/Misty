@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { MessageFlags } from 'discord.js';
 import { dispatchInteraction } from '../src/router.js';
 import { DirectoryUnavailable } from '../src/directoryClient.js';
 
@@ -60,7 +61,7 @@ test('linked command is denied for an unlinked user and does not execute', async
   await dispatchInteraction(interaction, { commands, ...ctxWith(async () => null) });
   assert.equal(ran, false);
   assert.match(interaction.replies[0].content, /link/i);
-  assert.equal(interaction.replies[0].ephemeral, true);
+  assert.equal(interaction.replies[0].flags, MessageFlags.Ephemeral);
 });
 
 test('omitted auth defaults to linked (fail-secure)', async () => {

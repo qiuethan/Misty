@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { MessageFlags } from 'discord.js';
 import * as link from '../src/commands/link.js';
 import * as whoami from '../src/commands/whoami.js';
 import { commands, partitionCommands } from '../src/commands/index.js';
@@ -28,7 +29,7 @@ test('link is public and links via linkService', async () => {
     },
   };
   await link.execute(interaction, ctx);
-  assert.equal(interaction.replies[0].ephemeral, true);
+  assert.equal(interaction.replies[0].flags, MessageFlags.Ephemeral);
   assert.match(interaction.replies[0].content, /Alex/);
 });
 
@@ -37,7 +38,7 @@ test('whoami is linked-gated and renders the principal person', async () => {
   const interaction = fakeInteraction();
   await whoami.execute(interaction, { principal: { person: { display_name: 'Alex' } } });
   assert.match(interaction.replies[0].content, /Alex/);
-  assert.equal(interaction.replies[0].ephemeral, true);
+  assert.equal(interaction.replies[0].flags, MessageFlags.Ephemeral);
 });
 
 test('registry contains both commands keyed by name', () => {

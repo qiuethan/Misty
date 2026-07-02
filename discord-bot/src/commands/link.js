@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { SlashCommandBuilder, MessageFlags } from 'discord.js';
 import { renderLinkResult } from '../messages.js';
 
 export const data = new SlashCommandBuilder()
@@ -18,5 +18,5 @@ export async function execute(interaction, ctx) {
     discordUserId: interaction.user.id,
     discordHandle: interaction.user.username,
   });
-  await interaction.reply({ content: renderLinkResult(result), ephemeral: true });
+  await interaction.reply({ content: renderLinkResult(result), flags: MessageFlags.Ephemeral });
 }

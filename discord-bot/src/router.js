@@ -1,10 +1,11 @@
+import { MessageFlags } from 'discord.js';
 import { resolvePrincipal } from './auth/principal.js';
 import { authorize } from './auth/policy.js';
 import { DirectoryUnavailable } from './directoryClient.js';
 import { authMessages } from './messages.js';
 
 async function safeReply(interaction, content) {
-  const payload = { content, ephemeral: true };
+  const payload = { content, flags: MessageFlags.Ephemeral };
   if (interaction.replied || interaction.deferred) {
     await interaction.followUp(payload).catch((e) => console.error('reply failed:', e.message));
   } else {
