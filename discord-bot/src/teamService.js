@@ -1,6 +1,7 @@
 import {
   TeamExists,
   TeamNotFound,
+  MembershipInvalid,
   DirectoryUnavailable,
 } from './directoryClient.js';
 
@@ -43,5 +44,60 @@ export function createTeamService({ directory, now = isoDateToday } = {}) {
     }
   }
 
-  return { createTeam, listTeams, renameTeam, _now: now };
+  async function addMember(
+    { discordSnowflake, teamSlug, roleKindId, isTeamAdmin },
+    _opts,
+  ) {
+    try {
+      const person = await directory.getPersonByDiscordId(discordSnowflake);
+      if (!person) return { outcome: 'USER_NOT_LINKED' };
+      const team = await directory.getTeamBySlug(teamSlug);
+      if (!team) return { outcome: 'TEAM_NOT_FOUND' };
+      const existing = await directory.listMemberships({
+        teamId: team.id,
+        personId: person.id,
+        activeOnly: true,
+      });
+      if (existing.length > 0) return { outcome: 'ALREADY_ON_TEAM', person, team };
+      try {
+        const membership = await directory.createMembership({
+          personId: person.id,
+          teamId: team.id,
+          roleKindId,
+          isTeamAdmin,
+        });
+        return { outcome: 'ADDED', membership, person, team };
+      } catch (e) {
+        if (e instanceof MembershipInvalid) {
+          return { outcome: 'ALREADY_ON_TEAM', person, team };
+        }
+        throw e;
+      }
+    } catch (e) {
+      if (e instanceof DirectoryUnavailable) return { outcome: 'DIRECTORY_DOWN' };
+      throw e;
+    }
+  }
+
+  async function removeMember({ discordSnowflake, teamSlug }, _opts) {
+    try {
+      const person = await directory.getPersonByDiscordId(discordSnowflake);
+      if (!person) return { outcome: 'USER_NOT_LINKED' };
+      const team = await directory.getTeamBySlug(teamSlug);
+      if (!team) return { outcome: 'TEAM_NOT_FOUND' };
+      const active = await directory.listMemberships({
+        teamId: team.id,
+        personId: person.id,
+        activeOnly: true,
+      });
+      if (active.length === 0) return { outcome: 'NOT_ON_TEAM', person, team };
+      await directory.endMembership(active[0].id, now());
+      return { outcome: 'REMOVED', person, team };
+    } catch (e) {
+      if (e instanceof DirectoryUnavailable) return { outcome: 'DIRECTORY_DOWN' };
+      throw e;
+    }
+  }
+
+  return { createTeam, listTeams, renameTeam, addMember, removeMember, _now: now };
 }
