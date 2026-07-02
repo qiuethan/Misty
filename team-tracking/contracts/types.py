@@ -1,8 +1,12 @@
 import re
 from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator
+
+
+AccessLevel = Literal["member", "admin", "superuser"]
 
 
 def _normalize_email(v: str) -> str:
@@ -30,6 +34,7 @@ class Person(DirectoryBase):
     display_name: str
     primary_email: str
     active: bool = True
+    access_level: AccessLevel = "member"
 
     @field_validator("primary_email")
     @classmethod
@@ -85,6 +90,7 @@ class PersonCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     display_name: str
     primary_email: str
+    access_level: AccessLevel = "member"
 
     @field_validator("primary_email")
     @classmethod
@@ -97,6 +103,7 @@ class PersonUpdate(BaseModel):
     display_name: str | None = None
     primary_email: str | None = None
     active: bool | None = None
+    access_level: AccessLevel | None = None
 
     @field_validator("primary_email")
     @classmethod
