@@ -28,6 +28,7 @@ people = Table(
     Column("display_name", Text, nullable=False),
     Column("primary_email", CITEXT, nullable=False, unique=True),
     Column("active", Boolean, nullable=False, server_default=text("true")),
+    Column("access_level", Text, nullable=False, server_default=text("'member'")),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
     Column("created_by", Text, nullable=False),

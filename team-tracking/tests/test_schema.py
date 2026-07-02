@@ -38,3 +38,11 @@ def test_person_identifiers_unique_constraints():
     }
     assert ("person_id", "provider") in constraint_cols
     assert ("external_id", "provider") in constraint_cols
+
+
+def test_people_has_access_level_column():
+    from src.storage.schema import people
+
+    col = people.c.access_level
+    assert col is not None
+    assert not col.nullable
