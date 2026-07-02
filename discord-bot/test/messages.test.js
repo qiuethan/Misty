@@ -1,6 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderLinkResult, renderWhoami, renderSeedResult } from '../src/messages.js';
+import {
+  renderLinkResult,
+  renderWhoami,
+  renderSeedResult,
+  renderCreateTeamResult,
+  renderListTeamsResult,
+  renderRenameTeamResult,
+  renderAddMemberResult,
+  renderRemoveMemberResult,
+  renderRosterResult,
+  renderMyTeamsResult,
+} from '../src/messages.js';
 
 test('renderLinkResult covers every outcome', () => {
   assert.match(renderLinkResult({ outcome: 'LINKED', person: { display_name: 'Alex' } }), /Alex/);
@@ -20,4 +31,108 @@ test('renderSeedResult covers outcomes', () => {
   );
   assert.match(renderSeedResult({ outcome: 'EXISTS', detail: 'x' }), /already/i);
   assert.match(renderSeedResult({ outcome: 'DIRECTORY_DOWN' }), /unavailable|try again/i);
+});
+
+test('renderCreateTeamResult covers outcomes', () => {
+  assert.match(
+    renderCreateTeamResult({ outcome: 'CREATED', team: { slug: 'ml', label: 'ML' } }),
+    /ML|ml/,
+  );
+  assert.match(renderCreateTeamResult({ outcome: 'SLUG_EXISTS', detail: 'x' }), /already/i);
+  assert.match(renderCreateTeamResult({ outcome: 'DIRECTORY_DOWN' }), /unavailable|try again/i);
+});
+
+test('renderListTeamsResult covers outcomes', () => {
+  assert.match(
+    renderListTeamsResult({ outcome: 'LISTED', teams: [{ slug: 'ml', label: 'ML' }, { slug: 'ops', label: 'Ops' }] }),
+    /ML.*Ops|ml.*ops/is,
+  );
+  assert.match(
+    renderListTeamsResult({ outcome: 'LISTED', teams: [] }),
+    /no teams/i,
+  );
+  assert.match(renderListTeamsResult({ outcome: 'DIRECTORY_DOWN' }), /unavailable|try again/i);
+});
+
+test('renderRenameTeamResult covers outcomes', () => {
+  assert.match(
+    renderRenameTeamResult({ outcome: 'RENAMED', team: { slug: 'ml', label: 'New' } }),
+    /New/,
+  );
+  assert.match(renderRenameTeamResult({ outcome: 'TEAM_NOT_FOUND' }), /no team|not found/i);
+  assert.match(renderRenameTeamResult({ outcome: 'DIRECTORY_DOWN' }), /unavailable|try again/i);
+});
+
+test('renderAddMemberResult covers outcomes', () => {
+  assert.match(
+    renderAddMemberResult({
+      outcome: 'ADDED',
+      person: { display_name: 'Alex' },
+      team: { label: 'ML' },
+    }),
+    /Alex.*ML/s,
+  );
+  assert.match(renderAddMemberResult({ outcome: 'USER_NOT_LINKED' }), /link/i);
+  assert.match(renderAddMemberResult({ outcome: 'TEAM_NOT_FOUND' }), /no team|not found/i);
+  assert.match(
+    renderAddMemberResult({ outcome: 'ALREADY_ON_TEAM', person: { display_name: 'Alex' }, team: { label: 'ML' } }),
+    /already/i,
+  );
+  assert.match(renderAddMemberResult({ outcome: 'DIRECTORY_DOWN' }), /unavailable|try again/i);
+});
+
+test('renderRemoveMemberResult covers outcomes', () => {
+  assert.match(
+    renderRemoveMemberResult({
+      outcome: 'REMOVED',
+      person: { display_name: 'Alex' },
+      team: { label: 'ML' },
+    }),
+    /Alex.*ML/s,
+  );
+  assert.match(renderRemoveMemberResult({ outcome: 'USER_NOT_LINKED' }), /link/i);
+  assert.match(renderRemoveMemberResult({ outcome: 'TEAM_NOT_FOUND' }), /no team|not found/i);
+  assert.match(
+    renderRemoveMemberResult({ outcome: 'NOT_ON_TEAM', person: { display_name: 'Alex' }, team: { label: 'ML' } }),
+    /not on/i,
+  );
+  assert.match(renderRemoveMemberResult({ outcome: 'DIRECTORY_DOWN' }), /unavailable|try again/i);
+});
+
+test('renderRosterResult covers outcomes', () => {
+  const roster = renderRosterResult({
+    outcome: 'ROSTER',
+    team: { slug: 'ml', label: 'ML' },
+    members: [
+      { person: { display_name: 'One' }, role_kind_id: 'lead', is_team_admin: true },
+      { person: { display_name: 'Two' }, role_kind_id: 'member', is_team_admin: false },
+    ],
+  });
+  assert.match(roster, /One/);
+  assert.match(roster, /Two/);
+  assert.match(roster, /lead/);
+  assert.match(roster, /ML|ml/);
+  assert.match(
+    renderRosterResult({ outcome: 'ROSTER', team: { slug: 'ml', label: 'ML' }, members: [] }),
+    /no members|empty/i,
+  );
+  assert.match(renderRosterResult({ outcome: 'TEAM_NOT_FOUND' }), /no team|not found/i);
+  assert.match(renderRosterResult({ outcome: 'DIRECTORY_DOWN' }), /unavailable|try again/i);
+});
+
+test('renderMyTeamsResult covers outcomes', () => {
+  const out = renderMyTeamsResult({
+    outcome: 'MY_TEAMS',
+    memberships: [
+      { team: { slug: 'ml', label: 'ML' }, role_kind_id: 'lead', is_team_admin: true },
+      { team: { slug: 'ops', label: 'Ops' }, role_kind_id: 'member', is_team_admin: false },
+    ],
+  });
+  assert.match(out, /ML/);
+  assert.match(out, /Ops/);
+  assert.match(
+    renderMyTeamsResult({ outcome: 'MY_TEAMS', memberships: [] }),
+    /not on any/i,
+  );
+  assert.match(renderMyTeamsResult({ outcome: 'DIRECTORY_DOWN' }), /unavailable|try again/i);
 });
