@@ -76,3 +76,17 @@ def test_self_requires_no_specific_scope(client, adapter):
     resp = client.get("/api-keys/self", headers={"X-API-Key": plaintext})
     assert resp.status_code == 200
     assert resp.json() == {"name": "scopeless", "scopes": []}
+
+
+def test_self_403_for_dev_spoof_key_against_production(client, adapter, monkeypatch):
+    """Guard applies to /api-keys/self too — it goes through require_api_key."""
+    monkeypatch.setenv("TT_ENV", "production")
+    from src.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        plaintext = _issue(adapter, "playground", ["dev:spoof"])
+        resp = client.get("/api-keys/self", headers={"X-API-Key": plaintext})
+        assert resp.status_code == 403
+    finally:
+        get_settings.cache_clear()
