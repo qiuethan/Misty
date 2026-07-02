@@ -70,7 +70,7 @@ parallel to team-tracking's scoped-key auth.
      ```bash
      cd ../team-tracking
      uv run team-tracking-keys issue --name discord-bot \
-       --scopes people:read identifiers:read identifiers:write
+       --scopes people:read people:write identifiers:read identifiers:write
      ```
 3. `npm install`
 4. `npm run register` — registers the slash commands (run once, or whenever
