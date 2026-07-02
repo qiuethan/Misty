@@ -1,5 +1,8 @@
 import { AlreadyLinked, DirectoryUnavailable } from './directoryClient.js';
 
+// /link establishes identity — must be user-invoked, never LLM-invoked.
+export const llmSafe = false;
+
 export function createLinkService({ directory }) {
   async function linkByEmail({ email, discordUserId, discordHandle }) {
     try {

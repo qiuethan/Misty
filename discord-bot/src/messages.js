@@ -35,6 +35,8 @@ export function renderSeedResult(result) {
       return `✅ Added **${result.person.display_name}** (${result.person.primary_email}) as ${result.person.access_level}. They can now \`/link\`.`;
     case 'EXISTS':
       return `That email is already in the directory: ${result.detail}`;
+    case 'ESCALATION_DENIED':
+      return `You can only grant levels at or below your own (${result.callerLevel}).`;
     case 'DIRECTORY_DOWN':
       return 'The directory is temporarily unavailable. Please try again shortly.';
     default:
