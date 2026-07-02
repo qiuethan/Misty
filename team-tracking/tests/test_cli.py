@@ -109,3 +109,58 @@ def test_parser_requires_subcommand():
     parser = build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args([])
+
+
+# --- dev:spoof issuance guard -----------------------------------------------
+
+
+def test_issue_refuses_dev_spoof_when_tt_env_production(monkeypatch, capsys):
+    monkeypatch.setenv("TT_ENV", "production")
+    from src.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        from src import cli
+
+        code = cli.main(
+            [
+                "issue",
+                "--name",
+                "playground",
+                "--scopes",
+                "people:read",
+                "dev:spoof",
+            ]
+        )
+        assert code == 2
+        err = capsys.readouterr().err
+        assert "dev:spoof" in err
+        assert "production" in err
+    finally:
+        get_settings.cache_clear()
+
+
+def test_issue_allows_dev_spoof_when_tt_env_local(monkeypatch, capsys, adapter):
+    """`adapter` fixture defined at the top of this file monkeypatches src.cli._adapter."""
+    monkeypatch.delenv("TT_ENV", raising=False)
+    from src.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        from src import cli
+
+        code = cli.main(
+            [
+                "issue",
+                "--name",
+                "playground-local",
+                "--scopes",
+                "people:read",
+                "dev:spoof",
+            ]
+        )
+        assert code == 0
+        keys = adapter.list_api_keys()
+        assert any("dev:spoof" in k.scopes for k in keys)
+    finally:
+        get_settings.cache_clear()
