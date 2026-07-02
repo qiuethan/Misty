@@ -21,7 +21,8 @@ const formStrip = document.getElementById('form-strip');
 async function main() {
   await Promise.all([loadCommands(), loadPeople()]);
   renderSidebar();
-  renderTopStrip();
+  initTopStrip();
+  refreshPeoplePicker();
   wireResetButton();
 }
 
@@ -77,14 +78,23 @@ function renderSidebar() {
   }
 }
 
-function renderTopStrip() {
+function initTopStrip() {
+  // One-time initialization: set initial value and bind the input listener.
   actingAsInput.value = state.actingAs;
   actingAsInput.addEventListener('input', () => {
     // If the value matches a display_name in datalist, resolve to the ID.
     const person = state.people.find((p) => p.discord_id === actingAsInput.value || p.display_name === actingAsInput.value);
     state.actingAs = person && person.discord_id ? person.discord_id : actingAsInput.value;
     localStorage.setItem('actingAs', state.actingAs);
+    // Refresh any visible Run button.
+    const btn = formStrip.querySelector('button');
+    if (btn) btn.disabled = !state.actingAs;
   });
+}
+
+function refreshPeoplePicker() {
+  // Update input value and rebuild people datalist options.
+  actingAsInput.value = state.actingAs;
   peopleDatalist.innerHTML = '';
   for (const p of state.people) {
     if (p.discord_id !== null) {
@@ -106,7 +116,7 @@ function wireResetButton() {
       if (!res.ok) throw new Error(`reset failed: HTTP ${res.status}`);
       // Re-fetch people so the picker/mentions reflect the new scratch state.
       await loadPeople();
-      renderTopStrip();
+      refreshPeoplePicker();
       appendBotMessage({ content: '🔄 Scratch DB reset from main dev DB.', ephemeral: true });
     } catch (e) {
       appendErrorMessage(e.message);
