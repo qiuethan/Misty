@@ -89,6 +89,39 @@ parallel to team-tracking's scoped-key auth.
    channels" above.
 5. `npm start` — then invite the bot to any server via its OAuth2 URL.
 
+## Web playground (local dev)
+
+For iterating on commands without going through Discord, the bot exposes
+the same command surface via HTTP. Run it with:
+
+```bash
+npm run dev:web
+```
+
+Then open `http://127.0.0.1:3001`. Every registered command renders as a
+form; submit runs the same router pipeline the Discord surface uses.
+
+The "Acting as" field at the top of the page lets you pretend to be any
+Discord user — useful for testing permission gates like `/seed` (admins
+only) without swapping accounts.
+
+**Requires** a team-tracking API key with the `dev:spoof` scope. Issue one
+against your local team-tracking:
+
+```bash
+cd ../team-tracking
+uv run team-tracking-keys issue --name discord-bot-playground \
+  --scopes people:read people:write identifiers:read identifiers:write dev:spoof
+```
+
+Put the returned key in `.env` as `DIRECTORY_API_KEY`. The bot's startup
+guard refuses to run the web surface without this scope; team-tracking
+refuses to issue it against `TT_ENV=production` — the safety property
+holds on both sides.
+
+This playground is deliberately plain (form-only, no chat transcript, no
+mention rendering, no ephemeral DB isolation). Those land in Plan 2B.
+
 ## Architecture
 
 | File | Responsibility |
@@ -104,6 +137,10 @@ parallel to team-tracking's scoped-key auth.
 | `src/commands/*.js` | Thin discord.js interaction handlers + registry. |
 | `src/index.js` | Client setup + interaction routing. |
 | `src/registerCommands.js` | One-shot slash-command registration (stable → global; beta → testing guild only). |
+| `src/defineCommand.js` | Neutral, surface-agnostic command factory. |
+| `src/adapters/discord.js` | The ONLY module that imports from discord.js — turns interactions into intents. |
+| `src/web/server.js` | Fastify web playground (see "Web playground" above). |
+| `src/startupGuard.js` | Refuses web-mode boot if the directory key lacks `dev:spoof`. |
 
 ## Testing
 
