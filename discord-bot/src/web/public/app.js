@@ -1,6 +1,18 @@
 const actingAsInput = document.getElementById('actingAs');
+const actingAsHint = document.getElementById('actingAsHint');
+const runButtons = [];
+
+function updateActingAsState() {
+  const empty = actingAsInput.value.trim() === '';
+  actingAsHint.textContent = empty ? '⚠ enter a Discord ID above' : '';
+  for (const btn of runButtons) btn.disabled = empty;
+}
+
 actingAsInput.value = localStorage.getItem('actingAs') || '';
-actingAsInput.addEventListener('input', () => localStorage.setItem('actingAs', actingAsInput.value));
+actingAsInput.addEventListener('input', () => {
+  localStorage.setItem('actingAs', actingAsInput.value);
+  updateActingAsState();
+});
 
 async function main() {
   const res = await fetch('/api/commands');
@@ -15,6 +27,7 @@ async function main() {
       container.appendChild(renderCommand(cmd, null));
     }
   }
+  updateActingAsState();
 }
 
 function renderCommand(cmd, sub) {
@@ -31,6 +44,10 @@ function renderCommand(cmd, sub) {
     if (o.choices) {
       input = document.createElement('select');
       for (const c of o.choices) input.appendChild(new Option(c.name, c.value));
+    } else if (o.type === 'user') {
+      input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'Discord snowflake, e.g. 123456789012345678';
     } else {
       input = document.createElement('input');
       input.type = 'text';
@@ -45,12 +62,17 @@ function renderCommand(cmd, sub) {
   result.style.display = 'none';
   const button = document.createElement('button');
   button.textContent = 'Run';
+  runButtons.push(button);
   form.appendChild(button);
   form.appendChild(result);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const options = {};
-    for (const el of form.elements) if (el.name) options[el.name] = el.value;
+    for (const el of form.elements) {
+      if (!el.name) continue;
+      if (el.value === '' && !el.required) continue;
+      options[el.name] = el.value;
+    }
     const resp = await fetch(`/api/commands/${cmd.name}/run`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -62,7 +84,11 @@ function renderCommand(cmd, sub) {
     });
     const payload = await resp.json();
     result.style.display = 'block';
-    result.innerHTML = renderPayload(payload);
+    if (!resp.ok) {
+      result.innerHTML = `<div class="error">Error ${resp.status} ${escapeHtml(resp.statusText)}: ${escapeHtml(payload.error || payload.content || 'unknown error')}</div>`;
+    } else {
+      result.innerHTML = renderPayload(payload);
+    }
   });
   el.appendChild(form);
   return el;

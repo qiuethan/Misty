@@ -17,11 +17,13 @@
     .embed .field { margin-top: 0.3em; }
     .embed .field .name { font-weight: 600; font-size: 0.85em; }
     input#actingAs { width: 260px; }
+    #actingAsHint { color: #b45309; margin-left: 0.5em; font-size: 0.9em; }
+    .error { margin-top: 0.5em; padding: 0.5em; background: #7f1d1d; color: white; border-radius: 4px; white-space: pre-wrap; font-family: ui-monospace, monospace; }
   </style>
 </head>
 <body>
   <div class="banner">🔴 Spoof mode — DEV ONLY. All requests act as the "Acting as" Discord ID below.</div>
-  <label>Acting as (Discord ID): <input id="actingAs" placeholder="123456789012345678" /></label>
+  <label>Acting as (Discord ID): <input id="actingAs" placeholder="123456789012345678" /><span id="actingAsHint"></span></label>
   <div id="commands"></div>
   <script type="module" src="/app.js"></script>
 </body>

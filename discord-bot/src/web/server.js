@@ -36,12 +36,32 @@ export async function buildServer({ commands, appContext }) {
       return { error: 'unknown command' };
     }
     const { options = {}, subcommand = null, actingAs } = req.body ?? {};
+
+    if (typeof actingAs !== 'string' || actingAs.trim() === '') {
+      reply.code(400);
+      return { error: 'actingAs is required' };
+    }
+
+    const activeOptions = subcommand
+      ? command.subcommands.find((s) => s.name === subcommand)?.options ?? []
+      : command.options;
+    const coerced = { ...options };
+    for (const o of activeOptions) {
+      const value = coerced[o.name];
+      if (o.type === 'user' && typeof value === 'string') {
+        coerced[o.name] = { id: value };
+      } else if (o.type === 'boolean' && typeof value === 'string') {
+        if (value === '') delete coerced[o.name];
+        else coerced[o.name] = value === 'true';
+      }
+    }
+
     const intent = {
       commandName: command.name,
-      options,
+      options: coerced,
       subcommand,
-      discordUserId: String(actingAs ?? ''),
-      discordHandle: `spoof-${actingAs ?? ''}`,
+      discordUserId: String(actingAs),
+      discordHandle: `spoof-${actingAs}`,
     };
     const payload = await dispatch(intent, { commands, appContext });
     return payload ?? {};
