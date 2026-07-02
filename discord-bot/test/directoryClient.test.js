@@ -29,6 +29,15 @@ function fakeFetch(responses) {
 const BASE = 'http://d';
 const KEY = 'k';
 
+test('getSelfKeyScopes returns scopes from GET /api-keys/self', async () => {
+  const fetchImpl = fakeFetch([{ status: 200, body: { name: 'bot', scopes: ['dev:spoof', 'people:read'] } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  const scopes = await client.getSelfKeyScopes();
+  assert.deepEqual(scopes, ['dev:spoof', 'people:read']);
+  assert.match(fetchImpl.calls[0].url, /\/api-keys\/self$/);
+  assert.equal(fetchImpl.calls[0].opts.headers['X-API-Key'], 'k');
+});
+
 test('getPersonByEmail returns person on 200', async () => {
   const fetchImpl = fakeFetch([{ status: 200, body: { id: '1', display_name: 'Alex' } }]);
   const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
