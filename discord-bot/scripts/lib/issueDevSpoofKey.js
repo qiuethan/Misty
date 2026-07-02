@@ -8,11 +8,21 @@ export function parseCliKeyOutput(stdout) {
 
 export function issueDevSpoofKey({ teamTrackingDir, databaseUrl, name }) {
   return new Promise((resolve, reject) => {
+    // Scopes must cover EVERY endpoint any current bot command hits — otherwise
+    // team-tracking returns 403, directoryClient throws DirectoryUnavailable,
+    // and the playground shows "directory temporarily unavailable" with no
+    // obvious clue that the real cause is a missing scope. Keep this in sync
+    // with the DIRECTORY_API_KEY scope list in the README.
     const args = [
       'run', 'team-tracking-keys', 'issue',
       '--name', name,
       '--scopes',
-      'people:read', 'people:write', 'identifiers:read', 'identifiers:write', 'dev:spoof',
+      'people:read', 'people:write',
+      'identifiers:read', 'identifiers:write',
+      'teams:read', 'teams:write',
+      'memberships:read', 'memberships:write',
+      'role_kinds:read',
+      'dev:spoof',
     ];
     const child = spawn('uv', args, {
       cwd: teamTrackingDir,
