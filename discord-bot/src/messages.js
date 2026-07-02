@@ -4,7 +4,9 @@ export const authMessages = {
   denied: (reason) =>
     reason === 'not_linked'
       ? 'You need to link your account first. Run `/link` to identify yourself, then try again.'
-      : "You're not allowed to do that.",
+      : reason === 'forbidden'
+        ? "You don't have permission to do that."
+        : "You're not allowed to do that.",
   internalError: () => 'Something went wrong. Please try again.',
 };
 
