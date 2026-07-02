@@ -122,3 +122,17 @@ test('seed surfaces directory outage', async () => {
 test('registry includes seed', () => {
   assert.equal(commands.get('seed'), seed);
 });
+
+test('admin can grant admin (equal rank is allowed)', async () => {
+  const interaction = seedInteraction({ email: 'a@utmist.ca', name: 'A', level: 'admin' });
+  let called = false;
+  const directory = {
+    createPerson: async () => {
+      called = true;
+      return { display_name: 'A', primary_email: 'a@utmist.ca', access_level: 'admin' };
+    },
+  };
+  await seed.execute(interaction, adminCtx(directory));
+  assert.equal(called, true);
+  assert.match(interaction.replies[0].content, /A/);
+});

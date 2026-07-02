@@ -31,17 +31,17 @@ def cmd_seed_person(args: argparse.Namespace, adapter=None) -> int:
     email = args.email.strip().lower()
     existing = adapter.get_person_by_email(email)
     if existing is None:
+        level = args.level or "member"
         p = adapter.create_person(
-            PersonCreate(display_name=args.name, primary_email=email, access_level=args.level),
+            PersonCreate(display_name=args.name, primary_email=email, access_level=level),
             actor=args.actor,
         )
         verb = "created"
     else:
-        p = adapter.update_person(
-            existing.id,
-            PersonUpdate(display_name=args.name, access_level=args.level),
-            actor=args.actor,
-        )
+        update_kwargs = {"display_name": args.name}
+        if args.level is not None:
+            update_kwargs["access_level"] = args.level
+        p = adapter.update_person(existing.id, PersonUpdate(**update_kwargs), actor=args.actor)
         verb = "updated"
     print(f"{verb}: {p.display_name} <{p.primary_email}> level={p.access_level} id={p.id}", file=sys.stderr)
     return 0
@@ -61,8 +61,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument(
         "--level",
         choices=["member", "admin", "superuser"],
-        default="member",
-        help="Access level to grant (default: member)",
+        default=None,
+        help="Access level to grant (default: member on create; unchanged on update)",
     )
     sp.set_defaults(func=cmd_seed_person)
     return p
