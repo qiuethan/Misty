@@ -6,7 +6,7 @@ import { dispatch } from '../router.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export async function buildServer({ commands, appContext }) {
+export async function buildServer({ commands, appContext, onReset }) {
   const server = Fastify({ logger: false });
 
   await server.register(fastifyStatic, {
@@ -27,6 +27,36 @@ export async function buildServer({ commands, appContext }) {
         options: s.options,
       })),
     }));
+  });
+
+  server.get('/api/people', async () => {
+    const people = await appContext.directory.listPeople();
+    const results = [];
+    for (const p of people) {
+      let discord_id = null;
+      try {
+        const identifiers = await appContext.directory.listIdentifiers(p.id);
+        const discord = identifiers.find((i) => i.provider === 'discord');
+        if (discord) discord_id = discord.external_id;
+      } catch (e) {
+        console.warn(`/api/people: failed to fetch identifiers for ${p.id}:`, e.message);
+      }
+      results.push({
+        id: p.id,
+        discord_id,
+        display_name: p.display_name,
+      });
+    }
+    return results;
+  });
+
+  server.post('/api/reset', async (req, reply) => {
+    if (!onReset) {
+      reply.code(501);
+      return { error: 'reset not available' };
+    }
+    await onReset();
+    return { ok: true };
   });
 
   server.post('/api/commands/:name/run', async (req, reply) => {
@@ -74,8 +104,8 @@ export async function buildServer({ commands, appContext }) {
   return server;
 }
 
-export async function startWebServer({ commands, appContext, port = 3001 }) {
-  const server = await buildServer({ commands, appContext });
+export async function startWebServer({ commands, appContext, port = 3001, onReset }) {
+  const server = await buildServer({ commands, appContext, onReset });
   await server.listen({ port, host: '127.0.0.1' });
   console.log(`Web playground: http://127.0.0.1:${port}`);
   return server;

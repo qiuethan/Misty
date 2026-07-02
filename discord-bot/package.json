@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node --env-file=.env src/index.js",
     "dev": "ENABLE_DISCORD=true ENABLE_WEB=true node --env-file=.env src/index.js",
-    "dev:web": "ENABLE_DISCORD=false ENABLE_WEB=true node --env-file=.env src/index.js",
+    "dev:web": "node scripts/dev-web.js",
+    "dev:web:plain": "ENABLE_DISCORD=false ENABLE_WEB=true node --env-file=.env src/index.js",
     "dev:discord": "ENABLE_DISCORD=true ENABLE_WEB=false node --env-file=.env src/index.js",
     "register": "node --env-file=.env src/registerCommands.js",
     "test": "node --test"
