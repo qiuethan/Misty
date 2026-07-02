@@ -120,3 +120,77 @@ def test_admin_scope_grants_everything(client, adapter):
     # role_kinds needs :read but admin should suffice.
     resp = client.get("/role_kinds", headers={"X-API-Key": plaintext})
     assert resp.status_code == 200
+
+
+# --- dev:spoof environment guard --------------------------------------------
+
+import logging
+
+from src.api.hashing import generate_key as _gen_key_for_spoof_tests
+
+
+def _issue_key_with_scopes(adapter, name: str, scopes: list[str]) -> str:
+    """Helper: create a DB API key with the given scopes and return the plaintext."""
+    plaintext, prefix, key_hash = _gen_key_for_spoof_tests()
+    adapter.create_api_key(
+        name=name, prefix=prefix, key_hash=key_hash, scopes=scopes, actor="test"
+    )
+    return plaintext
+
+
+@pytest.fixture
+def prod_env(monkeypatch, env_key):
+    """Env bootstrap AND TT_ENV=production."""
+    monkeypatch.setenv("TT_ENV", "production")
+    from src.config import get_settings
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+def test_dev_spoof_key_rejected_when_tt_env_production(client, adapter, prod_env):
+    plaintext = _issue_key_with_scopes(
+        adapter, "playground-key", ["people:read", "dev:spoof"]
+    )
+    resp = client.get("/role_kinds", headers={"X-API-Key": plaintext})
+    assert resp.status_code == 403
+    assert "dev:spoof" in resp.json()["detail"]
+
+
+def test_dev_spoof_key_allowed_when_tt_env_local(client, adapter):
+    # No prod_env — default local
+    plaintext = _issue_key_with_scopes(
+        adapter, "playground-key", ["role_kinds:read", "dev:spoof"]
+    )
+    resp = client.get("/role_kinds", headers={"X-API-Key": plaintext})
+    assert resp.status_code == 200
+
+
+def test_non_dev_spoof_key_unaffected_in_production(client, adapter, prod_env):
+    plaintext = _issue_key_with_scopes(
+        adapter, "prod-key", ["role_kinds:read"]
+    )
+    resp = client.get("/role_kinds", headers={"X-API-Key": plaintext})
+    assert resp.status_code == 200
+
+
+def test_admin_scope_does_not_bypass_dev_spoof_guard(client, adapter, prod_env):
+    """An `admin` scope wildcards `require_scope`, but MUST NOT bypass this guard."""
+    plaintext = _issue_key_with_scopes(
+        adapter, "danger-key", ["admin", "dev:spoof"]
+    )
+    resp = client.get("/role_kinds", headers={"X-API-Key": plaintext})
+    assert resp.status_code == 403
+
+
+def test_dev_spoof_rejection_logs_warning(client, adapter, prod_env, caplog):
+    plaintext = _issue_key_with_scopes(
+        adapter, "playground-key", ["dev:spoof"]
+    )
+    with caplog.at_level(logging.WARNING, logger="team_tracking.audit"):
+        client.get("/role_kinds", headers={"X-API-Key": plaintext})
+    assert any(
+        "dev:spoof" in rec.message and "production" in rec.message
+        for rec in caplog.records
+    )

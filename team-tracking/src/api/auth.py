@@ -11,6 +11,7 @@ Read-only endpoints may depend on `require_scope("<domain>:read")` OR on
 `require_api_key` (which returns a resolved key with no scope check).
 """
 
+import logging
 import secrets
 from dataclasses import dataclass
 
@@ -24,6 +25,10 @@ from src.config import get_settings
 
 ADMIN_SCOPE = "admin"
 _BOOTSTRAP_KEY_NAME = "env-bootstrap"
+DEV_SPOOF_SCOPE = "dev:spoof"
+_PROD_ENV = "production"
+
+_audit_logger = logging.getLogger("team_tracking.audit")
 
 
 @dataclass(frozen=True)
@@ -44,6 +49,25 @@ def _unauthorized() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or missing X-API-Key",
+    )
+
+
+def _enforce_dev_scope_environment(authed: "AuthedKey") -> None:
+    """403 if a dev:spoof-scoped key is presented against a production directory.
+
+    Literal-check, not `has_scope` — an `admin` wildcard must NOT bypass this.
+    """
+    if DEV_SPOOF_SCOPE not in authed.scopes:
+        return
+    if get_settings().tt_env != _PROD_ENV:
+        return
+    _audit_logger.warning(
+        "dev:spoof key rejected: TT_ENV=production (key=%s)",
+        authed.name,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="dev:spoof keys forbidden in production",
     )
 
 
@@ -83,6 +107,7 @@ def require_api_key(
                     is_bootstrap=False,
                 )
                 request.state.auth_key = authed
+                _enforce_dev_scope_environment(authed)
                 return authed
         # DB key present but failed — fall through to 401 (never fall through
         # to env-key check for a well-formed DB key attempt; prevents an
@@ -98,6 +123,7 @@ def require_api_key(
             is_bootstrap=True,
         )
         request.state.auth_key = authed
+        _enforce_dev_scope_environment(authed)
         return authed
 
     raise _unauthorized()
