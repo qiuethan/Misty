@@ -255,7 +255,7 @@ function appendBotMessage(payload) {
 }
 
 function appendErrorMessage(msg) {
-  const el = messageElement({ author: 'error', avatar: '⚠', klass: 'bot' });
+  const el = messageElement({ author: 'error', avatar: '⚠', klass: 'error' });
   const body = el.querySelector('.body');
   body.classList.add('error');
   body.textContent = msg;
@@ -270,7 +270,7 @@ function messageElement({ author, avatar, klass }) {
   el.innerHTML = `
     <div class="avatar">${escapeHtml(avatar)}</div>
     <div class="content">
-      <div><span class="author">${escapeHtml(author)}</span><span class="time">${escapeHtml(now)}</span></div>
+      <div class="header"><span class="author">${escapeHtml(author)}</span><span class="time">${escapeHtml(now)}</span></div>
       <div class="body"></div>
     </div>
   `;
