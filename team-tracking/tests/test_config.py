@@ -25,3 +25,11 @@ def test_tt_env_reads_from_environment(monkeypatch):
 def test_tt_env_accepts_staging(monkeypatch):
     monkeypatch.setenv("TT_ENV", "staging")
     assert get_settings().tt_env == "staging"
+
+
+def test_tt_env_rejects_unknown_values(monkeypatch):
+    monkeypatch.setenv("TT_ENV", "Production")  # capital P — typo
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        get_settings()

@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -10,7 +11,7 @@ class Settings(BaseSettings):
         "postgresql+psycopg://team_tracking:dev_password@localhost:5433/team_tracking"
     )
     api_key: str = "dev-api-key-change-me"
-    tt_env: str = "local"
+    tt_env: Literal["local", "staging", "production"] = "local"
 
 
 @lru_cache(maxsize=1)
