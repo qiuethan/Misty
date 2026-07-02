@@ -100,7 +100,6 @@ def require_api_key(
         if key_hash is not None and verify_key(x_api_key, key_hash):
             row = storage.get_api_key_by_prefix(prefix)
             if row is not None and row.active and row.revoked_at is None:
-                storage.touch_api_key_last_used(row.id)
                 authed = AuthedKey(
                     name=row.name,
                     scopes=frozenset(row.scopes),
@@ -108,6 +107,7 @@ def require_api_key(
                 )
                 request.state.auth_key = authed
                 _enforce_dev_scope_environment(authed)
+                storage.touch_api_key_last_used(row.id)
                 return authed
         # DB key present but failed — fall through to 401 (never fall through
         # to env-key check for a well-formed DB key attempt; prevents an
