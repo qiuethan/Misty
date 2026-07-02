@@ -54,8 +54,17 @@ test('buildWhoamiEmbed sorts identifiers alphabetically and formats handle vs no
   const byName = Object.fromEntries(embed.fields.map((f) => [f.name, f.value]));
   assert.equal(
     byName['Identities'],
-    'discord: alex (123)\ngithub: eeetan (9876)\nnotion: notion-uuid',
+    'discord: <@123>\ngithub: eeetan (9876)\nnotion: notion-uuid',
   );
+});
+
+test('buildWhoamiEmbed renders discord identity as a mention (drops stored handle)', () => {
+  const embed = buildWhoamiEmbed(
+    { display_name: 'A', primary_email: 'a@x', access_level: 'member', active: true },
+    [{ provider: 'discord', external_id: '987654321', handle: 'stale-handle' }],
+  );
+  const byName = Object.fromEntries(embed.fields.map((f) => [f.name, f.value]));
+  assert.equal(byName['Identities'], 'discord: <@987654321>');
 });
 
 test('buildWhoamiEmbed shows _(unavailable)_ when identifiers is null', () => {
