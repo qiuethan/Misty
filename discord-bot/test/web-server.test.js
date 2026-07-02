@@ -146,3 +146,49 @@ test('GET /api/people returns array with discord_id resolved', async () => {
     await server.close();
   }
 });
+
+test('POST /api/reset with onReset callback returns { ok: true }', async () => {
+  let called = 0;
+  const server = await buildServer({
+    commands: new Map(),
+    appContext: {},
+    onReset: async () => { called++; },
+  });
+  await server.ready();
+  try {
+    const resp = await server.inject({ method: 'POST', url: '/api/reset' });
+    assert.equal(resp.statusCode, 200);
+    assert.deepEqual(resp.json(), { ok: true });
+    assert.equal(called, 1);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/reset without onReset returns 501', async () => {
+  const server = await buildServer({ commands: new Map(), appContext: {} });
+  await server.ready();
+  try {
+    const resp = await server.inject({ method: 'POST', url: '/api/reset' });
+    assert.equal(resp.statusCode, 501);
+    assert.equal(resp.json().error, 'reset not available');
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/reset propagates errors from onReset as 500', async () => {
+  const server = await buildServer({
+    commands: new Map(),
+    appContext: {},
+    onReset: async () => { throw new Error('pg_dump failed'); },
+  });
+  await server.ready();
+  try {
+    const resp = await server.inject({ method: 'POST', url: '/api/reset' });
+    assert.equal(resp.statusCode, 500);
+    assert.ok(String(resp.json().content).includes('pg_dump failed'));
+  } finally {
+    await server.close();
+  }
+});
