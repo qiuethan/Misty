@@ -90,3 +90,15 @@ def test_self_403_for_dev_spoof_key_against_production(client, adapter, monkeypa
         assert resp.status_code == 403
     finally:
         get_settings.cache_clear()
+
+
+def test_self_response_declared_in_openapi_schema(client):
+    """The endpoint has a typed response model, so downstream code-gen sees the shape."""
+    resp = client.get("/openapi.json")
+    assert resp.status_code == 200
+    schema = resp.json()
+    self_op = schema["paths"]["/api-keys/self"]["get"]
+    ref = self_op["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+    assert ref.endswith("/SelfKey")
+    model = schema["components"]["schemas"]["SelfKey"]
+    assert set(model["properties"]) == {"name", "scopes"}
