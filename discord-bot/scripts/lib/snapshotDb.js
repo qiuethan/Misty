@@ -11,11 +11,15 @@ export function buildSnapshotCommands({ source, target, dbUser }) {
     'psql', '-U', dbUser, '-d', 'postgres', '-c',
     `CREATE DATABASE ${target};`,
   ];
-  // Pipe pg_dump into psql. Both containers, but the pipe stays inside sh -c.
+  // Pipe pg_dump into psql. `set -e -o pipefail` is critical: without it, if
+  // pg_dump fails, psql receives an empty stream, exits 0, and the pipe
+  // silently succeeds — leaving the scratch DB empty. With pipefail, any
+  // failure in the pipeline surfaces as a non-zero exit.
   const pipeCmd = [
     'sh', '-c',
+    'set -e -o pipefail; ' +
     `docker compose exec -T postgres pg_dump -U ${dbUser} ${source} | ` +
-    `docker compose exec -T postgres psql -U ${dbUser} -d ${target}`,
+    `docker compose exec -T postgres psql -q -U ${dbUser} -d ${target}`,
   ];
   return [dropCmd, createCmd, pipeCmd];
 }

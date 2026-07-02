@@ -27,4 +27,7 @@ test('buildSnapshotCommands emits the drop, create, and pg_dump-piped-into-psql 
   assert.equal(cmds[2][1], '-c');
   assert.ok(cmds[2][2].includes('pg_dump'));
   assert.ok(cmds[2][2].includes('team_tracking_playground'));
+  // pipefail is load-bearing: without it, a pg_dump failure is swallowed by
+  // psql exiting 0 on an empty stream, leaving the scratch DB empty.
+  assert.ok(cmds[2][2].includes('pipefail'));
 });

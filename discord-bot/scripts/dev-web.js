@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { snapshotDb } from './lib/snapshotDb.js';
 import { spawnTeamTracking } from './lib/spawnTeamTracking.js';
 import { issueDevSpoofKey } from './lib/issueDevSpoofKey.js';
+import { seedDefaultPersonas } from './lib/seedDefaultPersonas.js';
 import { commands } from '../src/commands/index.js';
 import { createAppContext } from '../src/context.js';
 import { ensureDevSpoofScope } from '../src/startupGuard.js';
@@ -47,6 +48,20 @@ async function terminateScratchConnections() {
       { cwd: teamTrackingDir, stdio: 'inherit' },
     );
     child.on('exit', () => resolve()); // best-effort — fine if the DB doesn't exist yet
+  });
+}
+
+async function countPeople() {
+  return new Promise((resolve) => {
+    const child = spawn(
+      'docker',
+      ['compose', 'exec', '-T', 'postgres', 'psql', '-U', DB_USER, '-d', SCRATCH_DB,
+        '-t', '-A', '-c', 'SELECT count(*) FROM people;'],
+      { cwd: teamTrackingDir, stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    let out = '';
+    child.stdout.on('data', (d) => { out += d.toString(); });
+    child.on('exit', () => resolve(parseInt(out.trim(), 10) || 0));
   });
 }
 
@@ -95,6 +110,7 @@ async function main() {
 
   console.log(`▶ cloning ${MAIN_DB} → ${SCRATCH_DB}…`);
   await snapshotDb({ source: MAIN_DB, target: SCRATCH_DB, dbUser: DB_USER, teamTrackingDir });
+  console.log(`  scratch has ${await countPeople()} people from main`);
 
   console.log(`▶ spawning scratch team-tracking on port ${SCRATCH_PORT}…`);
   scratch = await spawnTeamTracking({
@@ -110,6 +126,9 @@ async function main() {
     name: 'discord-bot-playground',
   });
   console.log(`  key prefix: ${key.slice(0, 12)}…`);
+
+  console.log('▶ seeding default personas into scratch…');
+  await seedDefaultPersonas({ baseUrl: scratch.url, apiKey: key });
 
   const config = {
     directoryBaseUrl: scratch.url,
@@ -127,6 +146,7 @@ async function main() {
     console.log(`▶ re-cloning ${MAIN_DB} → ${SCRATCH_DB}…`);
     await terminateScratchConnections();
     await snapshotDb({ source: MAIN_DB, target: SCRATCH_DB, dbUser: DB_USER, teamTrackingDir });
+    console.log(`  scratch has ${await countPeople()} people from main`);
     // Re-cloning replaces the scratch api_keys table with main's, which wipes
     // the key issued after the previous clone. Reissue and rewire appContext
     // in place so already-dispatched route handlers (which read appContext.*
@@ -137,6 +157,8 @@ async function main() {
       databaseUrl: scratchDatabaseUrl(),
       name: 'discord-bot-playground',
     });
+    console.log('▶ re-seeding default personas into scratch…');
+    await seedDefaultPersonas({ baseUrl: scratch.url, apiKey: newKey });
     Object.assign(appContext, createAppContext({ ...config, directoryApiKey: newKey }));
   };
 
