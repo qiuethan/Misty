@@ -1,33 +1,32 @@
-import { SlashCommandBuilder, MessageFlags } from 'discord.js';
+import { defineCommand } from '../defineCommand.js';
 import { renderSeedResult } from '../messages.js';
 
-export const data = new SlashCommandBuilder()
-  .setName('seed')
-  .setDescription('Add a member to the directory (admins only)')
-  .addStringOption((o) => o.setName('email').setDescription('Member email').setRequired(true))
-  .addStringOption((o) => o.setName('name').setDescription('Display name').setRequired(true))
-  .addStringOption((o) =>
-    o
-      .setName('level')
-      .setDescription('Access level (default member)')
-      .setRequired(false)
-      .addChoices(
+export default defineCommand({
+  name: 'seed',
+  description: 'Add a member to the directory (admins only)',
+  auth: 'admin',
+  beta: false,
+  options: [
+    { name: 'email', type: 'string', required: true, description: 'Member email' },
+    { name: 'name', type: 'string', required: true, description: 'Display name' },
+    {
+      name: 'level',
+      type: 'string',
+      required: false,
+      description: 'Access level (default member)',
+      choices: [
         { name: 'member', value: 'member' },
         { name: 'admin', value: 'admin' },
         { name: 'superuser', value: 'superuser' },
-      ),
-  );
-
-export const auth = 'admin';
-export const beta = false;
-
-export async function execute(interaction, ctx) {
-  const email = interaction.options.getString('email');
-  const name = interaction.options.getString('name');
-  const level = interaction.options.getString('level') ?? 'member';
-  const result = await ctx.seedService.seedPerson(
-    { email, displayName: name, level },
-    { caller: ctx.principal.person },
-  );
-  await interaction.reply({ content: renderSeedResult(result), flags: MessageFlags.Ephemeral });
-}
+      ],
+    },
+  ],
+  async handler({ options, principal, ctx }) {
+    const level = options.level ?? 'member';
+    const result = await ctx.seedService.seedPerson(
+      { email: options.email, displayName: options.name, level },
+      { caller: principal.person },
+    );
+    return renderSeedResult(result);
+  },
+});

@@ -19,8 +19,8 @@ function fakeInteraction(commandName) {
   };
 }
 
-function cmd(name, auth, execute) {
-  return { data: { name }, auth, execute };
+function cmd(name, auth, handler) {
+  return { name, auth, handler, options: [], subcommands: [] };
 }
 
 function ctxWith(getPersonByDiscordId) {
@@ -49,7 +49,7 @@ test('linked command runs for a linked user and receives the principal', async (
   const person = { id: 'p1', display_name: 'Alex' };
   let seen;
   const interaction = fakeInteraction('whoami');
-  const commands = new Map([['whoami', cmd('whoami', 'linked', async (i, ctx) => { seen = ctx.principal; })]]);
+  const commands = new Map([['whoami', cmd('whoami', 'linked', async (intent) => { seen = intent.principal; })]]);
   await dispatchInteraction(interaction, { commands, ...ctxWith(async () => person) });
   assert.deepEqual(seen, { person });
 });
@@ -123,9 +123,11 @@ test('auth-as-function is called with the interaction and its return is the poli
   const commands = new Map([[
     'team',
     {
-      data: { name: 'team' },
+      name: 'team',
       auth: (i) => { seenInteraction = i; return 'public'; },
-      execute: async () => { ran = true; },
+      handler: async () => { ran = true; },
+      options: [],
+      subcommands: [],
     },
   ]]);
   await dispatchInteraction(interaction, { commands, appContext: {} });
@@ -139,9 +141,11 @@ test('auth-as-function returning "admin" enforces admin', async () => {
   const commands = new Map([[
     'team',
     {
-      data: { name: 'team' },
+      name: 'team',
       auth: () => 'admin',
-      execute: async () => { ran = true; },
+      handler: async () => { ran = true; },
+      options: [],
+      subcommands: [],
     },
   ]]);
   const memberPerson = { id: 'p1', display_name: 'A', access_level: 'member' };
@@ -159,9 +163,11 @@ test('auth-as-function returning nullish falls back to linked (fail-secure)', as
   const commands = new Map([[
     'team',
     {
-      data: { name: 'team' },
+      name: 'team',
       auth: () => null,
-      execute: async () => { ran = true; },
+      handler: async () => { ran = true; },
+      options: [],
+      subcommands: [],
     },
   ]]);
   await dispatchInteraction(interaction, { commands, ...ctxWith(async () => null) });
