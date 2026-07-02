@@ -59,7 +59,7 @@ test('whoami replies with an ephemeral embed carrying person + identifiers', asy
   assert.equal(byName['Email'], 'alex@utmist.ca');
   assert.equal(byName['Access level'], 'admin');
   assert.equal(byName['Status'], 'Active');
-  assert.match(byName['Identities'], /discord: alex/);
+  assert.match(byName['Identities'], /discord: <@123>/);
 });
 
 test('whoami degrades gracefully when identifiers fetch fails', async () => {
