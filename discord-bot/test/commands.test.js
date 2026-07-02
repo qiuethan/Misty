@@ -70,9 +70,21 @@ test('whoami degrades gracefully when identifiers fetch fails', async () => {
     directory: { listIdentifiers: async () => { throw new DirectoryUnavailable('down'); } },
   };
   await whoami.execute(interaction, ctx);
+  assert.equal(interaction.replies[0].flags, MessageFlags.Ephemeral);
   const data = interaction.replies[0].embeds[0].data;
   const byName = Object.fromEntries(data.fields.map((f) => [f.name, f.value]));
   assert.equal(byName['Identities'], '_(unavailable)_');
+});
+
+test('whoami rethrows non-DirectoryUnavailable errors from listIdentifiers', async () => {
+  const person = { id: 'p1', display_name: 'Alex', primary_email: 'alex@utmist.ca', access_level: 'member', active: true };
+  const interaction = fakeInteraction();
+  const ctx = {
+    principal: { person },
+    directory: { listIdentifiers: async () => { throw new Error('boom'); } },
+  };
+  await assert.rejects(() => whoami.execute(interaction, ctx), /boom/);
+  assert.equal(interaction.replies.length, 0);
 });
 
 test('registry contains both commands keyed by name', () => {
