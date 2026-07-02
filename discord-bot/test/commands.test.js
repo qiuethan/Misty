@@ -5,6 +5,7 @@ import * as link from '../src/commands/link.js';
 import * as whoami from '../src/commands/whoami.js';
 import * as seed from '../src/commands/seed.js';
 import { commands, partitionCommands } from '../src/commands/index.js';
+import { DirectoryUnavailable } from '../src/directoryClient.js';
 
 function fakeInteraction({ email } = {}) {
   const replies = [];
