@@ -5,6 +5,9 @@ import {
   DirectoryUnavailable,
   AlreadyLinked,
   PersonExists,
+  TeamExists,
+  TeamNotFound,
+  MembershipInvalid,
 } from '../src/directoryClient.js';
 
 function fakeFetch(responses) {
@@ -122,4 +125,197 @@ test('createPerson throws DirectoryUnavailable on 500', async () => {
     () => client.createPerson({ displayName: 'A', primaryEmail: 'a@utmist.ca', accessLevel: 'member' }),
     DirectoryUnavailable,
   );
+});
+
+test('listTeams returns array on 200 and passes active_only', async () => {
+  const fetchImpl = fakeFetch([{ status: 200, body: [{ id: 't1', slug: 'ml', label: 'ML' }] }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  const teams = await client.listTeams({ activeOnly: true });
+  assert.equal(teams.length, 1);
+  assert.match(fetchImpl.calls[0].url, /\/teams\?active_only=true$/);
+});
+
+test('listTeams omits query string when activeOnly is false or undefined', async () => {
+  const fetchImpl = fakeFetch([{ status: 200, body: [] }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await client.listTeams();
+  assert.match(fetchImpl.calls[0].url, /\/teams$/);
+});
+
+test('listTeams throws DirectoryUnavailable on 500', async () => {
+  const fetchImpl = fakeFetch([{ status: 500, body: {} }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await assert.rejects(() => client.listTeams(), DirectoryUnavailable);
+});
+
+test('getTeamBySlug returns team on 200', async () => {
+  const fetchImpl = fakeFetch([{ status: 200, body: { id: 't1', slug: 'ml', label: 'ML' } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  const team = await client.getTeamBySlug('ml');
+  assert.equal(team.id, 't1');
+  assert.match(fetchImpl.calls[0].url, /\/teams\/by-slug\/ml$/);
+});
+
+test('getTeamBySlug returns null on 404', async () => {
+  const fetchImpl = fakeFetch([{ status: 404, body: {} }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  assert.equal(await client.getTeamBySlug('missing'), null);
+});
+
+test('getTeam returns team on 200 and null on 404', async () => {
+  const ok = fakeFetch([{ status: 200, body: { id: 't1', slug: 'ml', label: 'ML' } }]);
+  const okClient = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl: ok });
+  assert.equal((await okClient.getTeam('t1')).id, 't1');
+  assert.match(ok.calls[0].url, /\/teams\/t1$/);
+  const miss = fakeFetch([{ status: 404, body: {} }]);
+  const missClient = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl: miss });
+  assert.equal(await missClient.getTeam('t1'), null);
+});
+
+test('getPerson returns person on 200 and null on 404', async () => {
+  const ok = fakeFetch([{ status: 200, body: { id: 'p1', display_name: 'A' } }]);
+  const okClient = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl: ok });
+  assert.equal((await okClient.getPerson('p1')).display_name, 'A');
+  assert.match(ok.calls[0].url, /\/people\/p1$/);
+  const miss = fakeFetch([{ status: 404, body: {} }]);
+  const missClient = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl: miss });
+  assert.equal(await missClient.getPerson('p1'), null);
+});
+
+test('createTeam posts fields and returns body on 201', async () => {
+  const fetchImpl = fakeFetch([{ status: 201, body: { id: 't1', slug: 'ml', label: 'ML' } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  const team = await client.createTeam({ slug: 'ml', label: 'ML', description: 'Machine Learning' });
+  assert.equal(team.id, 't1');
+  const { url, opts } = fetchImpl.calls[0];
+  assert.match(url, /\/teams$/);
+  assert.equal(opts.method, 'POST');
+  const sent = JSON.parse(opts.body);
+  assert.equal(sent.slug, 'ml');
+  assert.equal(sent.label, 'ML');
+  assert.equal(sent.description, 'Machine Learning');
+});
+
+test('createTeam throws TeamExists on 409', async () => {
+  const fetchImpl = fakeFetch([{ status: 409, body: { detail: 'slug already exists' } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await assert.rejects(
+    () => client.createTeam({ slug: 'ml', label: 'ML' }),
+    (e) => e instanceof TeamExists && e.detail === 'slug already exists',
+  );
+});
+
+test('createTeam throws DirectoryUnavailable on 500', async () => {
+  const fetchImpl = fakeFetch([{ status: 500, body: {} }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await assert.rejects(
+    () => client.createTeam({ slug: 'ml', label: 'ML' }),
+    DirectoryUnavailable,
+  );
+});
+
+test('updateTeam patches and returns on 200', async () => {
+  const fetchImpl = fakeFetch([{ status: 200, body: { id: 't1', label: 'New Label' } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  const t = await client.updateTeam('t1', { label: 'New Label' });
+  assert.equal(t.label, 'New Label');
+  const { url, opts } = fetchImpl.calls[0];
+  assert.match(url, /\/teams\/t1$/);
+  assert.equal(opts.method, 'PATCH');
+  assert.deepEqual(JSON.parse(opts.body), { label: 'New Label' });
+});
+
+test('updateTeam throws TeamNotFound on 404', async () => {
+  const fetchImpl = fakeFetch([{ status: 404, body: { detail: 'team not found' } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await assert.rejects(
+    () => client.updateTeam('t1', { label: 'x' }),
+    (e) => e instanceof TeamNotFound,
+  );
+});
+
+test('updateTeam throws TeamExists on 409', async () => {
+  const fetchImpl = fakeFetch([{ status: 409, body: { detail: 'slug already exists' } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await assert.rejects(
+    () => client.updateTeam('t1', { slug: 'other' }),
+    (e) => e instanceof TeamExists,
+  );
+});
+
+test('createMembership posts fields and returns body on 201', async () => {
+  const fetchImpl = fakeFetch([{ status: 201, body: { id: 'm1', person_id: 'p1', team_id: 't1' } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  const m = await client.createMembership({
+    personId: 'p1', teamId: 't1', roleKindId: 'lead', isTeamAdmin: true,
+  });
+  assert.equal(m.id, 'm1');
+  const { url, opts } = fetchImpl.calls[0];
+  assert.match(url, /\/memberships$/);
+  assert.equal(opts.method, 'POST');
+  const sent = JSON.parse(opts.body);
+  assert.equal(sent.person_id, 'p1');
+  assert.equal(sent.team_id, 't1');
+  assert.equal(sent.role_kind_id, 'lead');
+  assert.equal(sent.is_team_admin, true);
+});
+
+test('createMembership omits optional fields when not provided', async () => {
+  const fetchImpl = fakeFetch([{ status: 201, body: { id: 'm1' } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await client.createMembership({ personId: 'p1', teamId: 't1' });
+  const sent = JSON.parse(fetchImpl.calls[0].opts.body);
+  assert.equal('role_kind_id' in sent, false);
+  assert.equal('is_team_admin' in sent, false);
+});
+
+test('createMembership throws MembershipInvalid on 400', async () => {
+  const fetchImpl = fakeFetch([{ status: 400, body: { detail: 'active membership already exists' } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await assert.rejects(
+    () => client.createMembership({ personId: 'p1', teamId: 't1' }),
+    (e) => e instanceof MembershipInvalid && e.detail === 'active membership already exists',
+  );
+});
+
+test('listMemberships builds query string from provided filters only', async () => {
+  const fetchImpl = fakeFetch([{ status: 200, body: [] }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await client.listMemberships({ teamId: 't1', personId: 'p1', activeOnly: true });
+  const url = fetchImpl.calls[0].url;
+  assert.match(url, /team_id=t1/);
+  assert.match(url, /person_id=p1/);
+  assert.match(url, /active_only=true/);
+});
+
+test('listMemberships with no filters hits base path', async () => {
+  const fetchImpl = fakeFetch([{ status: 200, body: [] }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await client.listMemberships();
+  assert.match(fetchImpl.calls[0].url, /\/memberships$/);
+});
+
+test('listMemberships passes as_of and is_team_admin', async () => {
+  const fetchImpl = fakeFetch([{ status: 200, body: [] }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await client.listMemberships({ asOf: '2026-07-01', isTeamAdmin: true });
+  assert.match(fetchImpl.calls[0].url, /as_of=2026-07-01/);
+  assert.match(fetchImpl.calls[0].url, /is_team_admin=true/);
+});
+
+test('endMembership posts ended_at and returns body on 200', async () => {
+  const fetchImpl = fakeFetch([{ status: 200, body: { id: 'm1', ended_at: '2026-07-01' } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  const m = await client.endMembership('m1', '2026-07-01');
+  assert.equal(m.ended_at, '2026-07-01');
+  const { url, opts } = fetchImpl.calls[0];
+  assert.match(url, /\/memberships\/m1\/end$/);
+  assert.equal(opts.method, 'POST');
+  assert.deepEqual(JSON.parse(opts.body), { ended_at: '2026-07-01' });
+});
+
+test('endMembership returns null on 404', async () => {
+  const fetchImpl = fakeFetch([{ status: 404, body: {} }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  assert.equal(await client.endMembership('m1', '2026-07-01'), null);
 });

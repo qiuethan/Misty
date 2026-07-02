@@ -13,6 +13,30 @@ async function parseJson(resp) {
   }
 }
 
+export class TeamExists extends Error {
+  constructor(detail) {
+    super(detail);
+    this.name = 'TeamExists';
+    this.detail = detail;
+  }
+}
+
+export class TeamNotFound extends Error {
+  constructor(detail) {
+    super(detail);
+    this.name = 'TeamNotFound';
+    this.detail = detail;
+  }
+}
+
+export class MembershipInvalid extends Error {
+  constructor(detail) {
+    super(detail);
+    this.name = 'MembershipInvalid';
+    this.detail = detail;
+  }
+}
+
 export class AlreadyLinked extends Error {
   constructor(detail) {
     super(detail);
@@ -83,6 +107,90 @@ export function createDirectoryClient({ baseUrl, apiKey, fetchImpl = fetch }) {
         const body = await resp.json().catch(() => ({}));
         throw new PersonExists(body.detail ?? 'person already exists');
       }
+      throw new DirectoryUnavailable(`directory returned ${resp.status}`);
+    },
+
+    async listTeams({ activeOnly } = {}) {
+      const qs = activeOnly ? '?active_only=true' : '';
+      const resp = await send(`/teams${qs}`);
+      if (!resp.ok) throw new DirectoryUnavailable(`directory returned ${resp.status}`);
+      return parseJson(resp);
+    },
+
+    getTeamBySlug(slug) {
+      return getByPath(`/teams/by-slug/${encodeURIComponent(slug)}`);
+    },
+
+    getTeam(teamId) {
+      return getByPath(`/teams/${encodeURIComponent(teamId)}`);
+    },
+
+    async createTeam({ slug, label, description }) {
+      const body = { slug, label };
+      if (description !== undefined) body.description = description;
+      const resp = await send('/teams', { method: 'POST', body: JSON.stringify(body) });
+      if (resp.status === 201) return parseJson(resp);
+      if (resp.status === 409) {
+        const body = await resp.json().catch(() => ({}));
+        throw new TeamExists(body.detail ?? 'team already exists');
+      }
+      throw new DirectoryUnavailable(`directory returned ${resp.status}`);
+    },
+
+    async updateTeam(teamId, patch) {
+      const resp = await send(`/teams/${encodeURIComponent(teamId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      });
+      if (resp.status === 200) return parseJson(resp);
+      if (resp.status === 404) {
+        const body = await resp.json().catch(() => ({}));
+        throw new TeamNotFound(body.detail ?? 'team not found');
+      }
+      if (resp.status === 409) {
+        const body = await resp.json().catch(() => ({}));
+        throw new TeamExists(body.detail ?? 'team already exists');
+      }
+      throw new DirectoryUnavailable(`directory returned ${resp.status}`);
+    },
+
+    getPerson(personId) {
+      return getByPath(`/people/${encodeURIComponent(personId)}`);
+    },
+
+    async createMembership({ personId, teamId, roleKindId, isTeamAdmin }) {
+      const payload = { person_id: personId, team_id: teamId };
+      if (roleKindId !== undefined) payload.role_kind_id = roleKindId;
+      if (isTeamAdmin !== undefined) payload.is_team_admin = isTeamAdmin;
+      const resp = await send('/memberships', { method: 'POST', body: JSON.stringify(payload) });
+      if (resp.status === 201) return parseJson(resp);
+      if (resp.status === 400) {
+        const body = await resp.json().catch(() => ({}));
+        throw new MembershipInvalid(body.detail ?? 'membership invalid');
+      }
+      throw new DirectoryUnavailable(`directory returned ${resp.status}`);
+    },
+
+    async listMemberships({ teamId, personId, activeOnly, asOf, isTeamAdmin } = {}) {
+      const qs = new URLSearchParams();
+      if (teamId) qs.set('team_id', teamId);
+      if (personId) qs.set('person_id', personId);
+      if (activeOnly) qs.set('active_only', 'true');
+      if (asOf) qs.set('as_of', asOf);
+      if (isTeamAdmin !== undefined) qs.set('is_team_admin', String(isTeamAdmin));
+      const qstr = qs.toString();
+      const resp = await send(qstr ? `/memberships?${qstr}` : '/memberships');
+      if (!resp.ok) throw new DirectoryUnavailable(`directory returned ${resp.status}`);
+      return parseJson(resp);
+    },
+
+    async endMembership(membershipId, endedAt) {
+      const resp = await send(`/memberships/${encodeURIComponent(membershipId)}/end`, {
+        method: 'POST',
+        body: JSON.stringify({ ended_at: endedAt }),
+      });
+      if (resp.status === 200) return parseJson(resp);
+      if (resp.status === 404) return null;
       throw new DirectoryUnavailable(`directory returned ${resp.status}`);
     },
   };
