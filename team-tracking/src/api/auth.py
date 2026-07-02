@@ -12,6 +12,7 @@ Read-only endpoints may depend on `require_scope("<domain>:read")` OR on
 """
 
 import logging
+import json
 import secrets
 from dataclasses import dataclass
 
@@ -62,8 +63,14 @@ def _enforce_dev_scope_environment(authed: "AuthedKey") -> None:
     if get_settings().tt_env != _PROD_ENV:
         return
     _audit_logger.warning(
-        "dev:spoof key rejected: TT_ENV=production (key=%s)",
-        authed.name,
+        json.dumps(
+            {
+                "event": "dev_spoof_key_rejected",
+                "scope": DEV_SPOOF_SCOPE,
+                "tt_env": _PROD_ENV,
+                "key_name": authed.name,
+            }
+        )
     )
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
