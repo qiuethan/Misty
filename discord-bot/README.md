@@ -39,6 +39,9 @@ and skips them.
   `src/linkService.js`.
 - `/whoami` (linked) — shows which directory record you're linked to. Requires you
   to be linked; the auth layer handles the "not linked" case.
+- `/seed email:<> name:<> [level:member|admin|superuser]` (admin) — add a member to
+  the directory. Gated to admins; you can only grant a level at or below your own
+  (`superuser` > `admin` > `member`). The bot's directory key needs `people:write`.
 
 ## Auth layer
 

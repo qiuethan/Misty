@@ -28,3 +28,16 @@ export function renderLinkResult(result) {
 export function renderWhoami(person) {
   return `You're identified as **${person.display_name}**.`;
 }
+
+export function renderSeedResult(result) {
+  switch (result.outcome) {
+    case 'SEEDED':
+      return `✅ Added **${result.person.display_name}** (${result.person.primary_email}) as ${result.person.access_level}. They can now \`/link\`.`;
+    case 'EXISTS':
+      return `That email is already in the directory: ${result.detail}`;
+    case 'DIRECTORY_DOWN':
+      return 'The directory is temporarily unavailable. Please try again shortly.';
+    default:
+      return 'Something went wrong. Please try again.';
+  }
+}
