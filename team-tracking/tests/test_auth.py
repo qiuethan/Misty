@@ -194,3 +194,23 @@ def test_dev_spoof_rejection_logs_warning(client, adapter, prod_env, caplog):
         "dev:spoof" in rec.message and "production" in rec.message
         for rec in caplog.records
     )
+
+
+def test_dev_spoof_rejection_warning_is_valid_json(client, adapter, prod_env, caplog):
+    """The audit stream is JSON per line — the rejection warning must fit that shape
+    so downstream log aggregators (Loki/CloudWatch/etc.) can parse it uniformly."""
+    import json
+
+    plaintext = _issue_key_with_scopes(
+        adapter, "some-playground-key", ["dev:spoof"]
+    )
+    with caplog.at_level(logging.WARNING, logger="team_tracking.audit"):
+        client.get("/role_kinds", headers={"X-API-Key": plaintext})
+
+    warnings = [rec for rec in caplog.records if rec.levelname == "WARNING"]
+    assert warnings, "expected a WARNING record"
+    parsed = json.loads(warnings[0].message)
+    assert parsed["event"] == "dev_spoof_key_rejected"
+    assert parsed["scope"] == "dev:spoof"
+    assert parsed["tt_env"] == "production"
+    assert parsed["key_name"] == "some-playground-key"
