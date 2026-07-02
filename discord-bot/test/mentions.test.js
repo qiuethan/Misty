@@ -34,3 +34,8 @@ test('hydrateMentions leaves text without mentions unchanged (escaped)', () => {
   const html = hydrateMentions('plain text', peopleMap);
   assert.equal(html, 'plain text');
 });
+
+test('hydrateMentions handles null/undefined text without throwing', () => {
+  assert.equal(hydrateMentions(null, peopleMap), '');
+  assert.equal(hydrateMentions(undefined, peopleMap), '');
+});

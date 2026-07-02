@@ -33,11 +33,17 @@ export async function buildServer({ commands, appContext, onReset }) {
     const people = await appContext.directory.listPeople();
     const results = [];
     for (const p of people) {
-      const identifiers = await appContext.directory.listIdentifiers(p.id);
-      const discord = identifiers.find((i) => i.provider === 'discord');
+      let discord_id = null;
+      try {
+        const identifiers = await appContext.directory.listIdentifiers(p.id);
+        const discord = identifiers.find((i) => i.provider === 'discord');
+        if (discord) discord_id = discord.external_id;
+      } catch (e) {
+        console.warn(`/api/people: failed to fetch identifiers for ${p.id}:`, e.message);
+      }
       results.push({
         id: p.id,
-        discord_id: discord ? discord.external_id : null,
+        discord_id,
         display_name: p.display_name,
       });
     }

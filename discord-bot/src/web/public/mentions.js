@@ -11,10 +11,11 @@ function escapeHtml(s) {
 
 export function hydrateMentions(text, peopleMap) {
   // Split on mentions so we can escape non-mention text but emit real HTML for mentions.
+  const s = String(text ?? '');
   const parts = [];
   let last = 0;
-  for (const m of String(text).matchAll(MENTION_RE)) {
-    parts.push(escapeHtml(text.slice(last, m.index)));
+  for (const m of s.matchAll(MENTION_RE)) {
+    parts.push(escapeHtml(s.slice(last, m.index)));
     const id = m[1];
     const name = peopleMap.get(id);
     if (name) {
@@ -24,6 +25,6 @@ export function hydrateMentions(text, peopleMap) {
     }
     last = m.index + m[0].length;
   }
-  parts.push(escapeHtml(text.slice(last)));
+  parts.push(escapeHtml(s.slice(last)));
   return parts.join('');
 }

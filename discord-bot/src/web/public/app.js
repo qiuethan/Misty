@@ -160,36 +160,37 @@ function renderForm(cmd) {
 }
 
 function renderInput(o) {
+  let el;
   if (o.choices) {
     const sel = document.createElement('select');
     sel.name = o.name;
     if (!o.required) sel.appendChild(new Option('', ''));
     for (const c of o.choices) sel.appendChild(new Option(c.name, c.value));
-    return sel;
-  }
-  if (o.type === 'boolean') {
+    el = sel;
+  } else if (o.type === 'boolean') {
     const sel = document.createElement('select');
     sel.name = o.name;
     sel.appendChild(new Option('(unset)', ''));
     sel.appendChild(new Option('true', 'true'));
     sel.appendChild(new Option('false', 'false'));
-    return sel;
-  }
-  if (o.type === 'user') {
+    el = sel;
+  } else if (o.type === 'user') {
     const input = document.createElement('input');
     input.type = 'text';
     input.name = o.name;
     input.setAttribute('list', 'people-list');
     input.placeholder = 'Type or pick a Discord ID';
     input.autocomplete = 'off';
-    return input;
+    el = input;
+  } else {
+    // string, or unknown → text input
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.name = o.name;
+    el = input;
   }
-  // string, or unknown → text input
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.name = o.name;
-  if (o.required) input.required = true;
-  return input;
+  if (o.required) el.required = true;
+  return el;
 }
 
 async function submitForm(cmd, form) {
