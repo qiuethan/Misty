@@ -56,6 +56,13 @@ export function createDirectoryClient({ baseUrl, apiKey, fetchImpl = fetch }) {
       return getByPath(`/people/by-identifier/discord/${encodeURIComponent(snowflake)}`);
     },
 
+    async listIdentifiers(personId) {
+      const resp = await send(`/people/${encodeURIComponent(personId)}/identifiers`);
+      if (resp.status === 404) return [];
+      if (!resp.ok) throw new DirectoryUnavailable(`directory returned ${resp.status}`);
+      return parseJson(resp);
+    },
+
     async linkDiscord(personId, { externalId, handle }) {
       const resp = await send(`/people/${encodeURIComponent(personId)}/identifiers`, {
         method: 'POST',

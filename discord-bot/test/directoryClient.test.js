@@ -123,3 +123,35 @@ test('createPerson throws DirectoryUnavailable on 500', async () => {
     DirectoryUnavailable,
   );
 });
+
+test('listIdentifiers returns array on 200 and uses X-API-Key', async () => {
+  const rows = [
+    { provider: 'discord', external_id: '123', handle: 'alex' },
+    { provider: 'github', external_id: '9876', handle: 'eeetan' },
+  ];
+  const fetchImpl = fakeFetch([{ status: 200, body: rows }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  const result = await client.listIdentifiers('p1');
+  assert.deepEqual(result, rows);
+  const { url, opts } = fetchImpl.calls[0];
+  assert.match(url, /\/people\/p1\/identifiers$/);
+  assert.equal(opts.headers['X-API-Key'], 'k');
+});
+
+test('listIdentifiers returns [] on 404 (defensive)', async () => {
+  const fetchImpl = fakeFetch([{ status: 404, body: {} }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  assert.deepEqual(await client.listIdentifiers('p1'), []);
+});
+
+test('listIdentifiers throws DirectoryUnavailable on 500', async () => {
+  const fetchImpl = fakeFetch([{ status: 500, body: {} }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await assert.rejects(() => client.listIdentifiers('p1'), DirectoryUnavailable);
+});
+
+test('listIdentifiers network error becomes DirectoryUnavailable', async () => {
+  const fetchImpl = async () => { throw new Error('econnrefused'); };
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await assert.rejects(() => client.listIdentifiers('p1'), DirectoryUnavailable);
+});

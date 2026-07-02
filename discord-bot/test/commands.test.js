@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MessageFlags } from 'discord.js';
+import { MessageFlags, EmbedBuilder } from 'discord.js';
 import * as link from '../src/commands/link.js';
 import * as whoami from '../src/commands/whoami.js';
 import * as seed from '../src/commands/seed.js';
@@ -35,12 +35,56 @@ test('link is public and links via linkService', async () => {
   assert.match(interaction.replies[0].content, /Alex/);
 });
 
-test('whoami is linked-gated and renders the principal person', async () => {
+test('whoami is linked-gated and stable', () => {
   assert.equal(whoami.auth, 'linked');
+  assert.equal(whoami.beta, false);
+});
+
+test('whoami replies with an ephemeral embed carrying person + identifiers', async () => {
+  const person = { id: 'p1', display_name: 'Alex', primary_email: 'alex@utmist.ca', access_level: 'admin', active: true };
+  const identifiers = [{ provider: 'discord', external_id: '123', handle: 'alex' }];
   const interaction = fakeInteraction();
-  await whoami.execute(interaction, { principal: { person: { display_name: 'Alex' } } });
-  assert.match(interaction.replies[0].content, /Alex/);
+  const ctx = {
+    principal: { person },
+    directory: { listIdentifiers: async (id) => { assert.equal(id, 'p1'); return identifiers; } },
+  };
+  await whoami.execute(interaction, ctx);
+  const reply = interaction.replies[0];
+  assert.equal(reply.flags, MessageFlags.Ephemeral);
+  assert.equal(reply.embeds.length, 1);
+  assert.ok(reply.embeds[0] instanceof EmbedBuilder);
+  const data = reply.embeds[0].data;
+  assert.equal(data.title, 'Alex');
+  const byName = Object.fromEntries(data.fields.map((f) => [f.name, f.value]));
+  assert.equal(byName['Email'], 'alex@utmist.ca');
+  assert.equal(byName['Access level'], 'admin');
+  assert.equal(byName['Status'], 'Active');
+  assert.match(byName['Identities'], /discord: alex/);
+});
+
+test('whoami degrades gracefully when identifiers fetch fails', async () => {
+  const person = { id: 'p1', display_name: 'Alex', primary_email: 'alex@utmist.ca', access_level: 'member', active: true };
+  const interaction = fakeInteraction();
+  const ctx = {
+    principal: { person },
+    directory: { listIdentifiers: async () => { throw new DirectoryUnavailable('down'); } },
+  };
+  await whoami.execute(interaction, ctx);
   assert.equal(interaction.replies[0].flags, MessageFlags.Ephemeral);
+  const data = interaction.replies[0].embeds[0].data;
+  const byName = Object.fromEntries(data.fields.map((f) => [f.name, f.value]));
+  assert.equal(byName['Identities'], '_(unavailable)_');
+});
+
+test('whoami rethrows non-DirectoryUnavailable errors from listIdentifiers', async () => {
+  const person = { id: 'p1', display_name: 'Alex', primary_email: 'alex@utmist.ca', access_level: 'member', active: true };
+  const interaction = fakeInteraction();
+  const ctx = {
+    principal: { person },
+    directory: { listIdentifiers: async () => { throw new Error('boom'); } },
+  };
+  await assert.rejects(() => whoami.execute(interaction, ctx), /boom/);
+  assert.equal(interaction.replies.length, 0);
 });
 
 test('registry contains both commands keyed by name', () => {

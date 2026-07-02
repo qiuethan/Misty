@@ -25,8 +25,25 @@ export function renderLinkResult(result) {
   }
 }
 
-export function renderWhoami(person) {
-  return `You're identified as **${person.display_name}**.`;
+export function buildWhoamiEmbed(person, identifiers) {
+  return {
+    title: person.display_name,
+    fields: [
+      { name: 'Email', value: person.primary_email },
+      { name: 'Access level', value: person.access_level },
+      { name: 'Status', value: person.active ? 'Active' : 'Inactive' },
+      { name: 'Identities', value: formatIdentities(identifiers) },
+    ],
+  };
+}
+
+function formatIdentities(identifiers) {
+  if (identifiers === null) return '_(unavailable)_';
+  if (identifiers.length === 0) return '_(none)_';
+  const sorted = [...identifiers].sort((a, b) => a.provider.localeCompare(b.provider));
+  return sorted
+    .map((i) => (i.handle ? `${i.provider}: ${i.handle} (${i.external_id})` : `${i.provider}: ${i.external_id}`))
+    .join('\n');
 }
 
 export function renderSeedResult(result) {
