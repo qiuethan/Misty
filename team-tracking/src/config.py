@@ -10,6 +10,7 @@ class Settings(BaseSettings):
         "postgresql+psycopg://team_tracking:dev_password@localhost:5433/team_tracking"
     )
     api_key: str = "dev-api-key-change-me"
+    tt_env: str = "local"
 
 
 @lru_cache(maxsize=1)
