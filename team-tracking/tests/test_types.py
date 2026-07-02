@@ -199,3 +199,26 @@ def test_identifier_create_rejects_extra_fields():
 
     with pytest.raises(ValidationError):
         PersonIdentifierCreate(provider="discord", external_id="1", person_id=uuid4())
+
+
+def test_person_create_defaults_access_level_member():
+    from contracts.types import PersonCreate
+
+    p = PersonCreate(display_name="A", primary_email="a@utmist.ca")
+    assert p.access_level == "member"
+
+
+def test_person_create_accepts_valid_access_level():
+    from contracts.types import PersonCreate
+
+    p = PersonCreate(display_name="A", primary_email="a@utmist.ca", access_level="superuser")
+    assert p.access_level == "superuser"
+
+
+def test_person_create_rejects_unknown_access_level():
+    import pytest
+    from pydantic import ValidationError
+    from contracts.types import PersonCreate
+
+    with pytest.raises(ValidationError):
+        PersonCreate(display_name="A", primary_email="a@utmist.ca", access_level="root")

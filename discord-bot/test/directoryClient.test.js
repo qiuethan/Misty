@@ -4,6 +4,7 @@ import {
   createDirectoryClient,
   DirectoryUnavailable,
   AlreadyLinked,
+  PersonExists,
 } from '../src/directoryClient.js';
 
 function fakeFetch(responses) {
@@ -89,4 +90,36 @@ test('network error becomes DirectoryUnavailable', async () => {
   const fetchImpl = async () => { throw new Error('econnrefused'); };
   const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
   await assert.rejects(() => client.getPersonByEmail('x@utmist.ca'), DirectoryUnavailable);
+});
+
+test('createPerson posts fields and returns body on 201', async () => {
+  const fetchImpl = fakeFetch([{ status: 201, body: { id: 'p1', display_name: 'A', access_level: 'admin' } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  const person = await client.createPerson({ displayName: 'A', primaryEmail: 'a@utmist.ca', accessLevel: 'admin' });
+  assert.equal(person.id, 'p1');
+  const { url, opts } = fetchImpl.calls[0];
+  assert.match(url, /\/people$/);
+  assert.equal(opts.method, 'POST');
+  const sent = JSON.parse(opts.body);
+  assert.equal(sent.display_name, 'A');
+  assert.equal(sent.primary_email, 'a@utmist.ca');
+  assert.equal(sent.access_level, 'admin');
+});
+
+test('createPerson throws PersonExists on 409', async () => {
+  const fetchImpl = fakeFetch([{ status: 409, body: { detail: 'primary_email already exists' } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await assert.rejects(
+    () => client.createPerson({ displayName: 'A', primaryEmail: 'a@utmist.ca', accessLevel: 'member' }),
+    (e) => e instanceof PersonExists && e.detail === 'primary_email already exists',
+  );
+});
+
+test('createPerson throws DirectoryUnavailable on 500', async () => {
+  const fetchImpl = fakeFetch([{ status: 500, body: {} }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await assert.rejects(
+    () => client.createPerson({ displayName: 'A', primaryEmail: 'a@utmist.ca', accessLevel: 'member' }),
+    DirectoryUnavailable,
+  );
 });

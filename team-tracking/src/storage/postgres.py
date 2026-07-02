@@ -43,6 +43,7 @@ def _person_row_to_model(row) -> Person:
         display_name=row.display_name,
         primary_email=row.primary_email,
         active=row.active,
+        access_level=row.access_level,
         created_at=row.created_at,
         updated_at=row.updated_at,
         created_by=row.created_by,
@@ -157,6 +158,7 @@ class PostgresStorageAdapter:
                     .values(
                         display_name=payload.display_name,
                         primary_email=payload.primary_email,
+                        access_level=payload.access_level,
                         created_by=actor,
                         updated_by=actor,
                     )

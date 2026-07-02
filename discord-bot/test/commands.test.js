@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { MessageFlags } from 'discord.js';
 import * as link from '../src/commands/link.js';
 import * as whoami from '../src/commands/whoami.js';
+import * as seed from '../src/commands/seed.js';
+import { PersonExists, DirectoryUnavailable } from '../src/directoryClient.js';
 import { commands, partitionCommands } from '../src/commands/index.js';
 
 function fakeInteraction({ email } = {}) {
@@ -61,4 +63,76 @@ test('current commands are all stable (registered globally, none beta-exclusive)
   assert.equal(stable.length, commands.size);
   assert.equal(link.beta, false);
   assert.equal(whoami.beta, false);
+});
+
+function seedInteraction({ email, name, level } = {}) {
+  const replies = [];
+  return {
+    user: { id: '123', username: 'admin' },
+    options: { getString: (k) => ({ email, name, level }[k]) },
+    reply: async (payload) => { replies.push(payload); },
+    replies,
+  };
+}
+
+const adminCtx = (directory) => ({ principal: { person: { access_level: 'admin' } }, directory });
+
+test('seed is admin-gated and stable', () => {
+  assert.equal(seed.auth, 'admin');
+  assert.equal(seed.beta, false);
+});
+
+test('seed creates a member and replies ephemerally', async () => {
+  const interaction = seedInteraction({ email: 'new@utmist.ca', name: 'New Person' });
+  const directory = {
+    createPerson: async (args) => {
+      assert.equal(args.primaryEmail, 'new@utmist.ca');
+      assert.equal(args.accessLevel, 'member');
+      return { display_name: 'New Person', primary_email: 'new@utmist.ca', access_level: 'member' };
+    },
+  };
+  await seed.execute(interaction, adminCtx(directory));
+  assert.equal(interaction.replies[0].flags, MessageFlags.Ephemeral);
+  assert.match(interaction.replies[0].content, /New Person/);
+});
+
+test('escalation guard: admin cannot grant superuser, and no create is attempted', async () => {
+  let called = false;
+  const interaction = seedInteraction({ email: 'x@utmist.ca', name: 'X', level: 'superuser' });
+  const directory = { createPerson: async () => { called = true; return {}; } };
+  await seed.execute(interaction, adminCtx(directory));
+  assert.equal(called, false);
+  assert.match(interaction.replies[0].content, /at or below your own/i);
+});
+
+test('seed surfaces PersonExists', async () => {
+  const interaction = seedInteraction({ email: 'dup@utmist.ca', name: 'Dup' });
+  const directory = { createPerson: async () => { throw new PersonExists('primary_email already exists'); } };
+  await seed.execute(interaction, adminCtx(directory));
+  assert.match(interaction.replies[0].content, /already/i);
+});
+
+test('seed surfaces directory outage', async () => {
+  const interaction = seedInteraction({ email: 'd@utmist.ca', name: 'D' });
+  const directory = { createPerson: async () => { throw new DirectoryUnavailable('down'); } };
+  await seed.execute(interaction, adminCtx(directory));
+  assert.match(interaction.replies[0].content, /unavailable|try again/i);
+});
+
+test('registry includes seed', () => {
+  assert.equal(commands.get('seed'), seed);
+});
+
+test('admin can grant admin (equal rank is allowed)', async () => {
+  const interaction = seedInteraction({ email: 'a@utmist.ca', name: 'A', level: 'admin' });
+  let called = false;
+  const directory = {
+    createPerson: async () => {
+      called = true;
+      return { display_name: 'A', primary_email: 'a@utmist.ca', access_level: 'admin' };
+    },
+  };
+  await seed.execute(interaction, adminCtx(directory));
+  assert.equal(called, true);
+  assert.match(interaction.replies[0].content, /A/);
 });

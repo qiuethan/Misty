@@ -1,5 +1,6 @@
 import * as link from './link.js';
 import * as whoami from './whoami.js';
+import * as seed from './seed.js';
 
 // Single source of truth for the command set: consumed by the router (dispatch)
 // and by registerCommands.js (Discord registration). Add a command = one import
@@ -7,6 +8,7 @@ import * as whoami from './whoami.js';
 export const commands = new Map([
   [link.data.name, link],
   [whoami.data.name, whoami],
+  [seed.data.name, seed],
 ]);
 
 // Split a command list into release channels for registration:

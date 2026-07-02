@@ -167,3 +167,47 @@ def test_get_person_by_email_is_case_insensitive(client):
 def test_get_person_by_email_requires_api_key(client):
     resp = client.get("/people/by-email/alex@utmist.ca")
     assert resp.status_code == 401
+
+
+def test_create_person_default_access_level(client):
+    resp = client.post(
+        "/people",
+        json={"display_name": "A", "primary_email": "a@utmist.ca"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 201
+    assert resp.json()["access_level"] == "member"
+
+
+def test_create_person_with_access_level(client):
+    resp = client.post(
+        "/people",
+        json={"display_name": "B", "primary_email": "b@utmist.ca", "access_level": "superuser"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 201
+    assert resp.json()["access_level"] == "superuser"
+
+
+def test_patch_person_access_level(client):
+    created = client.post(
+        "/people",
+        json={"display_name": "C", "primary_email": "c@utmist.ca"},
+        headers=AUTH,
+    ).json()
+    resp = client.patch(
+        f"/people/{created['id']}",
+        json={"access_level": "admin"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["access_level"] == "admin"
+
+
+def test_create_person_rejects_unknown_access_level(client):
+    resp = client.post(
+        "/people",
+        json={"display_name": "D", "primary_email": "d@utmist.ca", "access_level": "root"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 422

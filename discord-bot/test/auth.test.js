@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolvePrincipal } from '../src/auth/principal.js';
-import { authorize } from '../src/auth/policy.js';
+import { authorize, rankOf, ACCESS_RANK } from '../src/auth/policy.js';
 import { DirectoryUnavailable } from '../src/directoryClient.js';
 
 test('resolvePrincipal returns { person } when linked', async () => {
@@ -34,4 +34,29 @@ test('authorize linked requires a principal', () => {
 
 test('authorize denies unknown policy (fail closed)', () => {
   assert.deepEqual(authorize('superadmin', { person: {} }), { ok: false, reason: 'unknown_policy' });
+});
+
+const principal = (level) => ({ person: { access_level: level } });
+
+test('rankOf orders levels and defaults unknown to 0', () => {
+  assert.equal(rankOf('member'), 0);
+  assert.equal(rankOf('admin'), 1);
+  assert.equal(rankOf('superuser'), 2);
+  assert.equal(rankOf(undefined), 0);
+  assert.equal(ACCESS_RANK.superuser, 2);
+});
+
+test('admin policy: member denied, admin ok, superuser ok', () => {
+  assert.deepEqual(authorize('admin', principal('member')), { ok: false, reason: 'forbidden' });
+  assert.deepEqual(authorize('admin', principal('admin')), { ok: true });
+  assert.deepEqual(authorize('admin', principal('superuser')), { ok: true });
+});
+
+test('superuser policy: admin denied, superuser ok', () => {
+  assert.deepEqual(authorize('superuser', principal('admin')), { ok: false, reason: 'forbidden' });
+  assert.deepEqual(authorize('superuser', principal('superuser')), { ok: true });
+});
+
+test('admin policy without a principal is not_linked', () => {
+  assert.deepEqual(authorize('admin', null), { ok: false, reason: 'not_linked' });
 });

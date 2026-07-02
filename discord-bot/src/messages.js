@@ -4,7 +4,9 @@ export const authMessages = {
   denied: (reason) =>
     reason === 'not_linked'
       ? 'You need to link your account first. Run `/link` to identify yourself, then try again.'
-      : "You're not allowed to do that.",
+      : reason === 'forbidden'
+        ? "You don't have permission to do that."
+        : "You're not allowed to do that.",
   internalError: () => 'Something went wrong. Please try again.',
 };
 
@@ -25,4 +27,17 @@ export function renderLinkResult(result) {
 
 export function renderWhoami(person) {
   return `You're identified as **${person.display_name}**.`;
+}
+
+export function renderSeedResult(result) {
+  switch (result.outcome) {
+    case 'SEEDED':
+      return `✅ Added **${result.person.display_name}** (${result.person.primary_email}) as ${result.person.access_level}. They can now \`/link\`.`;
+    case 'EXISTS':
+      return `That email is already in the directory: ${result.detail}`;
+    case 'DIRECTORY_DOWN':
+      return 'The directory is temporarily unavailable. Please try again shortly.';
+    default:
+      return 'Something went wrong. Please try again.';
+  }
 }

@@ -57,6 +57,7 @@ class InMemoryStorageAdapter:
             display_name=payload.display_name,
             primary_email=email,
             active=True,
+            access_level=payload.access_level,
             created_at=now,
             updated_at=now,
             created_by=actor,
