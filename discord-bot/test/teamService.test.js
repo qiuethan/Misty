@@ -318,3 +318,141 @@ test('removeMember returns DIRECTORY_DOWN on outage during team lookup', async (
   );
   assert.equal(res.outcome, 'DIRECTORY_DOWN');
 });
+
+test('getRoster returns TEAM_NOT_FOUND when slug does not resolve', async () => {
+  const svc = createTeamService({
+    directory: mkDir({ getTeamBySlug: async () => null }),
+  });
+  const res = await svc.getRoster({ teamSlug: 'missing' }, { caller: admin });
+  assert.equal(res.outcome, 'TEAM_NOT_FOUND');
+});
+
+test('getRoster returns ROSTER with resolved persons using injected now() as as_of', async () => {
+  const team = { id: 't1', slug: 'ml', label: 'ML' };
+  const memberships = [
+    { id: 'm1', person_id: 'p1', team_id: 't1', role_kind_id: 'lead', is_team_admin: true },
+    { id: 'm2', person_id: 'p2', team_id: 't1', role_kind_id: 'member', is_team_admin: false },
+  ];
+  const people = {
+    p1: { id: 'p1', display_name: 'One' },
+    p2: { id: 'p2', display_name: 'Two' },
+  };
+  let listedWith = null;
+  const svc = createTeamService({
+    directory: {
+      ...mkDir(),
+      getTeamBySlug: async () => team,
+      listMemberships: async (args) => { listedWith = args; return memberships; },
+      getPerson: async (id) => people[id] ?? null,
+    },
+    now: () => '2026-07-01',
+  });
+  const res = await svc.getRoster({ teamSlug: 'ml' }, { caller: admin });
+  assert.equal(res.outcome, 'ROSTER');
+  assert.equal(res.team, team);
+  assert.equal(res.members.length, 2);
+  assert.equal(res.members[0].person.display_name, 'One');
+  assert.equal(res.members[0].role_kind_id, 'lead');
+  assert.equal(res.members[0].is_team_admin, true);
+  assert.deepEqual(listedWith, {
+    teamId: 't1', activeOnly: true, asOf: '2026-07-01',
+  });
+});
+
+test('getRoster uses explicit asOf when provided', async () => {
+  let listedWith = null;
+  const svc = createTeamService({
+    directory: {
+      ...mkDir(),
+      getTeamBySlug: async () => ({ id: 't1' }),
+      listMemberships: async (args) => { listedWith = args; return []; },
+    },
+    now: () => 'IGNORED',
+  });
+  await svc.getRoster({ teamSlug: 'ml', asOf: '2026-01-01' }, { caller: admin });
+  assert.equal(listedWith.asOf, '2026-01-01');
+});
+
+test('getRoster filters out memberships whose person cannot be resolved', async () => {
+  const team = { id: 't1', slug: 'ml', label: 'ML' };
+  const svc = createTeamService({
+    directory: {
+      ...mkDir(),
+      getTeamBySlug: async () => team,
+      listMemberships: async () => [
+        { id: 'm1', person_id: 'p1', team_id: 't1', role_kind_id: 'member', is_team_admin: false },
+        { id: 'm2', person_id: 'p2', team_id: 't1', role_kind_id: 'member', is_team_admin: false },
+      ],
+      getPerson: async (id) => (id === 'p1' ? { id: 'p1', display_name: 'One' } : null),
+    },
+  });
+  const res = await svc.getRoster({ teamSlug: 'ml' }, { caller: admin });
+  assert.equal(res.members.length, 1);
+  assert.equal(res.members[0].person.id, 'p1');
+});
+
+test('getRoster returns DIRECTORY_DOWN on outage', async () => {
+  const svc = createTeamService({
+    directory: {
+      ...mkDir(),
+      getTeamBySlug: async () => { throw new DirectoryUnavailable('down'); },
+    },
+  });
+  const res = await svc.getRoster({ teamSlug: 'ml' }, { caller: admin });
+  assert.equal(res.outcome, 'DIRECTORY_DOWN');
+});
+
+test('getMyTeams returns MY_TEAMS with resolved team records', async () => {
+  const memberships = [
+    { id: 'm1', person_id: 'p1', team_id: 't1', role_kind_id: 'lead', is_team_admin: true },
+    { id: 'm2', person_id: 'p1', team_id: 't2', role_kind_id: 'member', is_team_admin: false },
+  ];
+  const teams = {
+    t1: { id: 't1', slug: 'ml', label: 'ML' },
+    t2: { id: 't2', slug: 'ops', label: 'Ops' },
+  };
+  const svc = createTeamService({
+    directory: {
+      ...mkDir(),
+      listMemberships: async (args) => {
+        assert.equal(args.personId, 'p1');
+        assert.equal(args.activeOnly, true);
+        return memberships;
+      },
+      getTeam: async (id) => teams[id] ?? null,
+    },
+  });
+  const res = await svc.getMyTeams({ personId: 'p1' }, { caller: admin });
+  assert.equal(res.outcome, 'MY_TEAMS');
+  assert.equal(res.memberships.length, 2);
+  assert.equal(res.memberships[0].team.slug, 'ml');
+  assert.equal(res.memberships[0].role_kind_id, 'lead');
+  assert.equal(res.memberships[0].is_team_admin, true);
+});
+
+test('getMyTeams filters out memberships whose team cannot be resolved', async () => {
+  const svc = createTeamService({
+    directory: {
+      ...mkDir(),
+      listMemberships: async () => [
+        { id: 'm1', person_id: 'p1', team_id: 't1', role_kind_id: 'member', is_team_admin: false },
+        { id: 'm2', person_id: 'p1', team_id: 't2', role_kind_id: 'member', is_team_admin: false },
+      ],
+      getTeam: async (id) => (id === 't1' ? { id: 't1', slug: 'ml', label: 'ML' } : null),
+    },
+  });
+  const res = await svc.getMyTeams({ personId: 'p1' }, { caller: admin });
+  assert.equal(res.memberships.length, 1);
+  assert.equal(res.memberships[0].team.id, 't1');
+});
+
+test('getMyTeams returns DIRECTORY_DOWN on outage', async () => {
+  const svc = createTeamService({
+    directory: {
+      ...mkDir(),
+      listMemberships: async () => { throw new DirectoryUnavailable('down'); },
+    },
+  });
+  const res = await svc.getMyTeams({ personId: 'p1' }, { caller: admin });
+  assert.equal(res.outcome, 'DIRECTORY_DOWN');
+});

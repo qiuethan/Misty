@@ -99,5 +99,64 @@ export function createTeamService({ directory, now = isoDateToday } = {}) {
     }
   }
 
-  return { createTeam, listTeams, renameTeam, addMember, removeMember, _now: now };
+  async function getRoster({ teamSlug, asOf }, _opts) {
+    try {
+      const team = await directory.getTeamBySlug(teamSlug);
+      if (!team) return { outcome: 'TEAM_NOT_FOUND' };
+      const memberships = await directory.listMemberships({
+        teamId: team.id,
+        activeOnly: true,
+        asOf: asOf ?? now(),
+      });
+      const persons = await Promise.all(
+        memberships.map((m) => directory.getPerson(m.person_id)),
+      );
+      const members = memberships
+        .map((m, i) => ({
+          person: persons[i],
+          role_kind_id: m.role_kind_id,
+          is_team_admin: m.is_team_admin,
+        }))
+        .filter((r) => r.person !== null && r.person !== undefined);
+      return { outcome: 'ROSTER', team, members };
+    } catch (e) {
+      if (e instanceof DirectoryUnavailable) return { outcome: 'DIRECTORY_DOWN' };
+      throw e;
+    }
+  }
+
+  async function getMyTeams({ personId }, _opts) {
+    try {
+      const memberships = await directory.listMemberships({
+        personId,
+        activeOnly: true,
+      });
+      const teams = await Promise.all(
+        memberships.map((m) => directory.getTeam(m.team_id)),
+      );
+      const withTeams = memberships
+        .map((m, i) => ({
+          team: teams[i],
+          role_kind_id: m.role_kind_id,
+          is_team_admin: m.is_team_admin,
+          membership: m,
+        }))
+        .filter((r) => r.team !== null && r.team !== undefined);
+      return { outcome: 'MY_TEAMS', memberships: withTeams };
+    } catch (e) {
+      if (e instanceof DirectoryUnavailable) return { outcome: 'DIRECTORY_DOWN' };
+      throw e;
+    }
+  }
+
+  return {
+    createTeam,
+    listTeams,
+    renameTeam,
+    addMember,
+    removeMember,
+    getRoster,
+    getMyTeams,
+    _now: now,
+  };
 }

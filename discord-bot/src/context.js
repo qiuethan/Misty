@@ -1,6 +1,7 @@
 import { createDirectoryClient } from './directoryClient.js';
 import { createLinkService } from './linkService.js';
 import { createSeedService } from './seedService.js';
+import { createTeamService } from './teamService.js';
 
 // Wire the application services once. The router spreads this into every
 // command's ctx (alongside the request-scoped principal). Add a second backend
@@ -12,5 +13,6 @@ export function createAppContext(config) {
   });
   const linkService = createLinkService({ directory });
   const seedService = createSeedService({ directory });
-  return { directory, linkService, seedService };
+  const teamService = createTeamService({ directory });
+  return { directory, linkService, seedService, teamService };
 }
