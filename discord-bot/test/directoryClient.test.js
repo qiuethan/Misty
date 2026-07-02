@@ -360,3 +360,21 @@ test('endMembership returns null on 404', async () => {
   const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
   assert.equal(await client.endMembership('m1', '2026-07-01'), null);
 });
+
+test('directoryClient.listPeople returns the /people list', async () => {
+  const fetchImpl = fakeFetch([
+    {
+      status: 200,
+      body: [
+        { id: 'p1', display_name: 'Alex', primary_email: 'a@x', access_level: 'member', active: true },
+        { id: 'p2', display_name: 'Bea', primary_email: 'b@x', access_level: 'admin', active: true },
+      ],
+    },
+  ]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  const people = await client.listPeople();
+  assert.equal(people.length, 2);
+  assert.equal(people[0].display_name, 'Alex');
+  assert.match(fetchImpl.calls[0].url, /\/people$/);
+  assert.equal(fetchImpl.calls[0].opts.headers['X-API-Key'], 'k');
+});

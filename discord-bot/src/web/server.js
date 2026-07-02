@@ -29,6 +29,21 @@ export async function buildServer({ commands, appContext }) {
     }));
   });
 
+  server.get('/api/people', async () => {
+    const people = await appContext.directory.listPeople();
+    const results = [];
+    for (const p of people) {
+      const identifiers = await appContext.directory.listIdentifiers(p.id);
+      const discord = identifiers.find((i) => i.provider === 'discord');
+      results.push({
+        id: p.id,
+        discord_id: discord ? discord.external_id : null,
+        display_name: p.display_name,
+      });
+    }
+    return results;
+  });
+
   server.post('/api/commands/:name/run', async (req, reply) => {
     const command = commands.get(req.params.name);
     if (!command) {

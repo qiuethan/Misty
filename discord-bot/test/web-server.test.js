@@ -118,3 +118,31 @@ describe('web server', () => {
     assert.equal(resp.json().error, 'actingAs is required');
   });
 });
+
+test('GET /api/people returns array with discord_id resolved', async () => {
+  const directory = {
+    listPeople: async () => [
+      { id: 'p1', display_name: 'Alex', primary_email: 'a@x', access_level: 'member', active: true },
+      { id: 'p2', display_name: 'Bea',  primary_email: 'b@x', access_level: 'admin',  active: true },
+    ],
+    listIdentifiers: async (personId) => {
+      if (personId === 'p1') return [{ provider: 'discord', external_id: '111', handle: 'alex' }];
+      return [{ provider: 'github', external_id: 'bea-gh', handle: 'bea' }];
+    },
+  };
+  const commands = new Map();
+  const appContext = { directory };
+  const server = await buildServer({ commands, appContext });
+  await server.ready();
+  try {
+    const resp = await server.inject({ method: 'GET', url: '/api/people' });
+    assert.equal(resp.statusCode, 200);
+    const body = resp.json();
+    assert.deepEqual(body, [
+      { id: 'p1', discord_id: '111', display_name: 'Alex' },
+      { id: 'p2', discord_id: null, display_name: 'Bea' },
+    ]);
+  } finally {
+    await server.close();
+  }
+});

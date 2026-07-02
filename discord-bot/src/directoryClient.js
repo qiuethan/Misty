@@ -124,6 +124,12 @@ export function createDirectoryClient({ baseUrl, apiKey, fetchImpl = fetch }) {
       throw new DirectoryUnavailable(`directory returned ${resp.status}`);
     },
 
+    async listPeople() {
+      const resp = await send('/people');
+      if (!resp.ok) throw new DirectoryUnavailable(`directory returned ${resp.status}`);
+      return parseJson(resp);
+    },
+
     async listTeams({ activeOnly } = {}) {
       const qs = activeOnly ? '?active_only=true' : '';
       const resp = await send(`/teams${qs}`);
