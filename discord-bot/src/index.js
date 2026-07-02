@@ -22,8 +22,16 @@ async function main() {
   }
 
   if (enableWeb) {
-    // Task 6 wires the web server here.
-    console.log('web mode: enabled (server wiring lands in Task 6)');
+    const { ensureDevSpoofScope } = await import('./startupGuard.js');
+    try {
+      await ensureDevSpoofScope(appContext);
+    } catch (e) {
+      console.error(e.message);
+      process.exit(2);
+    }
+    const { startWebServer } = await import('./web/server.js');
+    const port = Number(process.env.WEB_PORT ?? 3001);
+    await startWebServer({ commands, appContext, port });
   }
 
   if (!enableDiscord && !enableWeb) {
