@@ -1,11 +1,48 @@
-import { REST, Routes } from 'discord.js';
+import { REST, Routes, SlashCommandBuilder } from 'discord.js';
 import { loadConfig } from './config.js';
 import { commands, partitionCommands } from './commands/index.js';
 
+function applyOption(target, o) {
+  if (o.type === 'string') {
+    target.addStringOption((so) => {
+      so.setName(o.name).setDescription(o.description).setRequired(!!o.required);
+      if (o.choices) so.addChoices(...o.choices);
+      return so;
+    });
+  } else if (o.type === 'boolean') {
+    target.addBooleanOption((bo) =>
+      bo.setName(o.name).setDescription(o.description).setRequired(!!o.required),
+    );
+  } else if (o.type === 'user') {
+    target.addUserOption((uo) =>
+      uo.setName(o.name).setDescription(o.description).setRequired(!!o.required),
+    );
+  }
+  // extend as needed
+}
+
+function buildDiscordData(command) {
+  const b = new SlashCommandBuilder()
+    .setName(command.name)
+    .setDescription(command.description);
+  if (command.subcommands.length) {
+    for (const sub of command.subcommands) {
+      b.addSubcommand((s) => {
+        s.setName(sub.name).setDescription(sub.description);
+        for (const o of sub.options) applyOption(s, o);
+        return s;
+      });
+    }
+  } else {
+    for (const o of command.options) applyOption(b, o);
+  }
+  return b.toJSON();
+}
+
 const config = loadConfig();
 const { stable, beta } = partitionCommands([...commands.values()]);
-const stableBody = stable.map((c) => c.data.toJSON());
-const betaBody = beta.map((c) => c.data.toJSON());
+const stableBody = stable.map((c) => buildDiscordData(c));
+const betaBody = beta.map((c) => buildDiscordData(c));
 
 const rest = new REST({ version: '10' }).setToken(config.discordToken);
 
