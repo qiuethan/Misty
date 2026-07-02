@@ -8,6 +8,121 @@ in cleanly.
 It holds **no database and no business logic** — every action is an HTTP call to
 the directory (the API-only source of truth).
 
+## Complete startup (from cold)
+
+Two modes, one shared foundation. Pick which mode you need:
+
+- **Discord surface** — the bot connects to Discord and users invoke slash
+  commands in your test server. Needs a Discord app + token.
+- **Web playground** — a browser-based Discord-lookalike that hits the same
+  handlers without going through Discord. No Discord token required. Isolated
+  ephemeral scratch DB. This is the recommended dev loop.
+
+### First-time setup (once per machine)
+
+```bash
+# In team-tracking/
+cp .env.example .env
+docker compose up -d postgres            # named volume — survives reboots
+uv sync --extra dev                      # installs the Python env
+uv run alembic upgrade head              # migrations against the main DB
+
+# In discord-bot/
+cp .env.example .env
+npm install
+```
+
+Then seed at least one identity into main so `/link` has something to match:
+
+```bash
+# Start main team-tracking briefly to seed via HTTP
+cd team-tracking && uv run uvicorn src.api.app:app --port 8000
+# In another shell:
+curl -X POST http://localhost:8000/people \
+  -H "X-API-Key: dev-api-key-change-me" \
+  -H "Content-Type: application/json" \
+  -d '{"display_name":"Your Name","primary_email":"you@example.com","access_level":"superuser"}'
+# Ctrl+C the uvicorn when done.
+```
+
+Also issue an API key for the Discord bot (only if you'll use Discord mode):
+
+```bash
+cd team-tracking
+uv run team-tracking-keys issue --name discord-bot \
+  --scopes people:read people:write identifiers:read identifiers:write \
+           teams:read teams:write memberships:read memberships:write role_kinds:read
+# Copy the tt_... key into discord-bot/.env as DIRECTORY_API_KEY.
+# IMPORTANT: this key must be issued against MAIN (port 8000), not scratch.
+```
+
+### Daily startup
+
+Depends on which mode you want.
+
+#### Playground mode (browser, recommended for feature dev)
+
+```bash
+cd discord-bot
+npm run dev:web
+```
+
+That single command boots the whole stack: postgres (if not up) → clone main
+→ scratch DB → spawn scratch team-tracking on 8001 → issue scratch key →
+seed Dev Superuser/Admin/Member → start Fastify on `http://127.0.0.1:3001`.
+
+Open the URL, paste `100000000000000000` into "Acting as", pick a command, run.
+Ctrl+C tears the whole thing down and drops the scratch DB.
+
+**You do NOT need main team-tracking (port 8000) running for playground mode.**
+The orchestrator manages its own team-tracking on port 8001 against the scratch DB.
+
+#### Discord mode (real bot in a Discord server)
+
+Discord mode reads `.env` and hits main team-tracking, so main needs to be up:
+
+```bash
+# Terminal 1
+cd team-tracking
+uv run uvicorn src.api.app:app --reload --port 8000
+
+# Terminal 2
+cd discord-bot
+npm start                                # or: npm run dev for both surfaces
+```
+
+Wait for `Logged in as <bot name>` in terminal 2, then use the slash commands
+in whichever Discord server you invited the bot to.
+
+**Requires that `DIRECTORY_API_KEY` in `.env` is a valid key against main
+team-tracking**, not a scratch key. If Discord returns "directory is
+temporarily unavailable," check the key with:
+
+```bash
+curl http://localhost:8000/api-keys/self -H "X-API-Key: <the-key-from-.env>"
+```
+
+A 401 means the key was invalidated (probably was originally issued against
+a scratch DB that got wiped). Issue a fresh one against main and update `.env`,
+then restart the bot process.
+
+#### Both at once (rarely useful)
+
+```bash
+cd discord-bot
+npm run dev                              # ENABLE_DISCORD=true ENABLE_WEB=true
+```
+
+Discord connects to main, the web surface still uses its own scratch DB
+managed by the orchestrator. Fine for parallel testing; noisy in one terminal.
+
+### Stopping everything
+
+- **Ctrl+C** in each running terminal. That's it.
+- The scratch DB is dropped automatically by `npm run dev:web` on shutdown.
+- The main DB in the postgres volume is durable — it survives Docker restarts
+  and machine reboots. It's only wiped by `docker compose down -v`.
+
 ## Multi-server model
 
 The bot is meant to run across **many Discord servers** from a single deployment.
