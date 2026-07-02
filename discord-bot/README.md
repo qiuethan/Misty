@@ -96,33 +96,123 @@ Discord-shaped web playground. It runs against an **ephemeral scratch copy** of
 your local team-tracking DB — commands you run in the playground never touch
 your working directory data.
 
+### One command to start
+
 ```bash
 npm run dev:web
 ```
 
 That boots an orchestrator (`scripts/dev-web.js`) which:
 
-1. Ensures the team-tracking docker-compose Postgres is up.
+1. Ensures the team-tracking docker-compose Postgres is up (starts it if not).
 2. Clones your main dev DB (`team_tracking`) into a scratch DB
-   (`team_tracking_playground`) via `pg_dump | psql`.
-3. Spawns a second team-tracking `uvicorn` on port 8001 against the scratch DB.
-4. Issues a `dev:spoof`-scoped API key against that scratch instance.
-5. Starts the web server on `http://127.0.0.1:3001` pointed at the scratch DB.
-6. On Ctrl-C, tears everything down and drops the scratch DB.
+   (`team_tracking_playground`) via `pg_dump | psql` (with `set -e -o pipefail`
+   so a failed dump surfaces immediately instead of silently leaving the scratch
+   DB empty).
+3. Logs the row count: `scratch has N people from main` — if that's 0 but you
+   expected people, your main DB is empty (see "Seeding your main DB" below).
+4. Spawns a second team-tracking `uvicorn` on port 8001 against the scratch DB.
+5. Issues a `dev:spoof`-scoped API key against that scratch instance.
+6. **Seeds three default personas into scratch** so the playground is usable
+   even if your main DB is empty:
+   | Acting as | Role | Purpose |
+   |---|---|---|
+   | `100000000000000000` | Dev Superuser | Test admin-of-admin flows |
+   | `100000000000000001` | Dev Admin | Test admin-gated commands |
+   | `100000000000000002` | Dev Member | Baseline user |
+7. Starts the web server on `http://127.0.0.1:3001` pointed at the scratch DB.
+8. On Ctrl-C, tears everything down and drops the scratch DB.
 
-Open the URL, pick a Discord ID from the "Acting as" picker (populated from the
-cloned directory), click a command in the sidebar, fill the form, and run.
-Replies stream into the transcript above. Click **Reset DB** in the top strip
-to re-clone from your main DB whenever you want a clean slate — no restart
-required.
+### Using the playground
 
-**Requires** `docker compose`, `uv`, and the `team-tracking/` project as a
-sibling to `discord-bot/`. If any of those are missing the orchestrator will
-tell you at startup.
+Open `http://127.0.0.1:3001`, paste one of the three Dev IDs above into
+"Acting as" (or pick from the datalist), click a command in the sidebar, fill
+the form, and run. Replies stream into the transcript above.
 
-**When to use `dev:web:plain` instead:** if you've already provisioned a
-team-tracking instance manually and just want to run the bot's web server
-against it, use `npm run dev:web:plain` — same web UI, no orchestration.
+Click **Reset DB** in the top strip to re-clone from your main DB whenever you
+want a clean slate — no restart required. The default personas are re-seeded
+after every reset.
+
+### Picker only shows *linked* people
+
+The "Acting as" datalist only surfaces people whose Discord identifier is
+already linked. A person you've seeded via `POST /people` but never `/link`ed
+lives in the DB but doesn't appear in the dropdown. To bring them in:
+
+1. Type any placeholder Discord snowflake into "Acting as" (any numeric string
+   works — e.g., your real snowflake with Developer Mode on).
+2. Run `/link email:<their-email>`.
+3. Refresh (Cmd+R). The person now appears in the datalist tied to that
+   Discord ID.
+
+### Seeding your main DB
+
+The playground clones from `team_tracking`. If that's empty, the picker will
+only show the three Dev personas. To seed a durable identity (yours), use the
+env-bootstrap API key that ships in `team-tracking/.env`:
+
+```bash
+curl -X POST http://localhost:8000/people \
+  -H "X-API-Key: dev-api-key-change-me" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "display_name": "Your Name",
+    "primary_email": "you@example.com",
+    "access_level": "superuser"
+  }'
+```
+
+That requires the **main** team-tracking uvicorn to be running on port 8000:
+
+```bash
+cd ../team-tracking && uv run uvicorn src.api.app:app --port 8000
+```
+
+Once seeded, click **Reset DB** in the playground and your new identity shows
+in the scratch clone. Note: only the `people` row is durable; a `/link` inside
+the playground writes to scratch and gets wiped on reset — so you'll need to
+`/link` again after each reset, or seed the Discord identifier directly:
+
+```bash
+# Get the person's id first
+PERSON_ID=$(curl -s http://localhost:8000/people/by-email/you@example.com \
+  -H "X-API-Key: dev-api-key-change-me" | python3 -c "import sys, json; print(json.load(sys.stdin)['id'])")
+
+# Then attach a discord identifier
+curl -X POST http://localhost:8000/people/$PERSON_ID/identifiers \
+  -H "X-API-Key: dev-api-key-change-me" \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"discord","external_id":"YOUR_DISCORD_SNOWFLAKE","handle":"you"}'
+```
+
+Now every scratch clone includes you AND your Discord link — no `/link` step
+needed.
+
+### Prerequisites
+
+- **`docker compose`** — the Postgres container.
+- **`uv`** — spawns the scratch team-tracking Python process.
+- **`team-tracking/`** — expected as a sibling directory to `discord-bot/`.
+
+If any are missing the orchestrator errors out at startup with a clear message.
+
+### DB persistence
+
+The `team_tracking` main DB lives in the `team_tracking_pg` Docker named
+volume. It survives `docker compose down`, `docker compose restart`, machine
+reboots, and Docker Desktop restarts. It's only wiped by `docker compose down -v`
+or `docker volume rm`.
+
+The `team_tracking_playground` scratch DB is dropped on Ctrl-C by the
+orchestrator; on next `npm run dev:web` it's re-cloned from main.
+
+### When to use `dev:web:plain` instead
+
+If you've already provisioned a team-tracking instance manually (specific
+version, remote host, whatever) and just want to run the bot's web server
+against it, use `npm run dev:web:plain` — same web UI, no orchestration, no
+scratch DB, reads `DIRECTORY_BASE_URL` and `DIRECTORY_API_KEY` from your
+local `.env`.
 
 ## Architecture
 
@@ -142,6 +232,10 @@ against it, use `npm run dev:web:plain` — same web UI, no orchestration.
 | `src/defineCommand.js` | Neutral, surface-agnostic command factory. |
 | `src/adapters/discord.js` | The ONLY module that imports from discord.js — turns interactions into intents. |
 | `scripts/dev-web.js` | Orchestrator: ephemeral scratch DB + scratch team-tracking + web server. |
+| `scripts/lib/snapshotDb.js` | Pipes `pg_dump` from main into `psql` on scratch, under `set -e -o pipefail`. |
+| `scripts/lib/spawnTeamTracking.js` | Spawns a scratch uvicorn subprocess; polls `/openapi.json` for readiness. |
+| `scripts/lib/issueDevSpoofKey.js` | Runs `team-tracking-keys issue --scopes ... dev:spoof` against scratch. |
+| `scripts/lib/seedDefaultPersonas.js` | Idempotently seeds Dev Superuser/Admin/Member into scratch. |
 | `src/web/server.js` | Fastify web playground (see "Web playground" above). |
 | `src/web/public/mentions.js` | Client-side `<@id>` → user pill rendering. |
 | `src/startupGuard.js` | Refuses web-mode boot if the directory key lacks `dev:spoof`. |
