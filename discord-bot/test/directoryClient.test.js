@@ -29,6 +29,15 @@ function fakeFetch(responses) {
 const BASE = 'http://d';
 const KEY = 'k';
 
+test('getSelfKeyScopes returns scopes from GET /api-keys/self', async () => {
+  const fetchImpl = fakeFetch([{ status: 200, body: { name: 'bot', scopes: ['dev:spoof', 'people:read'] } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  const scopes = await client.getSelfKeyScopes();
+  assert.deepEqual(scopes, ['dev:spoof', 'people:read']);
+  assert.match(fetchImpl.calls[0].url, /\/api-keys\/self$/);
+  assert.equal(fetchImpl.calls[0].opts.headers['X-API-Key'], 'k');
+});
+
 test('getPersonByEmail returns person on 200', async () => {
   const fetchImpl = fakeFetch([{ status: 200, body: { id: '1', display_name: 'Alex' } }]);
   const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
@@ -350,4 +359,22 @@ test('endMembership returns null on 404', async () => {
   const fetchImpl = fakeFetch([{ status: 404, body: {} }]);
   const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
   assert.equal(await client.endMembership('m1', '2026-07-01'), null);
+});
+
+test('directoryClient.listPeople returns the /people list', async () => {
+  const fetchImpl = fakeFetch([
+    {
+      status: 200,
+      body: [
+        { id: 'p1', display_name: 'Alex', primary_email: 'a@x', access_level: 'member', active: true },
+        { id: 'p2', display_name: 'Bea', primary_email: 'b@x', access_level: 'admin', active: true },
+      ],
+    },
+  ]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  const people = await client.listPeople();
+  assert.equal(people.length, 2);
+  assert.equal(people[0].display_name, 'Alex');
+  assert.match(fetchImpl.calls[0].url, /\/people$/);
+  assert.equal(fetchImpl.calls[0].opts.headers['X-API-Key'], 'k');
 });

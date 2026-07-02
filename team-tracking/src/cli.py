@@ -30,13 +30,26 @@ def _adapter() -> PostgresStorageAdapter:
 
 def cmd_issue(args: argparse.Namespace) -> int:
     """Issue a new API key. Prints the plaintext key ONCE to stdout."""
+    scopes = list(args.scopes or [])
+    if "dev:spoof" in scopes and get_settings().tt_env == "production":
+        print(
+            "ERROR: refusing to issue 'dev:spoof' scope against TT_ENV=production.",
+            file=sys.stderr,
+        )
+        print(
+            "       'dev:spoof' is a local-dev-only scope; issuing it against a "
+            "production directory would be trapped at request time regardless.",
+            file=sys.stderr,
+        )
+        return 2
+
     adapter = _adapter()
     plaintext, prefix, key_hash = generate_key()
     key = adapter.create_api_key(
         name=args.name,
         prefix=prefix,
         key_hash=key_hash,
-        scopes=list(args.scopes or []),
+        scopes=scopes,
         actor=args.actor,
     )
     print("=" * 70, file=sys.stderr)
@@ -102,7 +115,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--scopes",
         nargs="*",
         default=[],
-        help="Scopes to grant, e.g. people:read memberships:write. Use 'admin' for wildcard.",
+        help=(
+            "Scopes to grant, e.g. people:read memberships:write. "
+            "Use 'admin' for wildcard. 'dev:spoof' is local-dev-only "
+            "(refused against TT_ENV=production)."
+        ),
     )
     p_issue.set_defaults(func=cmd_issue)
 

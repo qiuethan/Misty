@@ -11,6 +11,8 @@ Read-only endpoints may depend on `require_scope("<domain>:read")` OR on
 `require_api_key` (which returns a resolved key with no scope check).
 """
 
+import logging
+import json
 import secrets
 from dataclasses import dataclass
 
@@ -24,6 +26,10 @@ from src.config import get_settings
 
 ADMIN_SCOPE = "admin"
 _BOOTSTRAP_KEY_NAME = "env-bootstrap"
+DEV_SPOOF_SCOPE = "dev:spoof"
+_PROD_ENV = "production"
+
+_audit_logger = logging.getLogger("team_tracking.audit")
 
 
 @dataclass(frozen=True)
@@ -44,6 +50,31 @@ def _unauthorized() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or missing X-API-Key",
+    )
+
+
+def _enforce_dev_scope_environment(authed: "AuthedKey") -> None:
+    """403 if a dev:spoof-scoped key is presented against a production directory.
+
+    Literal-check, not `has_scope` — an `admin` wildcard must NOT bypass this.
+    """
+    if DEV_SPOOF_SCOPE not in authed.scopes:
+        return
+    if get_settings().tt_env != _PROD_ENV:
+        return
+    _audit_logger.warning(
+        json.dumps(
+            {
+                "event": "dev_spoof_key_rejected",
+                "scope": DEV_SPOOF_SCOPE,
+                "tt_env": _PROD_ENV,
+                "key_name": authed.name,
+            }
+        )
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="dev:spoof keys forbidden in production",
     )
 
 
@@ -76,13 +107,14 @@ def require_api_key(
         if key_hash is not None and verify_key(x_api_key, key_hash):
             row = storage.get_api_key_by_prefix(prefix)
             if row is not None and row.active and row.revoked_at is None:
-                storage.touch_api_key_last_used(row.id)
                 authed = AuthedKey(
                     name=row.name,
                     scopes=frozenset(row.scopes),
                     is_bootstrap=False,
                 )
                 request.state.auth_key = authed
+                _enforce_dev_scope_environment(authed)
+                storage.touch_api_key_last_used(row.id)
                 return authed
         # DB key present but failed — fall through to 401 (never fall through
         # to env-key check for a well-formed DB key attempt; prevents an
@@ -98,6 +130,7 @@ def require_api_key(
             is_bootstrap=True,
         )
         request.state.auth_key = authed
+        _enforce_dev_scope_environment(authed)
         return authed
 
     raise _unauthorized()

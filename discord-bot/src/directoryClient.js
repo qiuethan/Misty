@@ -72,6 +72,13 @@ export function createDirectoryClient({ baseUrl, apiKey, fetchImpl = fetch }) {
   }
 
   return {
+    async getSelfKeyScopes() {
+      const resp = await send('/api-keys/self');
+      if (!resp.ok) throw new DirectoryUnavailable(`directory returned ${resp.status}`);
+      const body = await parseJson(resp);
+      return body.scopes;
+    },
+
     getPersonByEmail(email) {
       return getByPath(`/people/by-email/${encodeURIComponent(email)}`);
     },
@@ -115,6 +122,12 @@ export function createDirectoryClient({ baseUrl, apiKey, fetchImpl = fetch }) {
         throw new PersonExists(body.detail ?? 'person already exists');
       }
       throw new DirectoryUnavailable(`directory returned ${resp.status}`);
+    },
+
+    async listPeople() {
+      const resp = await send('/people');
+      if (!resp.ok) throw new DirectoryUnavailable(`directory returned ${resp.status}`);
+      return parseJson(resp);
     },
 
     async listTeams({ activeOnly } = {}) {

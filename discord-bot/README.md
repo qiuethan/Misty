@@ -89,6 +89,41 @@ parallel to team-tracking's scoped-key auth.
    channels" above.
 5. `npm start` — then invite the bot to any server via its OAuth2 URL.
 
+## Web playground (local dev)
+
+For iterating on commands without going through Discord, the bot ships a
+Discord-shaped web playground. It runs against an **ephemeral scratch copy** of
+your local team-tracking DB — commands you run in the playground never touch
+your working directory data.
+
+```bash
+npm run dev:web
+```
+
+That boots an orchestrator (`scripts/dev-web.js`) which:
+
+1. Ensures the team-tracking docker-compose Postgres is up.
+2. Clones your main dev DB (`team_tracking`) into a scratch DB
+   (`team_tracking_playground`) via `pg_dump | psql`.
+3. Spawns a second team-tracking `uvicorn` on port 8001 against the scratch DB.
+4. Issues a `dev:spoof`-scoped API key against that scratch instance.
+5. Starts the web server on `http://127.0.0.1:3001` pointed at the scratch DB.
+6. On Ctrl-C, tears everything down and drops the scratch DB.
+
+Open the URL, pick a Discord ID from the "Acting as" picker (populated from the
+cloned directory), click a command in the sidebar, fill the form, and run.
+Replies stream into the transcript above. Click **Reset DB** in the top strip
+to re-clone from your main DB whenever you want a clean slate — no restart
+required.
+
+**Requires** `docker compose`, `uv`, and the `team-tracking/` project as a
+sibling to `discord-bot/`. If any of those are missing the orchestrator will
+tell you at startup.
+
+**When to use `dev:web:plain` instead:** if you've already provisioned a
+team-tracking instance manually and just want to run the bot's web server
+against it, use `npm run dev:web:plain` — same web UI, no orchestration.
+
 ## Architecture
 
 | File | Responsibility |
@@ -104,6 +139,12 @@ parallel to team-tracking's scoped-key auth.
 | `src/commands/*.js` | Thin discord.js interaction handlers + registry. |
 | `src/index.js` | Client setup + interaction routing. |
 | `src/registerCommands.js` | One-shot slash-command registration (stable → global; beta → testing guild only). |
+| `src/defineCommand.js` | Neutral, surface-agnostic command factory. |
+| `src/adapters/discord.js` | The ONLY module that imports from discord.js — turns interactions into intents. |
+| `scripts/dev-web.js` | Orchestrator: ephemeral scratch DB + scratch team-tracking + web server. |
+| `src/web/server.js` | Fastify web playground (see "Web playground" above). |
+| `src/web/public/mentions.js` | Client-side `<@id>` → user pill rendering. |
+| `src/startupGuard.js` | Refuses web-mode boot if the directory key lacks `dev:spoof`. |
 
 ## Testing
 
