@@ -21,6 +21,14 @@ export class AlreadyLinked extends Error {
   }
 }
 
+export class PersonExists extends Error {
+  constructor(detail) {
+    super(detail);
+    this.name = 'PersonExists';
+    this.detail = detail;
+  }
+}
+
 export function createDirectoryClient({ baseUrl, apiKey, fetchImpl = fetch }) {
   const headers = { 'X-API-Key': apiKey, 'Content-Type': 'application/json' };
 
@@ -57,6 +65,23 @@ export function createDirectoryClient({ baseUrl, apiKey, fetchImpl = fetch }) {
       if (resp.status === 409) {
         const body = await resp.json().catch(() => ({}));
         throw new AlreadyLinked(body.detail ?? 'already linked');
+      }
+      throw new DirectoryUnavailable(`directory returned ${resp.status}`);
+    },
+
+    async createPerson({ displayName, primaryEmail, accessLevel }) {
+      const resp = await send('/people', {
+        method: 'POST',
+        body: JSON.stringify({
+          display_name: displayName,
+          primary_email: primaryEmail,
+          access_level: accessLevel,
+        }),
+      });
+      if (resp.status === 201) return parseJson(resp);
+      if (resp.status === 409) {
+        const body = await resp.json().catch(() => ({}));
+        throw new PersonExists(body.detail ?? 'person already exists');
       }
       throw new DirectoryUnavailable(`directory returned ${resp.status}`);
     },
