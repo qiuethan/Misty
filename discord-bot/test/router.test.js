@@ -115,3 +115,56 @@ test('handler error is caught centrally with a generic reply', async () => {
   await dispatchInteraction(interaction, { commands, appContext: {} });
   assert.match(interaction.replies[0].content, /went wrong/i);
 });
+
+test('auth-as-function is called with the interaction and its return is the policy', async () => {
+  let seenInteraction = null;
+  let ran = false;
+  const interaction = fakeInteraction('team');
+  const commands = new Map([[
+    'team',
+    {
+      data: { name: 'team' },
+      auth: (i) => { seenInteraction = i; return 'public'; },
+      execute: async () => { ran = true; },
+    },
+  ]]);
+  await dispatchInteraction(interaction, { commands, appContext: {} });
+  assert.equal(seenInteraction, interaction);
+  assert.equal(ran, true);
+});
+
+test('auth-as-function returning "admin" enforces admin', async () => {
+  let ran = false;
+  const interaction = fakeInteraction('team');
+  const commands = new Map([[
+    'team',
+    {
+      data: { name: 'team' },
+      auth: () => 'admin',
+      execute: async () => { ran = true; },
+    },
+  ]]);
+  const memberPerson = { id: 'p1', display_name: 'A', access_level: 'member' };
+  await dispatchInteraction(interaction, {
+    commands,
+    ...ctxWith(async () => memberPerson),
+  });
+  assert.equal(ran, false);
+  assert.match(interaction.replies[0].content, /don't have permission|not allowed/i);
+});
+
+test('auth-as-function returning nullish falls back to linked (fail-secure)', async () => {
+  let ran = false;
+  const interaction = fakeInteraction('team');
+  const commands = new Map([[
+    'team',
+    {
+      data: { name: 'team' },
+      auth: () => null,
+      execute: async () => { ran = true; },
+    },
+  ]]);
+  await dispatchInteraction(interaction, { commands, ...ctxWith(async () => null) });
+  assert.equal(ran, false);
+  assert.match(interaction.replies[0].content, /link/i);
+});

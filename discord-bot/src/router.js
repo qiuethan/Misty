@@ -19,7 +19,9 @@ export async function dispatchInteraction(interaction, { commands, appContext })
   const command = commands.get(interaction.commandName);
   if (!command) return;
 
-  const policy = command.auth ?? 'linked'; // fail-secure default
+  const rawAuth = command.auth;
+  const resolvedAuth = typeof rawAuth === 'function' ? rawAuth(interaction) : rawAuth;
+  const policy = resolvedAuth ?? 'linked'; // fail-secure default
 
   // --- Authentication ---
   let principal = null;

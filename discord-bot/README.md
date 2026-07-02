@@ -42,6 +42,15 @@ and skips them.
 - `/seed email:<> name:<> [level:member|admin|superuser]` (admin) — add a member to
   the directory. Gated to admins; you can only grant a level at or below your own
   (`superuser` > `admin` > `member`). The bot's directory key needs `people:write`.
+- `/team create slug:<> label:<> [description:<>]` (admin) — create a team.
+- `/team list [active_only:<bool>]` (linked) — list teams (default active only).
+- `/team rename slug:<> new_label:<>` (admin) — rename a team.
+- `/team add user:<@mention> team:<slug> [role:<...>] [team_admin:<bool>]` (admin) — add a member. The mentioned user must have already run `/link`.
+- `/team remove user:<@mention> team:<slug>` (admin) — soft-end a membership as of today.
+- `/team roster team:<slug> [as_of:<YYYY-MM-DD>]` (linked) — show a team's current roster.
+- `/my-teams` (linked) — list your active memberships.
+
+`/team` and `/my-teams` are currently on the **beta** channel (test guild only) — promote by setting `beta = false` in the command modules and re-running `npm run register`.
 
 ## Auth layer
 
@@ -70,7 +79,8 @@ parallel to team-tracking's scoped-key auth.
      ```bash
      cd ../team-tracking
      uv run team-tracking-keys issue --name discord-bot \
-       --scopes people:read people:write identifiers:read identifiers:write
+       --scopes people:read people:write identifiers:read identifiers:write \
+                teams:read teams:write memberships:read memberships:write role_kinds:read
      ```
 3. `npm install`
 4. `npm run register` — registers the slash commands (run once, or whenever
@@ -106,5 +116,7 @@ tested against a mocked directory client. discord.js handlers are kept thin.
 
 ## Deferred (v1 non-goals)
 
-Email verification code, role-based authorization, Discord role sync, roster/read
-commands, admin writes, `/unlink`, and any bot-side persistence.
+Email verification code, role-based authorization, Discord role sync, `/unlink`,
+and any bot-side persistence.
+
+Team archive/unarchive, `/team info`, editing role/team-admin on existing memberships, team-admin delegation authority, dynamic role_kinds fetch for slash choices, LLM adapter.
