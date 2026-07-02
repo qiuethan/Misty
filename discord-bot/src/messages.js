@@ -116,6 +116,8 @@ export function renderAddMemberResult(result) {
       return "There's no team with that slug.";
     case 'ALREADY_ON_TEAM':
       return `**${result.person.display_name}** is already on **${result.team.label}**.`;
+    case 'MEMBERSHIP_INVALID':
+      return `The directory rejected that add: ${result.detail}`;
     case 'DIRECTORY_DOWN':
       return DIRECTORY_DOWN_MSG;
     default:
@@ -128,7 +130,7 @@ export function renderRemoveMemberResult(result) {
     case 'REMOVED':
       return `✅ Removed **${result.person.display_name}** from **${result.team.label}**.`;
     case 'USER_NOT_LINKED':
-      return USER_NOT_LINKED_MSG;
+      return "That user hasn't linked their directory account, so they aren't on any team.";
     case 'TEAM_NOT_FOUND':
       return "There's no team with that slug.";
     case 'NOT_ON_TEAM':

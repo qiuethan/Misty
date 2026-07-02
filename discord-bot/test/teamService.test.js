@@ -223,7 +223,7 @@ test('addMember returns DIRECTORY_DOWN on outage during person lookup', async ()
   assert.equal(res.outcome, 'DIRECTORY_DOWN');
 });
 
-test('addMember maps MembershipInvalid to ALREADY_ON_TEAM (defense-in-depth for API race)', async () => {
+test('addMember maps MembershipInvalid with "already" detail to ALREADY_ON_TEAM (race defense)', async () => {
   const person = { id: 'p1', display_name: 'A' };
   const team = { id: 't1', slug: 'ml', label: 'ML' };
   const svc = createTeamService({
@@ -239,6 +239,27 @@ test('addMember maps MembershipInvalid to ALREADY_ON_TEAM (defense-in-depth for 
     { caller: admin },
   );
   assert.equal(res.outcome, 'ALREADY_ON_TEAM');
+});
+
+test('addMember surfaces other MembershipInvalid detail as MEMBERSHIP_INVALID', async () => {
+  const person = { id: 'p1', display_name: 'A' };
+  const team = { id: 't1', slug: 'ml', label: 'ML' };
+  const svc = createTeamService({
+    directory: mkDir({
+      getPersonByDiscordId: async () => person,
+      getTeamBySlug: async () => team,
+      listMemberships: async () => [],
+      createMembership: async () => { throw new MembershipInvalid('role_kind_id not found: lead'); },
+    }),
+  });
+  const res = await svc.addMember(
+    { discordSnowflake: '123', teamSlug: 'ml', roleKindId: 'lead' },
+    { caller: admin },
+  );
+  assert.equal(res.outcome, 'MEMBERSHIP_INVALID');
+  assert.equal(res.detail, 'role_kind_id not found: lead');
+  assert.equal(res.person, person);
+  assert.equal(res.team, team);
 });
 
 test('removeMember returns USER_NOT_LINKED when snowflake does not resolve', async () => {

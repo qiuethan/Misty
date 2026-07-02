@@ -69,7 +69,13 @@ export function createTeamService({ directory, now = isoDateToday } = {}) {
         return { outcome: 'ADDED', membership, person, team };
       } catch (e) {
         if (e instanceof MembershipInvalid) {
-          return { outcome: 'ALREADY_ON_TEAM', person, team };
+          // Race with a concurrent add? The pre-check said no active membership,
+          // but the API rejected. Only claim ALREADY_ON_TEAM when the detail
+          // actually says so; otherwise surface the API detail unchanged.
+          if (e.detail && /already/i.test(e.detail)) {
+            return { outcome: 'ALREADY_ON_TEAM', person, team };
+          }
+          return { outcome: 'MEMBERSHIP_INVALID', detail: e.detail, person, team };
         }
         throw e;
       }

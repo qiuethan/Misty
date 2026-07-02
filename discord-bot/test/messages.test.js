@@ -121,6 +121,9 @@ test('renderAddMemberResult covers outcomes', () => {
     renderAddMemberResult({ outcome: 'ALREADY_ON_TEAM', person: { display_name: 'Alex' }, team: { label: 'ML' } }),
     /already/i,
   );
+  const invalid = renderAddMemberResult({ outcome: 'MEMBERSHIP_INVALID', detail: 'role_kind_id not found: lead' });
+  assert.match(invalid, /rejected/i);
+  assert.match(invalid, /role_kind_id not found: lead/);
   assert.match(renderAddMemberResult({ outcome: 'DIRECTORY_DOWN' }), /unavailable|try again/i);
 });
 
@@ -133,7 +136,10 @@ test('renderRemoveMemberResult covers outcomes', () => {
     }),
     /Alex.*ML/s,
   );
-  assert.match(renderRemoveMemberResult({ outcome: 'USER_NOT_LINKED' }), /link/i);
+  assert.match(
+    renderRemoveMemberResult({ outcome: 'USER_NOT_LINKED' }),
+    /aren't on any team|not on any team/i,
+  );
   assert.match(renderRemoveMemberResult({ outcome: 'TEAM_NOT_FOUND' }), /no team|not found/i);
   assert.match(
     renderRemoveMemberResult({ outcome: 'NOT_ON_TEAM', person: { display_name: 'Alex' }, team: { label: 'ML' } }),
