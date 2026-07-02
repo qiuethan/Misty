@@ -451,3 +451,27 @@ def test_update_person_identifier_external_id_change_succeeds():
     assert found_by_new is not None and found_by_new.id == p.id
     found_by_old = a.get_person_by_identifier("discord", "1")
     assert found_by_old is None
+
+
+def test_create_person_defaults_access_level_member(adapter):
+    p = adapter.create_person(
+        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
+    )
+    assert p.access_level == "member"
+
+
+def test_create_person_persists_access_level(adapter):
+    p = adapter.create_person(
+        PersonCreate(display_name="B", primary_email="b@utmist.ca", access_level="admin"),
+        actor="t",
+    )
+    assert p.access_level == "admin"
+    assert adapter.get_person(p.id).access_level == "admin"
+
+
+def test_update_person_changes_access_level(adapter):
+    p = adapter.create_person(
+        PersonCreate(display_name="C", primary_email="c@utmist.ca"), actor="t"
+    )
+    updated = adapter.update_person(p.id, PersonUpdate(access_level="superuser"), actor="t")
+    assert updated.access_level == "superuser"
