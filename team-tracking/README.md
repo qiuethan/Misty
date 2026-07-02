@@ -44,6 +44,25 @@ uv run uvicorn src.api.app:app --reload --port 8000
 
 The API is now at `http://localhost:8000`. Interactive Swagger UI is at `http://localhost:8000/docs`; the machine-readable schema is at `http://localhost:8000/openapi.json`.
 
+### Environment tiers (`TT_ENV`)
+
+`TT_ENV` declares which environment this team-tracking instance represents:
+
+- `local` (default) — safe for spoofable dev keys.
+- `staging` — same behaviour as `local` for now; reserved for future staging playground.
+- `production` — refuses to issue or accept `dev:spoof`-scoped keys.
+
+Set it in `.env`:
+
+```bash
+TT_ENV=production
+```
+
+The `dev:spoof` scope is a local-dev-only affordance used by the discord-bot
+web playground to act as arbitrary Discord users. Attempting to issue such a
+key against a `TT_ENV=production` instance is refused by the CLI, and any
+request presenting one is 403'd at request time — belt-and-suspenders.
+
 The default dev bootstrap key is `dev-api-key-change-me` (set in `.env`). Pass it as `X-API-Key` on every request:
 
 ```bash
@@ -64,6 +83,16 @@ uv run team-tracking-keys list --active-only
 # Revoke a compromised key (soft-delete; history preserved)
 uv run team-tracking-keys revoke <api_key_id>
 ```
+
+Scopes recognized today:
+
+- `people:read`, `people:write`
+- `memberships:read`, `memberships:write`
+- `identifiers:read`, `identifiers:write`
+- `providers:read`, `providers:write`
+- `role_kinds:read`, `role_kinds:write`
+- `admin` — wildcard, grants all scopes
+- `dev:spoof` — local-dev only (issuance refused against `TT_ENV=production`)
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the full auth model, scopes, rotation runbook, and audit-log integration.
 
