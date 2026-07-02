@@ -62,6 +62,33 @@ async function dropScratchDb() {
   });
 }
 
+let scratch = null;
+let webServer = null;
+let shuttingDown = false;
+
+async function shutdown(sig) {
+  if (shuttingDown) {
+    console.error(`▶ ${sig} received during shutdown — forcing exit`);
+    process.exit(1);
+  }
+  shuttingDown = true;
+  console.log(`\n▶ ${sig} received — shutting down…`);
+  const watchdog = setTimeout(() => {
+    console.error('▶ shutdown watchdog fired — forcing exit');
+    process.kill(process.pid, 'SIGKILL');
+  }, 5000);
+  watchdog.unref();
+  if (webServer) {
+    try { await webServer.close(); } catch (e) { console.error(e); }
+  }
+  if (scratch) {
+    try { await scratch.close(); } catch (e) { console.error(e); }
+  }
+  try { await dropScratchDb(); } catch (e) { console.error(e); }
+  clearTimeout(watchdog);
+  process.exit(0);
+}
+
 async function main() {
   console.log('▶ ensuring postgres is up…');
   await ensurePostgresUp();
@@ -70,7 +97,7 @@ async function main() {
   await snapshotDb({ source: MAIN_DB, target: SCRATCH_DB, dbUser: DB_USER, teamTrackingDir });
 
   console.log(`▶ spawning scratch team-tracking on port ${SCRATCH_PORT}…`);
-  const scratch = await spawnTeamTracking({
+  scratch = await spawnTeamTracking({
     port: SCRATCH_PORT,
     databaseUrl: scratchDatabaseUrl(),
     teamTrackingDir,
@@ -114,20 +141,19 @@ async function main() {
   };
 
   console.log(`▶ starting web playground on port ${WEB_PORT}…`);
-  const webServer = await startWebServer({ commands, appContext, port: WEB_PORT, onReset });
+  webServer = await startWebServer({ commands, appContext, port: WEB_PORT, onReset });
 
-  const shutdown = async (sig) => {
-    console.log(`\n▶ ${sig} received — shutting down…`);
-    try { await webServer.close(); } catch (e) { console.error(e); }
-    try { await scratch.close(); } catch (e) { console.error(e); }
-    try { await dropScratchDb(); } catch (e) { console.error(e); }
-    process.exit(0);
-  };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error('▶ fatal:', err);
+  try {
+    if (scratch) await scratch.close();
+    await dropScratchDb();
+  } catch (cleanupErr) {
+    console.error('▶ cleanup failed:', cleanupErr);
+  }
   process.exit(1);
 });
