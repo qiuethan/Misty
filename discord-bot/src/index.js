@@ -30,7 +30,7 @@ async function main() {
       process.exit(2);
     }
     const { startWebServer } = await import('./web/server.js');
-    const port = Number(process.env.WEB_PORT ?? 3001);
+    const port = Number(process.env.WEB_PORT || 3001);
     await startWebServer({ commands, appContext, port });
   }
 

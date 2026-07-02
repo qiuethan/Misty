@@ -35,7 +35,7 @@ export function interactionToIntent(interaction, command) {
 export function payloadToDiscordReply(payload) {
   if (!payload) return null;
   const out = {};
-  if (payload.content) out.content = payload.content;
+  if (payload.content !== undefined) out.content = payload.content;
   if (payload.embeds) out.embeds = payload.embeds;
   if (payload.ephemeral) out.flags = MessageFlags.Ephemeral;
   return out;

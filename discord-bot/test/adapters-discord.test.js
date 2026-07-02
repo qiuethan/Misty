@@ -70,3 +70,8 @@ test('payloadToDiscordReply returns null for null/undefined payload', () => {
   assert.equal(payloadToDiscordReply(null), null);
   assert.equal(payloadToDiscordReply(undefined), null);
 });
+
+test('payloadToDiscordReply propagates empty-string content', () => {
+  const out = payloadToDiscordReply({ content: '' });
+  assert.equal(out.content, '');
+});

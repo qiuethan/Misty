@@ -67,6 +67,10 @@ export async function buildServer({ commands, appContext }) {
     return payload ?? {};
   });
 
+  server.setErrorHandler(async (err, req, reply) => {
+    reply.code(err.statusCode ?? 500).send({ content: `Error: ${err.message}`, ephemeral: true });
+  });
+
   return server;
 }
 
