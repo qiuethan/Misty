@@ -82,6 +82,15 @@ parallel to team-tracking's scoped-key auth.
        --scopes people:read people:write identifiers:read identifiers:write \
                 teams:read teams:write memberships:read memberships:write role_kinds:read
      ```
+     **Important:** the CLI writes to whichever DB `.env`'s `DATABASE_URL` points
+     at, which is your main `team_tracking` DB by default. Do NOT issue this key
+     against the scratch playground DB (`team_tracking_playground`) — the scratch
+     DB gets dropped every time the playground shuts down or resets, taking any
+     keys issued against it with it. If your bot suddenly starts replying
+     "directory temporarily unavailable" after you ran the playground, check
+     with `curl http://localhost:8000/api-keys/self -H "X-API-Key: $KEY"` — a
+     401 means the key was on scratch and got wiped; issue a fresh one against
+     main and update `.env`.
 3. `npm install`
 4. `npm run register` — registers the slash commands (run once, or whenever
    command definitions change). **Stable** commands go global (can take ~1h to
