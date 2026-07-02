@@ -3,13 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node --env-file=.env src/index.js",
     "register": "node --env-file=.env src/registerCommands.js",
     "test": "node --test"
   },
   "dependencies": {
-    "discord.js": "^14.16.3"
+    "discord.js": "^14.26.4"
+  },
+  "overrides": {
+    "undici": "^6.27.0"
   }
 }
