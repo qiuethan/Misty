@@ -1,0 +1,23 @@
+name: main-source-guard
+
+# Enforces the branching policy: PRs to `main` may only come from `staging`.
+# This runs on every pull_request opened against main. Add as a REQUIRED
+# status check on the main branch in branch protection.
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  enforce-source-is-staging:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert PR head is staging
+        run: |
+          head='${{ github.head_ref }}'
+          echo "PR head branch: $head"
+          if [ "$head" != "staging" ]; then
+            echo "::error::PRs to main may only come from the staging branch (got '$head'). Merge to staging first, then open a staging → main PR."
+            exit 1
+          fi
+          echo "OK: PR to main sourced from staging."
