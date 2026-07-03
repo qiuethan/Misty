@@ -29,6 +29,9 @@ See `docs/ARCHITECTURE.md` for the full data flow.
 Prerequisites: Docker, Python 3.11+, [uv](https://github.com/astral-sh/uv).
 
 ```bash
+# 0. From the repo root, enter the service directory (all commands below run here)
+cd services/documentation-system
+
 # 1. Copy environment config and start Postgres
 cp .env.example .env
 docker compose up -d postgres

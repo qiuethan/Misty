@@ -16,6 +16,9 @@ Written for rotating contributors who may be new to FastAPI, SQLAlchemy, or Post
 ## Local setup
 
 ```bash
+# From the repo root, enter the service directory first
+cd services/team-tracking
+
 cp .env.example .env
 docker compose up -d postgres
 uv sync --extra dev
