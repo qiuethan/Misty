@@ -3,6 +3,8 @@ const REQUIRED = [
   'DISCORD_CLIENT_ID',
   'DIRECTORY_BASE_URL',
   'DIRECTORY_API_KEY',
+  'DOC_BASE_URL',
+  'DOC_API_KEY',
 ];
 
 export function loadConfig(env = process.env) {
@@ -18,5 +20,7 @@ export function loadConfig(env = process.env) {
     discordGuildId: env.DISCORD_GUILD_ID || undefined,
     directoryBaseUrl: env.DIRECTORY_BASE_URL.replace(/\/+$/, ''),
     directoryApiKey: env.DIRECTORY_API_KEY,
+    docBaseUrl: env.DOC_BASE_URL.replace(/\/+$/, ''),
+    docApiKey: env.DOC_API_KEY,
   };
 }
