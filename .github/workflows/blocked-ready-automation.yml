@@ -15,7 +15,7 @@ name: blocked-ready-automation
 #
 # Board Status (optional): if a Projects-scoped PAT is stored as the
 # PROJECTS_TOKEN repo secret, the dependent issue's project Status is also set to
-# Ready / Backlog. Without that secret only labels change — the board step
+# Ready / Blocked. Without that secret only labels change — the board step
 # no-ops and the run still succeeds (same "unset secret = skip" pattern as
 # discord-pr-notify.yml).
 #
@@ -42,7 +42,7 @@ jobs:
             const PROJECT_ID   = 'PVT_kwHOBKcJlc4BcaH-';
             const STATUS_FIELD = 'PVTSSF_lAHOBKcJlc4BcaH-zhXDMKo';
             const OPT_READY    = '08afe404';
-            const OPT_BACKLOG  = 'f75ad846';
+            const OPT_BLOCKED  = 'dc1ac841';
 
             const { owner, repo } = context.repo;
             const changed = context.payload.issue.number;
@@ -60,19 +60,36 @@ jobs:
             const stateCache = new Map();
             const stateOf = async (n) => {
               if (!stateCache.has(n)) {
-                const { data } = await github.rest.issues.get({ owner, repo, issue_number: n });
-                stateCache.set(n, data.state);
+                // Isolate per-blocker failures: a deleted/inaccessible blocker must
+                // not abort the whole run. 'unknown' !== 'closed', so it counts as
+                // outstanding below and never falsely marks a dependent ready.
+                try {
+                  const { data } = await github.rest.issues.get({ owner, repo, issue_number: n });
+                  stateCache.set(n, data.state);
+                } catch (e) {
+                  core.warning(`#${n}: could not fetch blocker state: ${e.message}`);
+                  stateCache.set(n, 'unknown');
+                }
               }
               return stateCache.get(n);
             };
 
             // Optional: set the issue's project Status via the PAT (skipped if unset).
             const gqlPAT = async (query, variables) => {
-              const res = await fetch('https://api.github.com/graphql', {
-                method: 'POST',
-                headers: { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query, variables }),
-              });
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 10000);
+              let res;
+              try {
+                res = await fetch('https://api.github.com/graphql', {
+                  method: 'POST',
+                  headers: { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ query, variables }),
+                  signal: controller.signal,
+                });
+              } finally {
+                clearTimeout(timer);
+              }
+              if (!res.ok) throw new Error(`GraphQL HTTP ${res.status}`);
               const json = await res.json();
               if (json.errors) throw new Error(JSON.stringify(json.errors));
               return json.data;
@@ -124,7 +141,7 @@ jobs:
               if (action === 'reopened') {
                 // A blocker reopened → this issue is blocked again.
                 await setLabels(dep.number, 'blocked', 'ready');
-                await setBoardStatus(dep.number, OPT_BACKLOG);
+                await setBoardStatus(dep.number, OPT_BLOCKED);
                 core.info(`#${dep.number}: re-blocked (blocker #${changed} reopened).`);
                 continue;
               }
