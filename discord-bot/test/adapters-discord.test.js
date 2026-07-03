@@ -2,7 +2,56 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MessageFlags } from 'discord.js';
 import { defineCommand } from '../src/defineCommand.js';
-import { interactionToIntent, payloadToDiscordReply } from '../src/adapters/discord.js';
+import {
+  interactionToIntent,
+  payloadToDiscordReply,
+  resolveEphemeral,
+  wireDiscordClient,
+} from '../src/adapters/discord.js';
+
+// A minimal fake discord.js interaction that tracks the response lifecycle the
+// way the real one does: deferReply() flips `deferred`, reply() flips `replied`.
+function fakeInteraction({ commandName, subcommand = null, calls }) {
+  const interaction = {
+    commandName,
+    user: { id: '1', username: 'alex' },
+    deferred: false,
+    replied: false,
+    isChatInputCommand: () => true,
+    options: {
+      getString: () => null,
+      getBoolean: () => null,
+      getUser: () => null,
+      getSubcommand: () => subcommand,
+    },
+    async deferReply(opts) {
+      calls.push({ method: 'deferReply', opts });
+      this.deferred = true;
+    },
+    async reply(payload) {
+      calls.push({ method: 'reply', payload });
+      this.replied = true;
+    },
+    async editReply(payload) {
+      calls.push({ method: 'editReply', payload });
+    },
+    async followUp(payload) {
+      calls.push({ method: 'followUp', payload });
+    },
+  };
+  return interaction;
+}
+
+// Minimal EventEmitter-ish client stub capturing the interactionCreate handler.
+function fakeClient() {
+  let handler = null;
+  return {
+    on: (event, fn) => {
+      if (event === 'interactionCreate') handler = fn;
+    },
+    emit: (interaction) => handler(interaction),
+  };
+}
 
 const linkLike = defineCommand({
   name: 'link',
@@ -74,4 +123,93 @@ test('payloadToDiscordReply returns null for null/undefined payload', () => {
 test('payloadToDiscordReply propagates empty-string content', () => {
   const out = payloadToDiscordReply({ content: '' });
   assert.equal(out.content, '');
+});
+
+test('resolveEphemeral falls back to command-level hint', () => {
+  const cmd = defineCommand({
+    name: 'whoami',
+    description: 'x',
+    ephemeral: true,
+    handler: async () => ({ content: 'ok' }),
+  });
+  assert.equal(resolveEphemeral(cmd, null), true);
+});
+
+test('resolveEphemeral prefers the active subcommand hint', () => {
+  const cmd = defineCommand({
+    name: 'team',
+    description: 'x',
+    ephemeral: false,
+    subcommands: [
+      { name: 'roster', ephemeral: true, handler: async () => ({ content: 'ok' }) },
+    ],
+    handler: async () => ({ content: 'top' }),
+  });
+  assert.equal(resolveEphemeral(cmd, 'roster'), true);
+  assert.equal(resolveEphemeral(cmd, null), false);
+});
+
+test('wireDiscordClient defers BEFORE running the handler (slow DB safe)', async () => {
+  const calls = [];
+  let handlerRan = false;
+  let deferredWhenHandlerRan = null;
+  const command = defineCommand({
+    name: 'whoami',
+    description: 'x',
+    auth: 'public',
+    ephemeral: true,
+    handler: async () => {
+      handlerRan = true;
+      // Simulate a slow Neon cold-start query; capture defer state at this point.
+      deferredWhenHandlerRan = calls.some((c) => c.method === 'deferReply');
+      return { content: 'record', ephemeral: true };
+    },
+  });
+  const commands = new Map([['whoami', command]]);
+  const client = fakeClient();
+  wireDiscordClient(client, { commands, appContext: {} });
+
+  const interaction = fakeInteraction({ commandName: 'whoami', calls });
+  await client.emit(interaction);
+
+  assert.equal(handlerRan, true);
+  assert.equal(deferredWhenHandlerRan, true, 'handler must run only AFTER deferReply');
+  assert.equal(calls[0].method, 'deferReply', 'deferReply must be the very first call');
+});
+
+test('wireDiscordClient defers ephemerally per the resolved hint', async () => {
+  const calls = [];
+  const command = defineCommand({
+    name: 'whoami',
+    description: 'x',
+    auth: 'public',
+    ephemeral: true,
+    handler: async () => ({ content: 'record' }),
+  });
+  const client = fakeClient();
+  wireDiscordClient(client, { commands: new Map([['whoami', command]]), appContext: {} });
+
+  await client.emit(fakeInteraction({ commandName: 'whoami', calls }));
+
+  const defer = calls.find((c) => c.method === 'deferReply');
+  assert.equal(defer.opts.flags, MessageFlags.Ephemeral);
+});
+
+test('wireDiscordClient edits the deferred reply with the payload', async () => {
+  const calls = [];
+  const command = defineCommand({
+    name: 'whoami',
+    description: 'x',
+    auth: 'public',
+    ephemeral: true,
+    handler: async () => ({ content: 'the record' }),
+  });
+  const client = fakeClient();
+  wireDiscordClient(client, { commands: new Map([['whoami', command]]), appContext: {} });
+
+  await client.emit(fakeInteraction({ commandName: 'whoami', calls }));
+
+  const edit = calls.find((c) => c.method === 'editReply');
+  assert.ok(edit, 'a deferred reply should be delivered via editReply, not a second reply');
+  assert.equal(edit.payload.content, 'the record');
 });
