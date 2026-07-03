@@ -82,12 +82,14 @@ test('teamAutocomplete drops teams with no usable label without crashing', async
 
 test('teamAutocomplete returns [] when directory lookups exceed the budget', async () => {
   const resolver = findSub('list').options.find((o) => o.name === 'team').autocomplete;
+  // The directory calls resolve, but only AFTER the (tiny) budget elapses, so
+  // the timeout wins the race and the resolver yields []. They still SETTLE
+  // (rather than hanging forever) so the test leaves no pending promise for the
+  // runner to flag as "Promise resolution is still pending".
+  const slow = () => new Promise((r) => setTimeout(() => r([]), 80));
   const ctx = {
     _autocompleteTimeoutMs: 10,
-    directory: {
-      listMemberships: () => new Promise(() => {}), // never resolves
-      listTeams: () => new Promise(() => {}),
-    },
+    directory: { listMemberships: slow, listTeams: slow },
   };
   const out = await resolver({ typed: '', principal: { person: { id: 'p1' } }, ctx });
   assert.deepEqual(out, []);
