@@ -11,7 +11,7 @@ import { ensureDevSpoofScope } from '../src/startupGuard.js';
 import { startWebServer } from '../src/web/server.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const teamTrackingDir = path.resolve(__dirname, '../../team-tracking');
+const teamTrackingDir = path.resolve(__dirname, '../../services/team-tracking');
 const SCRATCH_DB = 'team_tracking_playground';
 const MAIN_DB = 'team_tracking';
 const DB_USER = 'team_tracking';

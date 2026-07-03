@@ -1,6 +1,6 @@
 # UTMIST Discord Bot
 
-A thin Node.js application layer over the [team-tracking](../team-tracking) directory
+A thin Node.js application layer over the [team-tracking](../services/team-tracking) directory
 API. v1 does one thing: link a Discord account to a pre-seeded directory `Person`,
 behind a proper **auth layer** so future commands and role-based permissions slot
 in cleanly.
@@ -21,7 +21,7 @@ Two modes, one shared foundation. Pick which mode you need:
 ### First-time setup (once per machine)
 
 ```bash
-# In team-tracking/
+# In services/team-tracking/
 cp .env.example .env
 docker compose up -d postgres            # named volume — survives reboots
 uv sync --extra dev                      # installs the Python env
@@ -36,7 +36,7 @@ Then seed at least one identity into main so `/link` has something to match:
 
 ```bash
 # Start main team-tracking briefly to seed via HTTP
-cd team-tracking && uv run uvicorn src.api.app:app --port 8000
+cd services/team-tracking && uv run uvicorn src.api.app:app --port 8000
 # In another shell:
 curl -X POST http://localhost:8000/people \
   -H "X-API-Key: dev-api-key-change-me" \
@@ -48,7 +48,7 @@ curl -X POST http://localhost:8000/people \
 Also issue an API key for the Discord bot (only if you'll use Discord mode):
 
 ```bash
-cd team-tracking
+cd services/team-tracking
 uv run team-tracking-keys issue --name discord-bot \
   --scopes people:read people:write identifiers:read identifiers:write \
            teams:read teams:write memberships:read memberships:write role_kinds:read
@@ -83,7 +83,7 @@ Discord mode reads `.env` and hits main team-tracking, so main needs to be up:
 
 ```bash
 # Terminal 1
-cd team-tracking
+cd services/team-tracking
 uv run uvicorn src.api.app:app --reload --port 8000
 
 # Terminal 2
@@ -192,7 +192,7 @@ parallel to team-tracking's scoped-key auth.
    - `DIRECTORY_BASE_URL` (e.g. `http://localhost:8000`).
    - `DIRECTORY_API_KEY` — issue one from team-tracking:
      ```bash
-     cd ../team-tracking
+     cd ../services/team-tracking
      uv run team-tracking-keys issue --name discord-bot \
        --scopes people:read people:write identifiers:read identifiers:write \
                 teams:read teams:write memberships:read memberships:write role_kinds:read
@@ -273,7 +273,7 @@ lives in the DB but doesn't appear in the dropdown. To bring them in:
 
 The playground clones from `team_tracking`. If that's empty, the picker will
 only show the three Dev personas. To seed a durable identity (yours), use the
-env-bootstrap API key that ships in `team-tracking/.env`:
+env-bootstrap API key that ships in `services/team-tracking/.env`:
 
 ```bash
 curl -X POST http://localhost:8000/people \
@@ -289,7 +289,7 @@ curl -X POST http://localhost:8000/people \
 That requires the **main** team-tracking uvicorn to be running on port 8000:
 
 ```bash
-cd ../team-tracking && uv run uvicorn src.api.app:app --port 8000
+cd ../services/team-tracking && uv run uvicorn src.api.app:app --port 8000
 ```
 
 Once seeded, click **Reset DB** in the playground and your new identity shows
@@ -316,7 +316,7 @@ needed.
 
 - **`docker compose`** — the Postgres container.
 - **`uv`** — spawns the scratch team-tracking Python process.
-- **`team-tracking/`** — expected as a sibling directory to `discord-bot/`.
+- **`services/team-tracking/`** — expected at `../services/team-tracking` relative to `discord-bot/`.
 
 If any are missing the orchestrator errors out at startup with a clear message.
 

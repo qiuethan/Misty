@@ -27,7 +27,7 @@ jobs:
       DATABASE_URL: postgresql+psycopg://team_tracking:dev_password@localhost:5432/team_tracking
     defaults:
       run:
-        working-directory: team-tracking
+        working-directory: services/team-tracking
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: team-tracking
+        working-directory: services/team-tracking
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -77,7 +77,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build team-tracking image
-        run: docker build -t team-tracking:ci ./team-tracking
+        run: docker build -t team-tracking:ci ./services/team-tracking
       - name: Smoke-test team-tracking image (imports incl. contracts/ resolve at boot)
         run: docker run --rm team-tracking:ci python -c "import src.api.app"
       - name: Build discord-bot image
