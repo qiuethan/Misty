@@ -25,8 +25,10 @@ feature branch  ──PR──▶  staging  ──PR──▶  main
   default). Every merge auto-deploys to the `staging` Railway environment
   (staging Neon branch + staging Discord app).
 - **`main`** is the release branch. **PRs to `main` may only come from
-  `staging`** — enforced by a GitHub ruleset. Every merge auto-deploys to the
-  `production` Railway environment.
+  `staging`** — enforced by the `main-source-guard` workflow
+  ([`.github/workflows/main-source-guard.yml`](../.github/workflows/main-source-guard.yml)),
+  which fails any PR to `main` whose head is not `staging`. Every merge to
+  `main` auto-deploys to the `production` Railway environment.
 - Both branches are protected; all four CI checks are required.
 
 ## 1. Neon: databases + branches
