@@ -24,6 +24,9 @@ the three Protocol boundaries.
 ## Setup
 
 ```bash
+# From the repo root, enter the service directory first
+cd services/documentation-system
+
 uv sync --extra dev
 docker compose up -d postgres      # only needed for the Postgres test suite / running the server
 ```
