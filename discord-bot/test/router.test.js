@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { dispatch, dispatchAutocomplete } from '../src/router.js';
 import { defineCommand } from '../src/defineCommand.js';
@@ -199,6 +199,30 @@ test('dispatchAutocomplete returns [] when resolver throws', async () => {
     { commands, appContext },
   );
   assert.deepEqual(out, []);
+});
+
+test('dispatchAutocomplete falls back to a null principal when the lookup exceeds the budget', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    let seenPrincipal = 'unset';
+    const resolver = async ({ principal }) => {
+      seenPrincipal = principal;
+      return [];
+    };
+    const commands = cmdWithTeamAutocomplete(resolver);
+    // A hung directory call: never settles. The timeout must let the resolver run anyway.
+    const appContext = { directory: { getPersonByDiscordId: () => new Promise(() => {}) } };
+    const pending = dispatchAutocomplete(
+      { commandName: 'doc', subcommand: 'list', focusedOption: 'team', typed: '', discordUserId: 'u1' },
+      { commands, appContext },
+    );
+    mock.timers.tick(1500);
+    const out = await pending;
+    assert.equal(seenPrincipal, null);
+    assert.deepEqual(out, []);
+  } finally {
+    mock.timers.reset();
+  }
 });
 
 test('dispatchAutocomplete returns [] for unknown option', async () => {

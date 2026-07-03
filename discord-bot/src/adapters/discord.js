@@ -1,5 +1,6 @@
 import { MessageFlags } from 'discord.js';
 import { dispatch, dispatchAutocomplete } from '../router.js';
+import { authMessages } from '../messages.js';
 
 // The ONLY module (aside from src/index.js and src/registerCommands.js) that
 // imports from discord.js. Everything else — router, commands, services —
@@ -127,6 +128,11 @@ export function wireDiscordClient(client, { commands, appContext }) {
       await safeReply(interaction, payload);
     } catch (err) {
       console.error('Unhandled interaction error:', err);
+      // We already deferred, so the user is staring at "thinking…". Resolve the
+      // interaction with a generic error instead of leaving it hanging until the
+      // token expires. safeReply routes this via editReply on the deferred
+      // message; its own catch swallows any follow-on failure.
+      await safeReply(interaction, authMessages.internalError());
     }
   });
 }

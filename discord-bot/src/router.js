@@ -52,6 +52,31 @@ export async function dispatch(intent, { commands, appContext }) {
   }
 }
 
+// Autocomplete cannot be deferred and has a hard ~3s Discord budget, so the
+// principal lookup must not be allowed to consume it. Resolve with `null` after
+// this many ms; the resolver then runs promptly with an anonymous principal
+// (typically yielding no suggestions) rather than the whole autocomplete timing
+// out. Any directory call left in flight resolves harmlessly.
+const PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS = 1500;
+
+// Resolve to `null` on timeout or rejection — never rejects.
+function resolveWithTimeout(promise, ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    timer.unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
+}
+
 // Surface-agnostic autocomplete dispatch. Sibling to `dispatch`: takes a neutral
 // autocomplete intent, resolves the focused option's resolver, and returns up to
 // 25 { name, value } suggestions. BEST-EFFORT — it never throws to the surface.
@@ -67,12 +92,10 @@ export async function dispatchAutocomplete(intent, { commands, appContext }) {
   const option = activeOptions.find((o) => o.name === intent.focusedOption);
   if (!option || typeof option.autocomplete !== 'function') return [];
 
-  let principal = null;
-  try {
-    principal = await resolvePrincipal(appContext.directory, intent.discordUserId);
-  } catch {
-    principal = null;
-  }
+  const principal = await resolveWithTimeout(
+    resolvePrincipal(appContext.directory, intent.discordUserId),
+    PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS,
+  );
 
   try {
     const suggestions = await option.autocomplete({
