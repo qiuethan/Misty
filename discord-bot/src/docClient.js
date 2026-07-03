@@ -32,6 +32,14 @@ export function createDocClient({ baseUrl, apiKey, fetchImpl = fetch }) {
     }
   }
 
+  function unavailable(status, context) {
+    // Surface unexpected statuses (notably 401/403 from a bad or mis-scoped
+    // API key) in logs — otherwise they render to users as a generic
+    // "temporarily unavailable" with no clue it's a config problem.
+    console.warn(`docClient: ${context} -> HTTP ${status}`);
+    return new DocUnavailable(`doc service returned ${status}`);
+  }
+
   return {
     async ingestDoc({ url, sourceId, title, description, owningTeamId, owningPersonId, tags }) {
       const body = { url };
@@ -47,7 +55,7 @@ export function createDocClient({ baseUrl, apiKey, fetchImpl = fetch }) {
         const b = await resp.json().catch(() => ({}));
         throw new DocBadReference(b.detail ?? 'bad reference');
       }
-      throw new DocUnavailable(`doc service returned ${resp.status}`);
+      throw unavailable(resp.status, 'POST /docs');
     },
 
     async listDocs({ owningTeamId, owningPersonId, sourceId, tag, activeOnly } = {}) {
@@ -59,14 +67,14 @@ export function createDocClient({ baseUrl, apiKey, fetchImpl = fetch }) {
       if (activeOnly !== undefined) qs.set('active_only', String(activeOnly));
       const qstr = qs.toString();
       const resp = await send(qstr ? `/docs?${qstr}` : '/docs');
-      if (!resp.ok) throw new DocUnavailable(`doc service returned ${resp.status}`);
+      if (!resp.ok) throw unavailable(resp.status, 'GET /docs');
       return parseJson(resp);
     },
 
     async getDoc(id) {
       const resp = await send(`/docs/${encodeURIComponent(id)}`);
       if (resp.status === 404) return null;
-      if (!resp.ok) throw new DocUnavailable(`doc service returned ${resp.status}`);
+      if (!resp.ok) throw unavailable(resp.status, 'GET /docs/{id}');
       return parseJson(resp);
     },
 
@@ -76,7 +84,7 @@ export function createDocClient({ baseUrl, apiKey, fetchImpl = fetch }) {
         body: JSON.stringify({ active: false }),
       });
       if (resp.status === 404) return null;
-      if (!resp.ok) throw new DocUnavailable(`doc service returned ${resp.status}`);
+      if (!resp.ok) throw unavailable(resp.status, 'PATCH /docs/{id}');
       return parseJson(resp);
     },
   };

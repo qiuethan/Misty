@@ -63,3 +63,31 @@ test('team autocomplete returns [] when principal is null', async () => {
   const out = await resolver({ typed: '', principal: null, ctx: { directory: {} } });
   assert.deepEqual(out, []);
 });
+
+test('teamAutocomplete drops teams with no usable label without crashing', async () => {
+  const resolver = findSub('list').options.find((o) => o.name === 'team').autocomplete;
+  const ctx = {
+    directory: {
+      listMemberships: async () => [{ team_id: 't1' }, { team_id: 't2' }],
+      listTeams: async () => [
+        { id: 't1', slug: 'ml', label: 'Machine Learning' },
+        { id: 't2', slug: 'ghost', label: null },
+      ],
+    },
+  };
+  const out = await resolver({ typed: '', principal: { person: { id: 'p1' } }, ctx });
+  assert.deepEqual(out, [{ name: 'Machine Learning', value: 'ml' }]);
+});
+
+test('teamAutocomplete returns [] when directory lookups exceed the budget', async () => {
+  const resolver = findSub('list').options.find((o) => o.name === 'team').autocomplete;
+  const ctx = {
+    _autocompleteTimeoutMs: 10,
+    directory: {
+      listMemberships: () => new Promise(() => {}), // never resolves
+      listTeams: () => new Promise(() => {}),
+    },
+  };
+  const out = await resolver({ typed: '', principal: { person: { id: 'p1' } }, ctx });
+  assert.deepEqual(out, []);
+});
