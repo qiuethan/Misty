@@ -8,6 +8,8 @@ const FULL = {
   DISCORD_GUILD_ID: 'g',
   DIRECTORY_BASE_URL: 'http://localhost:8000/',
   DIRECTORY_API_KEY: 'k',
+  DOC_BASE_URL: 'http://localhost:8001/',
+  DOC_API_KEY: 'dk',
 };
 
 test('loadConfig returns typed config and strips trailing slash', () => {
@@ -38,4 +40,15 @@ test('missing-var error does not list the optional DISCORD_GUILD_ID', () => {
   } catch (err) {
     assert.doesNotMatch(err.message, /DISCORD_GUILD_ID/);
   }
+});
+
+test('loadConfig exposes docBaseUrl (slash stripped) and docApiKey', () => {
+  const cfg = loadConfig(FULL);
+  assert.equal(cfg.docBaseUrl, 'http://localhost:8001');
+  assert.equal(cfg.docApiKey, 'dk');
+});
+
+test('loadConfig throws when DOC_BASE_URL missing', () => {
+  const { DOC_BASE_URL, ...rest } = FULL;
+  assert.throws(() => loadConfig(rest), /DOC_BASE_URL/);
 });

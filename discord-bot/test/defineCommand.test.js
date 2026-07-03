@@ -90,3 +90,26 @@ test('defineCommand normalizes subcommands', () => {
   assert.equal(cmd.subcommands.length, 1);
   assert.equal(cmd.subcommands[0].auth, 'admin'); // inherited from parent
 });
+
+test('defineCommand preserves option.autocomplete on subcommand options', () => {
+  const resolver = async () => [];
+  const cmd = defineCommand({
+    name: 'doc',
+    description: 'd',
+    handler: async () => ({ content: 'x' }),
+    subcommands: [
+      { name: 'add', description: 'a', handler: async () => ({ content: 'y' }),
+        options: [{ name: 'team', type: 'string', autocomplete: resolver }] },
+    ],
+  });
+  assert.equal(cmd.subcommands[0].options[0].autocomplete, resolver);
+});
+
+test('defineCommand throws if an option has both choices and autocomplete', () => {
+  assert.throws(() => defineCommand({
+    name: 'doc',
+    description: 'd',
+    handler: async () => ({ content: 'x' }),
+    options: [{ name: 'team', type: 'string', choices: [{ name: 'ML', value: 'ml' }], autocomplete: async () => [] }],
+  }), /choices.*autocomplete|autocomplete.*choices/i);
+});
