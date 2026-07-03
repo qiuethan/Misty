@@ -89,8 +89,10 @@ manually (`team-tracking-keys revoke <id>`).
 - End-to-end: run a bot command in the staging guild → reaches staging team-tracking → staging Neon branch.
 
 ## Notes
-- **`--host ::`** in the API start command is required for Railway's IPv6 private
-  network; if internal calls (bot → team-tracking) fail on first deploy, verify
-  this and the `DIRECTORY_BASE_URL` reference.
+- APIs bind **`--host 0.0.0.0`**. Railway's IPv6 private network routes to the
+  container's port regardless of the bind family, and `0.0.0.0` is what
+  Railway's healthcheck reaches (an IPv6-only bind like `::` fails healthcheck
+  on Debian's default kernel config). If service-to-service calls
+  (bot → team-tracking) fail, check the `DIRECTORY_BASE_URL` reference next.
 - Staging uses the **separate staging Discord application** + private test guild,
   so staging commands never touch the real UTMIST server.
