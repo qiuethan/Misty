@@ -4,8 +4,8 @@ How the UTMIST ops platform's services fit together. This document is for someon
 deciding *how the pieces relate* — not the internals of either service. For those,
 see each service's own `docs/ARCHITECTURE.md`:
 
-- [`team-tracking/docs/ARCHITECTURE.md`](../services/team-tracking/docs/ARCHITECTURE.md)
-- [`documentation-system/docs/ARCHITECTURE.md`](../services/documentation-system/docs/ARCHITECTURE.md)
+- [`services/team-tracking/docs/ARCHITECTURE.md`](../services/team-tracking/docs/ARCHITECTURE.md)
+- [`services/documentation-system/docs/ARCHITECTURE.md`](../services/documentation-system/docs/ARCHITECTURE.md)
 - [`discord-bot/README.md`](../discord-bot/README.md) — the Discord bot doesn't have a
   standalone ARCHITECTURE.md yet; the README covers its neutral command shape (a
   single handler serves both the Discord surface and a browser-based web
@@ -63,7 +63,7 @@ resolves that owner against the directory. Here's the path:
 ```
 
 Step by step, when `POST /docs` arrives at the catalog
-([`documentation-system/src/ingest.py`](../services/documentation-system/src/ingest.py)):
+([`services/documentation-system/src/ingest.py`](../services/documentation-system/src/ingest.py)):
 
 1. **Normalize + dedup.** The URL is normalized; if it's already catalogued, ingest
    is idempotent — new tags merge onto the existing doc and nothing else happens.
@@ -87,7 +87,7 @@ Step by step, when `POST /docs` arrives at the catalog
 4. **Backfill later.** A degraded label isn't permanent. The next time that doc is
    read or updated while the directory is reachable, the catalog resolves and
    persists the missing label (`_backfill_labels` in
-   `documentation-system/src/api/routers/docs.py`).
+   `services/documentation-system/src/api/routers/docs.py`).
 
 The crucial distinction: **a wrong id is a client error; an unreachable directory is
 not.** The catalog refuses to invent ownership, but it also refuses to let a

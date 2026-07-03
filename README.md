@@ -17,8 +17,8 @@ domain and each reachable only over HTTP:
 
 | Service | Domain | Status |
 |---------|--------|--------|
-| [`team-tracking/`](team-tracking/README.md) | People, teams, roles, memberships + external identity mapping | Shipped (v1) |
-| [`documentation-system/`](documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, snapshots | Shipped (v1) |
+| [`services/team-tracking/`](services/team-tracking/README.md) | People, teams, roles, memberships + external identity mapping | Shipped (v1) |
+| [`services/documentation-system/`](services/documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, snapshots | Shipped (v1) |
 | [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend for the directory (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`) — plus a Discord-shaped web playground for iteration without a Discord token | Shipped (v1) |
 | Search / retrieval plugin | Full-text + semantic search over the catalog | Deferred (not built) |
 
@@ -68,25 +68,28 @@ The services are built in dependency order — each layer needs the one beneath 
 
 ```
 UTMIST-Prototypes/
-├── README.md                 You are here — platform overview
+├── README.md                   You are here — platform overview
+├── .github/workflows/ci.yml    CI — tests, lint, Docker builds on every PR to main
 ├── docs/
-│   └── ARCHITECTURE.md        Cross-service architecture (how the pieces fit)
+│   └── ARCHITECTURE.md          Cross-service architecture (how the pieces fit)
 │
-├── team-tracking/            Directory service — source of truth for the org
-│   ├── README.md             Service overview + quick start
-│   └── docs/                 API.md, ARCHITECTURE.md, DEPLOYMENT.md, CONTRIBUTING.md
+├── services/                   HTTP source-of-truth services — one folder each
+│   ├── team-tracking/           Directory service — source of truth for the org
+│   │   ├── README.md            Service overview + quick start
+│   │   └── docs/                API.md, ARCHITECTURE.md, DEPLOYMENT.md, CONTRIBUTING.md
+│   │
+│   └── documentation-system/    Documentation catalog service
+│       ├── README.md            Service overview + quick start
+│       └── docs/                API.md, ARCHITECTURE.md, DEPLOYMENT.md, CONTRIBUTING.md
 │
-├── documentation-system/     Documentation catalog service
-│   ├── README.md             Service overview + quick start
-│   └── docs/                 API.md, ARCHITECTURE.md, DEPLOYMENT.md, CONTRIBUTING.md
-│
-└── discord-bot/              Discord frontend + web playground for the directory
-    ├── README.md             Service overview + complete startup guide
-    └── src/                  Node.js — thin over team-tracking, no local DB
+└── discord-bot/                Discord frontend + web playground for the directory
+    ├── README.md               Service overview + complete startup guide
+    └── src/                    Node.js — thin over team-tracking, no local DB
 ```
 
 Each service is self-contained: its own dependencies, its own Postgres, its own
-tests, its own docs. You can run, deploy, and reason about either one on its own.
+tests, its own docs. You can run, deploy, and reason about each one on its own — and
+new source-of-truth services drop into `services/` following the same shape.
 
 ## Getting started
 
@@ -94,9 +97,9 @@ There's no top-level bootstrap — each service has its own quick start, and you
 need to stand up the ones you're working on. Follow the service READMEs rather than
 re-deriving the steps here:
 
-- **Directory:** [`team-tracking/README.md` → Quick start](team-tracking/README.md#quick-start).
+- **Directory:** [`services/team-tracking/README.md` → Quick start](services/team-tracking/README.md#quick-start).
   Runs on port **8000**.
-- **Catalog:** [`documentation-system/README.md` → Quick start](documentation-system/README.md#quick-start).
+- **Catalog:** [`services/documentation-system/README.md` → Quick start](services/documentation-system/README.md#quick-start).
   Runs on port **8001**; its Postgres is on **5434**. Ports are chosen so both
   services can run side by side locally.
 - **Discord bot:** [`discord-bot/README.md` → Complete startup](discord-bot/README.md#complete-startup-from-cold).
@@ -130,6 +133,10 @@ mostly knows the other:
   `alembic upgrade head`.
 - **API-only, nothing runs inside** — there are no in-process consumers; everything
   talks to these services over HTTP against their OpenAPI contract.
+- **CI-gated changes** — every pull request to `main` runs
+  [`.github/workflows/ci.yml`](.github/workflows/ci.yml): the service test suites
+  (against a real Postgres), `ruff` lint, and Docker image builds. Branch protection
+  keeps anything red from merging.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for why these conventions exist
 and how they play out across service boundaries.
@@ -139,11 +146,11 @@ and how they play out across service boundaries.
 - **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — the cross-service picture:
   API-only source-of-truth principle, the ownership-validation + degrade data flow,
   and the shared conventions.
-- **Directory service** — [`team-tracking/README.md`](team-tracking/README.md) and
-  its [`docs/`](team-tracking/docs/) (`API.md`, `ARCHITECTURE.md`, `DEPLOYMENT.md`,
+- **Directory service** — [`services/team-tracking/README.md`](services/team-tracking/README.md) and
+  its [`docs/`](services/team-tracking/docs/) (`API.md`, `ARCHITECTURE.md`, `DEPLOYMENT.md`,
   `CONTRIBUTING.md`).
-- **Catalog service** — [`documentation-system/README.md`](documentation-system/README.md)
-  and its [`docs/`](documentation-system/docs/) (`API.md`, `ARCHITECTURE.md`,
+- **Catalog service** — [`services/documentation-system/README.md`](services/documentation-system/README.md)
+  and its [`docs/`](services/documentation-system/docs/) (`API.md`, `ARCHITECTURE.md`,
   `DEPLOYMENT.md`, `CONTRIBUTING.md`).
 - **Discord bot** — [`discord-bot/README.md`](discord-bot/README.md). Covers the
   bot's neutral command shape (a single handler serves both Discord and web
