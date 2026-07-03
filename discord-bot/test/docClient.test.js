@@ -76,6 +76,22 @@ test('getDoc returns null on 404', async () => {
   assert.equal(await client.getDoc('nope'), null);
 });
 
+test('listDocs throws DocUnavailable and warns on 401 (bad API key)', async () => {
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (msg) => warnings.push(msg);
+  try {
+    const client = createDocClient({
+      baseUrl: 'http://doc', apiKey: 'bad',
+      fetchImpl: async () => ({ status: 401, ok: false, json: async () => ({ detail: 'invalid key' }) }),
+    });
+    await assert.rejects(() => client.listDocs({}), (e) => e instanceof DocUnavailable);
+    assert.ok(warnings.some((w) => w.includes('401')), 'a warning includes the 401 status');
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
 test('deactivateDoc patches active:false and returns doc', async () => {
   const client = createDocClient({
     baseUrl: 'http://doc', apiKey: 'k',
