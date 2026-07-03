@@ -103,14 +103,30 @@ repoints the consumer; the previous key stays active until you revoke it
 manually (`team-tracking-keys revoke <id>`).
 
 ## 5. Register Discord slash commands
-The bot has to tell Discord which slash commands it supports. Run once per
-environment (idempotent — safe to re-run whenever the command set changes):
+The bot has to tell Discord which slash commands it supports. Re-run whenever the
+command set changes (new commands, beta→stable promotions, option tweaks). It's
+idempotent — safe to re-run.
+
+Use the wrapper so you register **both** environments in one go and can't
+accidentally skip staging (a partial run leaves stale duplicate guild commands —
+see #38). It always does staging first:
 
 ```bash
 cd discord-bot
-railway run --service discord-bot --environment staging    -- node src/registerCommands.js
-railway run --service discord-bot --environment production -- node src/registerCommands.js
+npm run register:all          # staging, then production
 ```
+
+To target a single environment: `npm run register:staging` or
+`npm run register:production`. There's also a guarded shell wrapper that prompts
+before touching production: `./scripts/register.sh all` (or `staging` /
+`production`).
+
+> **Not** `npm run register` — that hardcodes `--env-file=.env` and only hits
+> your **local test bot**. The `register:*` scripts (and `register.sh`) are the
+> Railway-targeted ones; Railway injects each environment's secrets.
+
+Under the hood each script runs
+`railway run --service discord-bot --environment <env> -- node src/registerCommands.js`.
 
 The script partitions commands into **stable** (registered globally — visible
 in every server the bot is in) and **beta** (registered only to
