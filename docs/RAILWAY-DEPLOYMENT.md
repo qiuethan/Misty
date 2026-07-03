@@ -58,10 +58,12 @@ TT_DATABASE_URL="<team-tracking Neon branch DATABASE_URL for this env>" \
 ```
 
 This issues scoped `team-tracking-keys` for discord-bot + documentation-system
-and sets each service's `DIRECTORY_API_KEY`. Re-running rotates the keys.
+and sets each service's `DIRECTORY_API_KEY`. Re-running issues a fresh key and
+repoints the consumer; the previous key stays active until you revoke it
+manually (`team-tracking-keys revoke <id>`).
 
 ## 5. Verify
-- APIs: `railway run --service team-tracking curl -s localhost:$PORT/health` → `{"status":"ok"}`; pre-deploy logs show `alembic upgrade head` ran.
+- APIs: `railway run --service team-tracking bash -c 'curl -s localhost:$PORT/health'` → `{"status":"ok"}`; pre-deploy logs show `alembic upgrade head` ran.
 - Bot: Railway logs show `Bot ready as …` — staging bot appears in the test guild; prod bot registers globally.
 - End-to-end: run a bot command in the staging guild → reaches staging team-tracking → staging Neon branch.
 

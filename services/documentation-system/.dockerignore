@@ -9,3 +9,5 @@ tests
 docs
 deploy
 .git
+.DS_Store
+docker-compose.yml
