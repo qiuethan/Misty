@@ -13,6 +13,9 @@
     "dev:web:plain": "ENABLE_DISCORD=false ENABLE_WEB=true node --env-file=.env src/index.js",
     "dev:discord": "ENABLE_DISCORD=true ENABLE_WEB=false node --env-file=.env src/index.js",
     "register": "node --env-file=.env src/registerCommands.js",
+    "register:staging": "railway run --service discord-bot --environment staging -- node src/registerCommands.js",
+    "register:production": "railway run --service discord-bot --environment production -- node src/registerCommands.js",
+    "register:all": "npm run register:staging && npm run register:production",
     "test": "node --test"
   },
   "dependencies": {
