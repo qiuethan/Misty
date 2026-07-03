@@ -5,7 +5,7 @@ export default defineCommand({
   name: 'my-teams',
   description: 'List the teams you are on',
   auth: 'linked',
-  beta: true,
+  beta: false,
   options: [],
   async handler({ principal, ctx }) {
     const caller = principal.person;

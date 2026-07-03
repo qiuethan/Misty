@@ -16,17 +16,17 @@ UTMIST is a student org with rotating leadership and mixed technical fluency. Ev
 
 - **`/link`** — attach your Discord account to your directory record so the bot knows who you are. Public (you don't need to be linked yet).
 - **`/whoami`** — see your linked identity, teams you're on, and access level. Requires you to be linked.
+- **`/team`** — look up, create, rename, add/remove members, and view rosters (subcommands: `create`, `list`, `rename`, `add`, `remove`, `roster`). Reads are public; writes are admin-only.
+- **`/my-teams`** — list your active memberships. Requires you to be linked.
 
 **Beta (currently visible only in the test guild; promote by flipping `beta: false` in each command module + re-registering):**
 
-- **`/team`** — look up, create, rename, add/remove members, and view rosters (subcommands: `create`, `list`, `rename`, `add`, `remove`, `roster`). Reads are public; writes are admin-only.
-- **`/my-teams`** — list your active memberships. Requires you to be linked.
 - **`/doc`** — catalog and browse links (subcommands: `add`, `list`, `show`, `remove`), backed by documentation-system. Reads are public; writes are admin-only. Team-owner field has slug autocomplete.
 
 ### As an admin (in Discord)
 
 - **`/seed`** — create or promote a person in the directory (member / admin / superuser). Requires admin+. Stable (visible globally). You can only grant a level at or below your own.
-- **`/team create`**, **`/team add`**, **`/team remove`**, **`/team rename`** — the write subcommands are admin-gated. Still beta at the moment.
+- **`/team create`**, **`/team add`**, **`/team remove`**, **`/team rename`** — the write subcommands are admin-gated. Stable (visible globally).
 
 ### As a developer / integration builder
 
@@ -51,7 +51,7 @@ Both APIs speak OpenAPI. Point Swagger UI or codegen at them.
 |---------|---------------|--------|
 | [`services/team-tracking/`](services/team-tracking/README.md) | People, teams, roles, memberships, external identity mapping (Discord/GitHub/Notion/UofT email → person) | **Deployed** (staging + prod). Directory is empty on prod until seeded. |
 | [`services/documentation-system/`](services/documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, and best-effort content snapshots | **Deployed** (staging + prod). Consumed by the bot's `/doc` command group (`add`/`list`/`show`/`remove`), currently in beta (test guild only). |
-| [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend + a browser-based "web playground" for iterating on commands without a Discord token | **Deployed** (staging + prod). 3 stable commands (`/link`, `/whoami`, `/seed`) registered globally; 3 beta (`/team`, `/my-teams`, `/doc`) in test guild only. |
+| [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend + a browser-based "web playground" for iterating on commands without a Discord token | **Deployed** (staging + prod). 5 stable commands (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`) registered globally; 1 beta (`/doc`) in test guild only. |
 | Search / retrieval | Full-text + semantic search over the catalog's snapshots | Deferred (not built) |
 
 **How they relate.** team-tracking is the foundation — everything else references it. documentation-system validates every doc's owner against team-tracking. The discord-bot's commands read/write the directory over HTTP. Each service owns its own database; they never share tables.
