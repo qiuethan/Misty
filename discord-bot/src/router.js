@@ -51,3 +51,63 @@ export async function dispatch(intent, { commands, appContext }) {
     return authMessages.internalError();
   }
 }
+
+// Autocomplete cannot be deferred and has a hard ~3s Discord budget, so the
+// principal lookup must not be allowed to consume it. Resolve with `null` after
+// this many ms; the resolver then runs promptly with an anonymous principal
+// (typically yielding no suggestions) rather than the whole autocomplete timing
+// out. Any directory call left in flight resolves harmlessly.
+// NOTE: this timeout runs sequentially before command-specific autocomplete
+// budgets (e.g. doc.js's AUTOCOMPLETE_TIMEOUT_MS). Their sum must stay under
+// Discord's ~3s autocomplete window.
+export const PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS = 1000;
+
+// Resolve to `null` on timeout or rejection — never rejects.
+function resolveWithTimeout(promise, ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    timer.unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
+}
+
+// Surface-agnostic autocomplete dispatch. Sibling to `dispatch`: takes a neutral
+// autocomplete intent, resolves the focused option's resolver, and returns up to
+// 25 { name, value } suggestions. BEST-EFFORT — it never throws to the surface.
+// Any failure (unlinked caller, directory down, cold DB, resolver error) yields
+// []. Autocomplete cannot be deferred, so a slow/failed lookup simply produces no
+// suggestions and the user types the value manually.
+export async function dispatchAutocomplete(intent, { commands, appContext }) {
+  const command = commands.get(intent.commandName);
+  if (!command) return [];
+  const activeOptions = intent.subcommand
+    ? command.subcommands.find((s) => s.name === intent.subcommand)?.options ?? []
+    : command.options;
+  const option = activeOptions.find((o) => o.name === intent.focusedOption);
+  if (!option || typeof option.autocomplete !== 'function') return [];
+
+  const principal = await resolveWithTimeout(
+    resolvePrincipal(appContext.directory, intent.discordUserId),
+    PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS,
+  );
+
+  try {
+    const suggestions = await option.autocomplete({
+      typed: intent.typed ?? '',
+      principal,
+      ctx: appContext,
+    });
+    return Array.isArray(suggestions) ? suggestions.slice(0, 25) : [];
+  } catch {
+    return [];
+  }
+}

@@ -78,6 +78,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the cross-service data fl
 UTMIST-Prototypes/
 ├── README.md                          You are here
 ├── docs/
+│   ├── DEVELOPMENT.md                Developer onboarding — clone to first PR
 │   ├── ARCHITECTURE.md                Cross-service architecture — how the pieces fit
 │   ├── RAILWAY-DEPLOYMENT.md          Deploy runbook (Railway + Neon setup, key provisioning)
 │   └── DEPLOYMENT-HISTORY.md          Design decisions + lessons learned
@@ -113,6 +114,8 @@ Each service is self-contained: its own dependencies, its own database, its own 
 ---
 
 ## Running the platform locally
+
+New here? Start with the **[developer onboarding guide](docs/DEVELOPMENT.md)** — it walks a fresh clone through prerequisites, running the platform in order, and your first contribution.
 
 Nothing to bootstrap at the root — stand up only what you need:
 
@@ -157,7 +160,8 @@ Depending on what you're here to do:
 - [`services/documentation-system/docs/API.md`](services/documentation-system/docs/API.md) — ingest, retrieve, and update the catalog.
 
 **Contributing code**
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) first — the cross-service picture.
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — onboarding: clone → running locally → first PR.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the cross-service picture.
 - Then whichever service you're touching: [`services/team-tracking/`](services/team-tracking/README.md), [`services/documentation-system/`](services/documentation-system/README.md), or [`discord-bot/`](discord-bot/README.md).
 - Each service has a `docs/CONTRIBUTING.md` with task walkthroughs.
 

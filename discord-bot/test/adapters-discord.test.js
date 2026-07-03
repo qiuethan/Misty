@@ -4,6 +4,7 @@ import { MessageFlags } from 'discord.js';
 import { defineCommand } from '../src/defineCommand.js';
 import {
   interactionToIntent,
+  interactionToAutocompleteIntent,
   payloadToDiscordReply,
   resolveEphemeral,
   wireDiscordClient,
@@ -18,6 +19,7 @@ function fakeInteraction({ commandName, subcommand = null, calls }) {
     deferred: false,
     replied: false,
     isChatInputCommand: () => true,
+    isAutocomplete: () => false,
     options: {
       getString: () => null,
       getBoolean: () => null,
@@ -212,4 +214,81 @@ test('wireDiscordClient edits the deferred reply with the payload', async () => 
   const edit = calls.find((c) => c.method === 'editReply');
   assert.ok(edit, 'a deferred reply should be delivered via editReply, not a second reply');
   assert.equal(edit.payload.content, 'the record');
+});
+
+test('wireDiscordClient resolves the deferred reply with an error when dispatch throws', async () => {
+  const calls = [];
+  // A non-public command so dispatch runs the auth lookup. If that lookup throws
+  // an unexpected error (e.g. a cold Neon DB failing mid-query), dispatch itself
+  // throws — the router only catches errors from the handler, not from auth. The
+  // interaction is already deferred, so the adapter must still resolve it or the
+  // user is stuck staring at "thinking…" until the token expires.
+  const command = defineCommand({
+    name: 'whoami',
+    description: 'x',
+    auth: 'linked',
+    ephemeral: true,
+    handler: async () => ({ content: 'record' }),
+  });
+  const appContext = {
+    directory: {
+      getPersonByDiscordId: async () => {
+        throw new Error('db exploded');
+      },
+    },
+  };
+  const client = fakeClient();
+  wireDiscordClient(client, { commands: new Map([['whoami', command]]), appContext });
+
+  await client.emit(fakeInteraction({ commandName: 'whoami', calls }));
+
+  const edit = calls.find((c) => c.method === 'editReply');
+  assert.ok(edit, 'a thrown dispatch must still resolve the deferred reply');
+  assert.ok(
+    edit.payload.content && edit.payload.content.length > 0,
+    'the error reply should carry a user-facing message',
+  );
+});
+
+function fakeAutocompleteInteraction({ commandName, subcommand, focused, calls }) {
+  return {
+    commandName,
+    user: { id: 'u1', username: 'alex' },
+    isAutocomplete: () => true,
+    isChatInputCommand: () => false,
+    options: {
+      getFocused: (full) => (full ? focused : focused.value),
+      getSubcommand: () => subcommand,
+    },
+    async respond(choices) {
+      calls.push({ method: 'respond', choices });
+    },
+  };
+}
+
+test('interactionToAutocompleteIntent extracts focused option and typed value', () => {
+  const intent = interactionToAutocompleteIntent(
+    fakeAutocompleteInteraction({ commandName: 'doc', subcommand: 'list', focused: { name: 'team', value: 'm' }, calls: [] }),
+  );
+  assert.equal(intent.commandName, 'doc');
+  assert.equal(intent.subcommand, 'list');
+  assert.equal(intent.focusedOption, 'team');
+  assert.equal(intent.typed, 'm');
+  assert.equal(intent.discordUserId, 'u1');
+});
+
+test('wireDiscordClient responds to autocomplete with suggestions', async () => {
+  const calls = [];
+  const doc = defineCommand({
+    name: 'doc', description: 'd', handler: async () => ({ content: 'x' }),
+    subcommands: [{ name: 'list', description: 'l', handler: async () => ({ content: 'y' }),
+      options: [{ name: 'team', type: 'string', description: 't', autocomplete: async () => [{ name: 'ML', value: 'ml' }] }] }],
+  });
+  const commands = new Map([['doc', doc]]);
+  const appContext = { directory: { getPersonByDiscordId: async () => ({ id: 'p1' }) } };
+  const client = fakeClient();
+  wireDiscordClient(client, { commands, appContext });
+  await client.emit(fakeAutocompleteInteraction({ commandName: 'doc', subcommand: 'list', focused: { name: 'team', value: 'm' }, calls }));
+  const respond = calls.find((c) => c.method === 'respond');
+  assert.deepEqual(respond.choices, [{ name: 'ML', value: 'ml' }]);
 });
