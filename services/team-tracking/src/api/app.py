@@ -1,9 +1,12 @@
 from fastapi import FastAPI
 
 from src.api.middleware import AuditLogMiddleware
+from src.config import verify_production_secrets
 
 
 def create_app() -> FastAPI:
+    verify_production_secrets()
+
     from src.api.routers import (
         api_keys,
         identifiers,
