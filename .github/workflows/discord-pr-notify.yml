@@ -1,0 +1,80 @@
+name: discord-pr-notify
+
+# Posts a Discord notification when a PR needs attention.
+#
+# Two channels, each fully decoupled from this file via a repo secret that
+# holds a Discord webhook URL. To change which channel receives messages,
+# just update the secret in repo Settings -> Secrets and variables -> Actions
+# (no code change, no deploy). If a secret is unset, that job no-ops.
+#
+#   DISCORD_STAGING_WEBHOOK  -> PRs into `staging`, only when review is requested
+#   DISCORD_PROD_WEBHOOK     -> PRs into `main` (staging -> prod), always
+#
+# See issue #34 (Code Reviewer Assigner + Discord webhook).
+
+on:
+  pull_request:
+    branches: [staging, main]
+    types: [opened, reopened, ready_for_review, review_requested]
+
+permissions:
+  contents: read
+
+jobs:
+  # Staging: only when review is actually needed (a reviewer was requested,
+  # e.g. via CODEOWNERS auto-request) and the PR is not a draft.
+  notify-staging:
+    if: >-
+      github.base_ref == 'staging' &&
+      github.event.action == 'review_requested' &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to staging channel
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_STAGING_WEBHOOK }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REVIEWER: ${{ github.event.requested_reviewer.login }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::DISCORD_STAGING_WEBHOOK not set — skipping notification."
+            exit 0
+          fi
+          payload=$(jq -n \
+            --arg title "$PR_TITLE" \
+            --arg url "$PR_URL" \
+            --arg author "$PR_AUTHOR" \
+            --arg reviewer "$REVIEWER" \
+            '{content: ("🔍 **Review needed** on PR into `staging`\n**\($title)** by \($author)"
+              + (if $reviewer == "" then "" else "\nReviewer: **\($reviewer)**" end)
+              + "\n\($url)")}')
+          curl -sf -X POST -H "Content-Type: application/json" -d "$payload" "$WEBHOOK"
+
+  # Prod: any non-draft PR into main (policy forces these to come from staging).
+  # Always ping.
+  notify-prod:
+    if: >-
+      github.base_ref == 'main' &&
+      github.event.action != 'review_requested' &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to prod channel
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_PROD_WEBHOOK }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::DISCORD_PROD_WEBHOOK not set — skipping notification."
+            exit 0
+          fi
+          payload=$(jq -n \
+            --arg title "$PR_TITLE" \
+            --arg url "$PR_URL" \
+            --arg author "$PR_AUTHOR" \
+            '{content: ("🚀 **Staging → Prod** PR — please review & approve\n**\($title)** by \($author)\n\($url)")}')
+          curl -sf -X POST -H "Content-Type: application/json" -d "$payload" "$WEBHOOK"
