@@ -24,6 +24,20 @@ test('addDoc resolves team slug and returns ADDED on created', async () => {
   assert.equal(res.doc.id, 'd1');
 });
 
+test('addDoc treats null tags as absent and does not throw', async () => {
+  const svc = createDocService({
+    directory: {},
+    docClient: {
+      ingestDoc: async (payload) => {
+        assert.equal('tags' in payload, false);
+        return { doc: { id: 'd1' }, created: true, warnings: [] };
+      },
+    },
+  });
+  const res = await svc.addDoc({ url: 'https://x.com', tags: null });
+  assert.equal(res.outcome, 'ADDED');
+});
+
 test('addDoc returns MERGED when created is false', async () => {
   const svc = createDocService({
     directory: {},

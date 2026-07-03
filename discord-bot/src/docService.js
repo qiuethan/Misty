@@ -22,7 +22,7 @@ export function createDocService({ docClient, directory }) {
       const payload = { url };
       if (title !== undefined && title !== null) payload.title = title;
       if (resolved.teamId !== undefined) payload.owningTeamId = resolved.teamId;
-      if (tags !== undefined && tags.length > 0) payload.tags = tags;
+      if (tags !== undefined && tags !== null && tags.length > 0) payload.tags = tags;
       const result = await docClient.ingestDoc(payload);
       return {
         outcome: result.created ? 'ADDED' : 'MERGED',
