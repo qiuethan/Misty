@@ -7,13 +7,15 @@ Covers:
 - Missing scope returns 403
 """
 
+import logging
+
 import pytest
 from fastapi.testclient import TestClient
 
 from conftest import build_seed_role_kinds
 from src.api.app import create_app
 from src.api.deps import get_storage
-from src.api.hashing import generate_key
+from src.api.hashing import generate_key, generate_key as _gen_key_for_spoof_tests
 from src.storage.in_memory import InMemoryStorageAdapter
 
 
@@ -124,17 +126,11 @@ def test_admin_scope_grants_everything(client, adapter):
 
 # --- dev:spoof environment guard --------------------------------------------
 
-import logging
-
-from src.api.hashing import generate_key as _gen_key_for_spoof_tests
-
 
 def _issue_key_with_scopes(adapter, name: str, scopes: list[str]) -> str:
     """Helper: create a DB API key with the given scopes and return the plaintext."""
     plaintext, prefix, key_hash = _gen_key_for_spoof_tests()
-    adapter.create_api_key(
-        name=name, prefix=prefix, key_hash=key_hash, scopes=scopes, actor="test"
-    )
+    adapter.create_api_key(name=name, prefix=prefix, key_hash=key_hash, scopes=scopes, actor="test")
     return plaintext
 
 
@@ -150,9 +146,7 @@ def prod_env(monkeypatch, env_key):
 
 
 def test_dev_spoof_key_rejected_when_tt_env_production(client, adapter, prod_env):
-    plaintext = _issue_key_with_scopes(
-        adapter, "playground-key", ["people:read", "dev:spoof"]
-    )
+    plaintext = _issue_key_with_scopes(adapter, "playground-key", ["people:read", "dev:spoof"])
     resp = client.get("/role_kinds", headers={"X-API-Key": plaintext})
     assert resp.status_code == 403
     assert "dev:spoof" in resp.json()["detail"]
@@ -160,40 +154,29 @@ def test_dev_spoof_key_rejected_when_tt_env_production(client, adapter, prod_env
 
 def test_dev_spoof_key_allowed_when_tt_env_local(client, adapter):
     # No prod_env — default local
-    plaintext = _issue_key_with_scopes(
-        adapter, "playground-key", ["role_kinds:read", "dev:spoof"]
-    )
+    plaintext = _issue_key_with_scopes(adapter, "playground-key", ["role_kinds:read", "dev:spoof"])
     resp = client.get("/role_kinds", headers={"X-API-Key": plaintext})
     assert resp.status_code == 200
 
 
 def test_non_dev_spoof_key_unaffected_in_production(client, adapter, prod_env):
-    plaintext = _issue_key_with_scopes(
-        adapter, "prod-key", ["role_kinds:read"]
-    )
+    plaintext = _issue_key_with_scopes(adapter, "prod-key", ["role_kinds:read"])
     resp = client.get("/role_kinds", headers={"X-API-Key": plaintext})
     assert resp.status_code == 200
 
 
 def test_admin_scope_does_not_bypass_dev_spoof_guard(client, adapter, prod_env):
     """An `admin` scope wildcards `require_scope`, but MUST NOT bypass this guard."""
-    plaintext = _issue_key_with_scopes(
-        adapter, "danger-key", ["admin", "dev:spoof"]
-    )
+    plaintext = _issue_key_with_scopes(adapter, "danger-key", ["admin", "dev:spoof"])
     resp = client.get("/role_kinds", headers={"X-API-Key": plaintext})
     assert resp.status_code == 403
 
 
 def test_dev_spoof_rejection_logs_warning(client, adapter, prod_env, caplog):
-    plaintext = _issue_key_with_scopes(
-        adapter, "playground-key", ["dev:spoof"]
-    )
+    plaintext = _issue_key_with_scopes(adapter, "playground-key", ["dev:spoof"])
     with caplog.at_level(logging.WARNING, logger="team_tracking.audit"):
         client.get("/role_kinds", headers={"X-API-Key": plaintext})
-    assert any(
-        "dev:spoof" in rec.message and "production" in rec.message
-        for rec in caplog.records
-    )
+    assert any("dev:spoof" in rec.message and "production" in rec.message for rec in caplog.records)
 
 
 def test_dev_spoof_rejection_warning_is_valid_json(client, adapter, prod_env, caplog):
@@ -201,9 +184,7 @@ def test_dev_spoof_rejection_warning_is_valid_json(client, adapter, prod_env, ca
     so downstream log aggregators (Loki/CloudWatch/etc.) can parse it uniformly."""
     import json
 
-    plaintext = _issue_key_with_scopes(
-        adapter, "some-playground-key", ["dev:spoof"]
-    )
+    plaintext = _issue_key_with_scopes(adapter, "some-playground-key", ["dev:spoof"])
     with caplog.at_level(logging.WARNING, logger="team_tracking.audit"):
         client.get("/role_kinds", headers={"X-API-Key": plaintext})
 
