@@ -14,7 +14,7 @@ async function main() {
   if (enableDiscord) {
     const client = new Client({ intents: [GatewayIntentBits.Guilds] });
     wireDiscordClient(client, { commands, appContext });
-    client.once('ready', (c) => console.log(`Bot ready as ${c.user.tag}`));
+    client.once('clientReady', (c) => console.log(`Bot ready as ${c.user.tag}`));
     await client.login(config.discordToken).catch((err) => {
       console.error('Discord login failed:', err.message);
       process.exit(1);

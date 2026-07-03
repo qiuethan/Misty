@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  python-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: team_tracking
+          POSTGRES_PASSWORD: dev_password
+          POSTGRES_DB: team_tracking
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U team_tracking"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://team_tracking:dev_password@localhost:5432/team_tracking
+    defaults:
+      run:
+        working-directory: team-tracking
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Run migrations
+        run: uv run alembic upgrade head
+      - name: Run tests
+        run: uv run pytest
+
+  python-lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: team-tracking
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Ruff check
+        run: uv run ruff check .
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+  node-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: discord-bot
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: discord-bot/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Run tests
+        run: npm test
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build team-tracking image
+        run: docker build -t team-tracking:ci ./team-tracking
+      - name: Smoke-test team-tracking image (imports incl. contracts/ resolve at boot)
+        run: docker run --rm team-tracking:ci python -c "import src.api.app"
+      - name: Build discord-bot image
+        run: docker build -t discord-bot:ci ./discord-bot
+      - name: Smoke-test discord-bot image (source parses)
+        run: docker run --rm discord-bot:ci node --check src/index.js

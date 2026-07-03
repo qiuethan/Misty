@@ -43,7 +43,10 @@ def cmd_seed_person(args: argparse.Namespace, adapter=None) -> int:
             update_kwargs["access_level"] = args.level
         p = adapter.update_person(existing.id, PersonUpdate(**update_kwargs), actor=args.actor)
         verb = "updated"
-    print(f"{verb}: {p.display_name} <{p.primary_email}> level={p.access_level} id={p.id}", file=sys.stderr)
+    print(
+        f"{verb}: {p.display_name} <{p.primary_email}> level={p.access_level} id={p.id}",
+        file=sys.stderr,
+    )
     return 0
 
 

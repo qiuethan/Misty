@@ -30,9 +30,7 @@ def client(monkeypatch, adapter):
 
 def _issue(adapter, name: str, scopes: list[str]) -> str:
     plaintext, prefix, key_hash = generate_key()
-    adapter.create_api_key(
-        name=name, prefix=prefix, key_hash=key_hash, scopes=scopes, actor="test"
-    )
+    adapter.create_api_key(name=name, prefix=prefix, key_hash=key_hash, scopes=scopes, actor="test")
     return plaintext
 
 
@@ -47,14 +45,10 @@ def test_self_returns_key_metadata(client, adapter):
 
 
 def test_self_returns_sorted_scopes(client, adapter):
-    plaintext = _issue(
-        adapter, "bot", ["identifiers:write", "dev:spoof", "people:read"]
-    )
+    plaintext = _issue(adapter, "bot", ["identifiers:write", "dev:spoof", "people:read"])
     resp = client.get("/api-keys/self", headers={"X-API-Key": plaintext})
     assert resp.status_code == 200
-    assert resp.json()["scopes"] == sorted(
-        ["identifiers:write", "dev:spoof", "people:read"]
-    )
+    assert resp.json()["scopes"] == sorted(["identifiers:write", "dev:spoof", "people:read"])
 
 
 def test_self_works_for_env_bootstrap_key(client):
