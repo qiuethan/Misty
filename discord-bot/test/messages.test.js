@@ -12,6 +12,10 @@ import {
   renderRemoveMemberResult,
   renderRosterResult,
   renderMyTeamsResult,
+  renderDocAddResult,
+  renderDocListResult,
+  renderDocShowResult,
+  renderDocRemoveResult,
 } from '../src/messages.js';
 
 test('authMessages.unavailable returns ReplyPayload', () => {
@@ -259,5 +263,59 @@ test('shared-reference render functions (list, roster) are public (ephemeral: fa
     assert.equal(typeof p.content, 'string');
     assert.equal(p.ephemeral, false);
     assert.equal(p.embeds, undefined);
+  }
+});
+
+test('renderDocAddResult ADDED shows title and url, ephemeral', () => {
+  const r = renderDocAddResult({ outcome: 'ADDED', doc: { title: 'Onboarding', url: 'https://x.com', id: 'd1' }, warnings: [] });
+  assert.match(r.content, /Onboarding/);
+  assert.match(r.content, /https:\/\/x\.com/);
+  assert.equal(r.ephemeral, true);
+});
+
+test('renderDocAddResult MERGED says already catalogued', () => {
+  const r = renderDocAddResult({ outcome: 'MERGED', doc: { url: 'https://x.com', id: 'd1' }, warnings: [] });
+  assert.match(r.content, /already catalogued/i);
+});
+
+test('renderDocAddResult surfaces warnings', () => {
+  const r = renderDocAddResult({ outcome: 'ADDED', doc: { url: 'https://x.com', id: 'd1' }, warnings: ['owner label deferred'] });
+  assert.match(r.content, /owner label deferred/);
+});
+
+test('renderDocAddResult TEAM_NOT_FOUND', () => {
+  assert.match(renderDocAddResult({ outcome: 'TEAM_NOT_FOUND' }).content, /no team/i);
+});
+
+test('renderDocListResult LISTED is public and lists titles+ids', () => {
+  const r = renderDocListResult({ outcome: 'LISTED', docs: [{ title: 'Onboarding', id: 'd1', source_id: 'gdocs' }] });
+  assert.equal(r.ephemeral, false);
+  assert.match(r.content, /Onboarding/);
+  assert.match(r.content, /d1/);
+});
+
+test('renderDocListResult LISTED empty', () => {
+  assert.match(renderDocListResult({ outcome: 'LISTED', docs: [] }).content, /no docs/i);
+});
+
+test('renderDocShowResult SHOWN includes url and id', () => {
+  const r = renderDocShowResult({ outcome: 'SHOWN', doc: { title: 'Onboarding', url: 'https://x.com', id: 'd1', source_id: 'gdocs', tags: ['onboarding'], owning_team_label: 'ML' } });
+  assert.match(r.content, /https:\/\/x\.com/);
+  assert.match(r.content, /ML/);
+});
+
+test('renderDocShowResult NOT_FOUND', () => {
+  assert.match(renderDocShowResult({ outcome: 'NOT_FOUND' }).content, /no doc/i);
+});
+
+test('renderDocRemoveResult REMOVED is ephemeral', () => {
+  const r = renderDocRemoveResult({ outcome: 'REMOVED', doc: { title: 'Onboarding', id: 'd1' } });
+  assert.equal(r.ephemeral, true);
+  assert.match(r.content, /removed/i);
+});
+
+test('doc renderers map DOC_DOWN', () => {
+  for (const fn of [renderDocAddResult, renderDocListResult, renderDocShowResult, renderDocRemoveResult]) {
+    assert.match(fn({ outcome: 'DOC_DOWN' }).content, /unavailable/i);
   }
 });
