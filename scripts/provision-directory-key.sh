@@ -25,19 +25,21 @@ issue_key() {
   local name="$1"; shift
   DATABASE_URL="$TT_DATABASE_URL" uv --project "$TT_DIR" run team-tracking-keys issue \
     --name "$name" --scopes "$@" \
-    | grep -oE 'tt_[A-Za-z0-9_]+' | head -n1
+    | grep -oE 'tt_[A-Za-z0-9_-]+' | head -n1
 }
 
 echo "▶ discord-bot: issuing scoped directory key ($ENVIRONMENT)…"
 BOT_KEY="$(issue_key "discord-bot-$ENVIRONMENT" \
   people:read people:write identifiers:read identifiers:write \
-  teams:read teams:write memberships:read memberships:write role_kinds:read)"
-[ -n "$BOT_KEY" ] || { echo "ERROR: failed to mint discord-bot key" >&2; exit 1; }
+  teams:read teams:write memberships:read memberships:write role_kinds:read)" \
+  || { echo "ERROR: failed to mint discord-bot key" >&2; exit 1; }
+[ -n "$BOT_KEY" ] || { echo "ERROR: discord-bot key came back empty" >&2; exit 1; }
 railway variables --service discord-bot --environment "$ENVIRONMENT" --set "DIRECTORY_API_KEY=$BOT_KEY"
 
 echo "▶ documentation-system: issuing scoped directory key ($ENVIRONMENT)…"
-DOCS_KEY="$(issue_key "documentation-system-$ENVIRONMENT" people:read teams:read)"
-[ -n "$DOCS_KEY" ] || { echo "ERROR: failed to mint documentation-system key" >&2; exit 1; }
+DOCS_KEY="$(issue_key "documentation-system-$ENVIRONMENT" people:read teams:read)" \
+  || { echo "ERROR: failed to mint documentation-system key" >&2; exit 1; }
+[ -n "$DOCS_KEY" ] || { echo "ERROR: documentation-system key came back empty" >&2; exit 1; }
 railway variables --service documentation-system --environment "$ENVIRONMENT" --set "DIRECTORY_API_KEY=$DOCS_KEY"
 
 echo "✓ provisioned DIRECTORY_API_KEY for discord-bot + documentation-system in $ENVIRONMENT"
