@@ -1,203 +1,161 @@
-# How We Deployed
+# Deployment Design & Lessons
 
-The story of how the UTMIST ops platform got from "code on a laptop" to running on Railway with staging + production environments. Written the day it happened so future volunteers know why things are the way they are.
-
-For the operational **runbook** (how to redeploy, add a service, provision keys, verify), see [`RAILWAY-DEPLOYMENT.md`](RAILWAY-DEPLOYMENT.md). This document is the story and the design decisions.
+Why the UTMIST ops platform is deployed the way it is, and the non-obvious lessons we learned standing it up. For the operational **runbook** (how to redeploy, provision keys, verify, roll back), see [`RAILWAY-DEPLOYMENT.md`](RAILWAY-DEPLOYMENT.md). This document explains the *choices*.
 
 ---
 
-## What we built
+## The shape
 
-- **Two live environments:** `staging` (safe test playground) and `production` (real UTMIST members).
-- **Hosting:** Railway. Each service is a container built from its own `Dockerfile` on git push.
-- **Databases:** Neon Postgres, one project per service, one branch per environment.
-- **Discord:** two separate Discord applications — a staging bot invited only to a private test guild, a production bot registered globally.
-- **CI/CD:** GitHub Actions gates PRs; Railway auto-deploys on merge to the environment's branch.
+```
+                                Railway staging environment           Railway production environment
+GitHub                          ├── team-tracking service              ├── team-tracking service
+├── staging branch  ──deploys──▶├── documentation-system service       ├── documentation-system service
+└── main branch     ──deploys──▶└── discord-bot service                └── discord-bot service
+                                        │                                      │
+                                        ▼                                      ▼
+                                  Neon: team-tracking + docs-system      Neon: team-tracking + docs-system
+                                  projects, `staging` branch of each     projects, `main` branch of each
+```
+
+Two environments (staging, production). Three shared services (each is one Railway entity; variable *values* differ per environment). Two Neon projects (one per API), each with two branches (one per environment). One repo, two long-lived branches, feature → staging → main.
 
 ---
 
-## The decisions we made (and why)
+## The choices, and why we made them
 
-### Railway over VPS
+### Railway over a self-hosted VPS
 
-We looked hard at self-hosting on a VPS with `docker-compose` + Caddy. Cheaper, simpler stack. But UTMIST has **volunteer turnover** — the person who set up a box will graduate, and the next cohort inherits a mystery server. Railway makes the "who owns the box" problem go away: there's no OS to patch, no SSH key to hand off, deploys are a `git push`, and the next volunteer inherits a dashboard, not a Linux system.
-
-Cost: ~$5–20/mo (Hobby plan). Worth it for the turnover-proofing.
+UTMIST has volunteer turnover: the person who set up a box will graduate, and the next cohort inherits a mystery server they didn't provision. Railway removes the "who owns the box" question — deploys are `git push`, there's no OS to patch, and the next volunteer inherits a dashboard, not a Linux system. Cost is ~$5–20/mo; the turnover-proofing is worth more than that.
 
 ### Neon over self-hosted Postgres
 
-Same reasoning + Neon's **branching** feature. Creating `staging` as a copy-on-write branch of prod gave us a realistic staging DB in seconds, storage-efficient (only stores diffs), and reset-able whenever we want. The alternative — seeding a separate staging DB — is manual, drifts from prod, and someone has to keep it in sync forever.
+Same reasoning, plus Neon's **branching** feature. `staging` is a copy-on-write branch of prod — realistic data, isolated writes, and reset-able in seconds. A separately-seeded staging DB would drift from prod forever and require ongoing sync work.
 
-**Postgres 16** (matches CI + local dev exactly). `postgresql://` connection strings are edited to `postgresql+psycopg://` so SQLAlchemy picks the right driver.
+### One Neon project per service
 
-### One Neon *project* per service, one *branch* per environment
+Each service owns its DB. team-tracking's DB never contains a doc catalog entry; docs-system's DB never contains a person record. Services talk over HTTP, not shared tables. Matches the "each service is a source of truth for one domain" principle — and Neon's free-tier limits mean each service gets its own storage + compute budget.
 
-Every service owns its DB. The bot talks to team-tracking's API, not its DB. team-tracking's DB never contains a doc catalog entry, and docs-system's DB never contains a person record. Separation by design — matches the "each service is a source of truth for one domain" principle.
+### Shared services with per-environment variables
 
-| | team-tracking project | documentation-system project |
-|---|---|---|
-| production env | `main` branch | `main` branch |
-| staging env | `staging` branch | `staging` branch |
-
-Four connection strings total (2 projects × 2 branches).
-
-### Three Railway services, shared across environments
-
-We started by accidentally creating **six** services (three `-staging`-suffixed ones plus three production). Cleaned up to three services, each with per-environment variables — Railway's idiomatic pattern. Same service ID in both envs; only the variable *values* differ. Adding a variable later is one dashboard change, not two.
+Three services, each existing once at the Railway project level and exposed in *both* environments with different variable values. This is Railway's idiomatic pattern: adding a variable later is one dashboard change, not two. Cross-service references (`${{team-tracking.RAILWAY_PRIVATE_DOMAIN}}`) resolve to the right environment automatically.
 
 ### Branching model: feature → staging → main
 
-```
-feature branch  ──PR──▶  staging  ──PR──▶  main
-                          │                  │
-                          ▼                  ▼
-                    Railway staging   Railway production
-                    (auto-deploy)     (auto-deploy)
-```
+- **`staging` is the default branch.** Feature PRs auto-target it. Merges auto-deploy to the Railway staging environment.
+- **`main` is the release branch.** Only PRs from `staging` can merge — enforced by the `main-source-guard` workflow. Merges auto-deploy to production.
+- Both branches require the 4 CI checks; main additionally requires the source-guard.
 
-- **`staging` is the default branch** — new PRs auto-target it. Small friction win worth a small mental-model weirdness.
-- **`main` is protected** and requires 5 checks (the 4 CI jobs + `enforce-source-is-staging`, a workflow that rejects any PR to main whose head isn't `staging`). Nothing reaches production without first proving itself on staging.
-- **Merges to `staging`** auto-deploy to the Railway staging environment (staging Neon branch + staging Discord app).
-- **Merges to `main`** auto-deploy to the Railway production environment.
+This gives you the loop of `push to feature → PR → staging → real staging deploy → validate → promote to main → production deploy`, with no branch or environment able to skip validation.
 
-### Per-consumer scoped API keys, minted by a script
+### Per-consumer scoped API keys
 
-The bot and docs-system authenticate to team-tracking with scoped `tt_…` keys. We do *not* share the admin bootstrap `API_KEY` across services — each consumer gets its own key with only the scopes it needs, so a leaked bot key can't be used by docs-system and vice versa, and each is independently revocable.
+The bot and docs-system authenticate to team-tracking with their **own** scoped `tt_…` keys — not a shared admin bootstrap. A leaked bot key can't be used by docs-system, each is revocable independently, and the audit log records who did what by name.
 
-Keys are minted by [`scripts/provision-directory-key.sh <env>`](../scripts/provision-directory-key.sh), which runs `team-tracking-keys issue` against that environment's Neon branch and writes each key onto its Railway consumer service with `railway variables --set`. One command per environment, run when the environment is first stood up (or when a key needs rotating).
+Keys are minted by `scripts/provision-directory-key.sh <env>`, which runs `team-tracking-keys issue` against that environment's Neon branch and writes each key onto its Railway consumer with `railway variables --set`. One command per environment.
 
-Scope lists:
-- **discord-bot:** `people:read people:write identifiers:read identifiers:write teams:read teams:write memberships:read memberships:write role_kinds:read`
-- **documentation-system:** `people:read teams:read` (all it needs — just to validate a doc's owner)
+Scopes:
+- **discord-bot:** `people:read people:write identifiers:read identifiers:write teams:read teams:write memberships:read memberships:write role_kinds:read` (needs identity + membership management)
+- **documentation-system:** `people:read teams:read` (only needs to look up an owner's label)
 
-### CI-gated everything
+### CI on every PR to `staging` or `main`
 
-`.github/workflows/ci.yml` runs on every PR to `staging` or `main`:
-- `python-test` — real Postgres 16 service, applies migrations, runs the full pytest suite
-- `python-lint` — ruff check + format
-- `node-test` — the discord-bot's `node --test` suite
-- `docker-build` — builds *and boot-smoke-tests* all three service images (`python -c "import src.api.app"` for the APIs, `node --check src/index.js` for the bot)
+`.github/workflows/ci.yml` runs:
+- **`python-test`** — Postgres 16 service container, applies migrations, runs the full pytest suite
+- **`python-lint`** — ruff check + format
+- **`node-test`** — the bot's `node --test` suite
+- **`docker-build`** — builds *and boot-smoke-tests* all three images (`python -c "import src.api.app"` for the APIs, `node --check src/index.js` for the bot)
 
-Plus the `main-source-guard` workflow on PRs to `main`. All required — nothing red merges.
+Plus `main-source-guard` on PRs to `main`. All required — nothing red merges.
 
 ---
 
-## The three bugs we hit (and the fix each shipped)
+## Non-obvious things worth knowing (lessons)
 
-All three shook out during the first live deploy attempt. Each got fixed via the branching flow (staging → main).
+Three sharp edges bit us during the first live deploy. Each is documented so nobody has to learn them from a failed deploy.
 
-### 1. `${PORT}` wasn't being shell-expanded
+### Wrap shell-variable start commands in `sh -c`
 
-**Symptom:** every deploy of the two APIs failed immediately with:
-```
-Error: Invalid value for '--port': '${PORT}' is not a valid integer.
-```
+Railway executes a string `startCommand` in `railway.json` directly — no shell interpretation. So `uvicorn ... --port ${PORT}` passes the literal string `${PORT}` to uvicorn, which rejects it with `Error: Invalid value for '--port': '${PORT}' is not a valid integer.`
 
-**Root cause:** the `railway.json` start command was `uvicorn ... --host :: --port ${PORT}` — a plain string. Railway executed it without going through a shell, so `${PORT}` was passed literally to uvicorn (which naturally rejected it).
-
-**Fix (commits `62bf023`, PR #11 → #12):** wrap in `sh -c`:
+Wrap it explicitly:
 ```json
 "startCommand": "sh -c 'uvicorn src.api.app:app --host 0.0.0.0 --port ${PORT}'"
 ```
-The shell expands `$PORT` (which Railway injects at container start) before uvicorn sees it.
+The `sh -c` runs a shell that expands `$PORT` (which Railway injects at container start) before uvicorn sees it.
 
-### 2. `--host ::` was IPv6-only on Debian's default kernel
+### Bind APIs to `0.0.0.0`, not `::`
 
-**Symptom:** APIs built fine, uvicorn logs showed `Uvicorn running on http://[::]:8080` and even successful `alembic upgrade head` runs — but Railway's healthcheck against `/health` failed 11 times over 5 minutes with "service unavailable," and every deploy was marked FAILED.
+On the default `python:3.11-slim` kernel, binding to `::` binds **IPv6-only**. Railway's healthcheck reaches the container over IPv4 and finds no listener, so every deploy fails healthcheck even though uvicorn started fine and migrations succeeded.
 
-**Root cause:** I had specified `--host ::` on the theory that Railway's private network is IPv6. In Debian's default `python:3.11-slim` kernel config, binding to `::` binds **IPv6-only** — Railway's healthchecker was reaching in on IPv4 (`127.0.0.1:PORT`) and finding no listener.
+Bind to `--host 0.0.0.0`. Railway's private network routes to the container's port regardless of bind family, so internal service-to-service calls still work.
 
-**Fix (commits `f0bfe7a`, PR #13 → #14):** bind to the boring, universal `--host 0.0.0.0`. Railway's private networking routes to the container's port regardless of bind family, so internal service-to-service calls still work.
+### If you cross-reference a service's `PORT`, set it explicitly
 
-### 3. `${{team-tracking.PORT}}` template ref resolved to empty string
+Railway's cross-service template `${{team-tracking.PORT}}` resolves from the **variable store**. `PORT` as Railway injects it at container runtime is *not* in the variable store — so the template resolves to an empty string, and consumers try to hit `http://team-tracking.railway.internal:` with no port, which fails.
 
-**Symptom:** everything deployed green, but running `/link` in the staging test guild returned "The directory is temporarily unavailable." The bot's HTTP call to team-tracking was failing.
+Set `PORT=8000` (or whatever you like) as an **explicit** Railway variable on any service being referenced. Railway respects your value at container start, *and* the template ref now resolves correctly on consumers.
 
-**Root cause:** the bot's `DIRECTORY_BASE_URL` was set to `http://${{team-tracking.RAILWAY_PRIVATE_DOMAIN}}:${{team-tracking.PORT}}`. Railway resolves those cross-service templates from the **variable store**. But `PORT` is a **dynamic** value Railway injects into the container at runtime — it's not in the variable store. So the template resolved to `http://team-tracking.railway.internal:` — the port was literally empty. Bot's HTTP client tried to open a connection to `team-tracking.railway.internal` with no port, fell into its `DirectoryUnavailable` error path, returned the "temporarily unavailable" message.
+### Both branches require an approving review
 
-**Fix (Railway dashboard / CLI, no code change):** explicitly set `PORT=8000` as a Railway variable on team-tracking in both environments. Now it lives in the variable store, cross-service refs resolve to `:8000`, and Railway still uses that value at container start (so uvicorn also binds to 8000 — a nice consistency win).
-
-**Lesson:** if you use a cross-service template ref, the referenced variable must be an **explicit** Railway variable, not a Railway-injected runtime value.
+`staging` and `main` are both branch-protected with `required_approving_review_count: 1`. Auto-merging your own PR isn't possible; use the standard review flow or an admin merge for genuinely trivial changes (e.g. docs-only). Removing this requirement would speed things up but weaken the safety net — don't do it without a real reason.
 
 ---
 
-## Current live state
+## Current state
 
-- **Both environments fully up.** All 3 services (team-tracking, documentation-system, discord-bot) SUCCESS in both `staging` and `production`.
-- **APIs are private-only** on Railway (no public domain). External callers can't reach them — only the bot and docs-system, over Railway's internal network, can.
-- **Discord commands registered.** Staging bot: 3 stable global + 2 beta (test guild only). Production bot: 3 stable global (real UTMIST server), beta correctly skipped (no `DISCORD_GUILD_ID` set).
-- **Team-tracking pre-deploy migration** runs `alembic upgrade head` against the environment's Neon branch on every deploy. Idempotent.
+- Both environments fully deployed and healthy.
+- APIs are **private-only** on Railway (no public domains). Only in-project services (the bot, docs-system) reach them, over Railway's internal network. Add a public domain later if an external caller ever needs one — both APIs already have API-key auth.
+- **Discord commands:** staging bot registers stable commands globally + beta commands to the test guild; production bot registers stable commands only (no beta clutter in real servers).
+- **Migrations run automatically** as Railway's `preDeployCommand` on the two API services — `alembic upgrade head` against the environment's Neon branch before every deploy. Idempotent.
 
 ---
 
-## How to redeploy
+## Redeploy and rollback
 
-Just push to the appropriate branch:
+**Deploying is merging.** Merge to `staging` → Railway rebuilds and deploys staging. Merge `staging → main` → Railway does the same for production. No other trigger needed.
 
-- **Deploy to staging** — merge a PR into `staging`.
-- **Deploy to production** — merge a `staging → main` PR.
-
-Railway watches for the push and rebuilds affected services. Nothing more to do.
-
-**Manual redeploy** (rare — e.g. after a Railway hiccup) via CLI:
+**Manual redeploy** (rare — after a Railway hiccup):
 ```bash
 railway service redeploy --service <name> --environment <staging|production> --yes
 ```
 
-## How to roll back
-
-Roll back by *reverting the commit* on the branch that deployed the bad change:
-
+**Rolling back:**
 ```bash
-# On staging:
-git checkout staging && git revert <bad-commit>
-git push  # → Railway auto-redeploys staging
-
-# On production (needs staging → main):
-# 1. Revert on staging first, PR to staging, merge
-# 2. Then staging → main PR to promote the revert
+# Roll back staging:
+git checkout staging && git revert <bad-commit> && git push
+# Roll back production: revert on staging first, then promote via a staging → main PR.
 ```
 
-**Database migrations** — if the bad commit included a schema migration, you'll also need to downgrade with `alembic downgrade -1` against that environment's Neon branch. Every migration ships with a working `downgrade()` (that's a review requirement); use `railway run --service team-tracking --environment <env> -- alembic downgrade -1` to run it.
+If the bad change included a schema migration, downgrade it against the environment's Neon branch:
+```bash
+railway run --service team-tracking --environment <env> -- alembic downgrade -1
+```
+Every migration ships with a working `downgrade()` — that's a review requirement.
 
-Neon also lets you **reset a branch** to an earlier point-in-time snapshot from the Neon dashboard — a lifeline if a migration + a data corruption happen together.
-
----
-
-## Who has access to what
-
-- **Railway project** (`Bot-Deploy`) — anyone on the `UTMIST-Internal-Tooling` Railway workspace. Add teammates in the Railway dashboard.
-- **Neon projects** (`team-tracking`, `documentation-system`) — same story on the Neon side. Share via project settings.
-- **GitHub repo** — GitHub team-based, standard PR flow. `main` and `staging` protected; nothing merges without CI green.
-- **Discord bots** — the token lives *only* in Railway (per-environment). The Discord developer portal shows the app; only whoever created the app is a "team member" unless invited.
-
-**Security note:** the person who deployed this (Ethan) is the only one currently seeded as a `superuser` in the production directory. Onboarding more admins is a controlled process — see the runbook's "seeding admins" section.
+Neon also offers point-in-time recovery: reset a branch to an earlier snapshot from the Neon dashboard. A lifeline if a bad migration *and* data corruption happen together.
 
 ---
 
-## What we deliberately didn't build
+## Access
 
-- **A local `docker-compose.yml` for the whole platform.** The specs called for one, but the existing native flows (`npm run dev:web` for the bot playground, per-service quick-starts for the APIs) already cover the local story better than a compose file would. See the design doc in `docs/superpowers/specs/` for the reasoning.
-- **A separate CD system beyond Railway's auto-deploy.** Railway watches the branches; no extra pipeline needed.
-- **Custom domains for the APIs.** They're private-only for now. If an external tool ever needs to reach team-tracking or docs-system, flipping on a public Railway domain is a one-click change; both APIs already have API-key auth if so.
-- **Observability beyond Railway's built-in logs + metrics.** Sufficient for the current scale; revisit when we outgrow it.
+- **Railway project (`Bot-Deploy`)** — invited via the Railway workspace.
+- **Neon projects** — invited via each project's settings.
+- **GitHub repo** — standard PR flow; branch protection enforces review + CI.
+- **Discord bots** — tokens live *only* in Railway (per-environment); the developer portal shows the app, but you need to be invited as a team member to see it there.
 
-## What's next if you want it
+**Superuser seeding** is a controlled action — see the runbook's "seed the first admin" section. Only existing superusers/admins can promote more people from Discord (`/seed`).
 
-Not blocking, all optional:
+---
 
-- **SHA-pin CI actions** (currently on major-version tags) for supply-chain hardening.
-- **Add `concurrency:` blocks to CI** so superseded PR pushes auto-cancel — saves minutes.
-- **Fast-follow on the runbook's minor documentation nits.**
-- **Custom domain** for team-tracking or docs-system if a dashboard/frontend ever wants to hit them from outside Railway.
+## Explicitly out of scope (for now)
 
-## Referenced docs
+- A local `docker-compose.yml` for the whole platform. The existing native flows (`npm run dev:web` for the bot playground, per-service quick-starts for the APIs) cover local dev better than a compose file would.
+- Any CD beyond Railway's built-in auto-deploy. Railway watches the branches; no extra pipeline needed.
+- Custom domains for the APIs — they're private-only until an external caller appears.
+- Observability beyond Railway's built-in logs and metrics — sufficient for current scale.
 
-- **Runbook (how to run + redeploy):** [`RAILWAY-DEPLOYMENT.md`](RAILWAY-DEPLOYMENT.md)
-- **Cross-service architecture:** [`ARCHITECTURE.md`](ARCHITECTURE.md)
-- **Service specifics:**
-  [`services/team-tracking/`](../services/team-tracking/README.md),
-  [`services/documentation-system/`](../services/documentation-system/README.md),
-  [`discord-bot/`](../discord-bot/README.md)
-- **CI:** [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) + [`.github/workflows/main-source-guard.yml`](../.github/workflows/main-source-guard.yml)
-- **Design specs + plans** (gitignored): `docs/superpowers/specs/` and `docs/superpowers/plans/`
+## Nice-to-haves if the itch strikes
+
+- **SHA-pin CI actions** (currently on major tags) for supply-chain hardening.
+- **Add `concurrency:` blocks to CI** so superseded PR pushes auto-cancel.
+- **Custom domain** for team-tracking or docs-system if a dashboard ever wants to hit them from outside Railway.

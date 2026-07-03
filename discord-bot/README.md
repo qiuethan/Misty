@@ -1,12 +1,18 @@
 # UTMIST Discord Bot
 
-A thin Node.js application layer over the [team-tracking](../services/team-tracking) directory
-API. v1 does one thing: link a Discord account to a pre-seeded directory `Person`,
-behind a proper **auth layer** so future commands and role-based permissions slot
-in cleanly.
+The Discord frontend for the UTMIST platform — a thin Node.js layer over the
+[team-tracking](../services/team-tracking) directory API. It gives UTMIST members
+slash commands to link their Discord account, look up teams and rosters, and
+(if they're an admin) manage the directory from Discord itself.
 
-It holds **no database and no business logic** — every action is an HTTP call to
-the directory (the API-only source of truth).
+The bot holds **no database and no business logic** — every action is an HTTP
+call to the directory (the API-only source of truth). It's designed to run in
+many Discord servers from a single deployment, with a proper **auth layer**
+gating each command.
+
+**Status:** Deployed to Railway (staging + production). Staging runs against a
+Neon staging branch in a private test guild; production runs globally against
+the prod branch. See [`docs/RAILWAY-DEPLOYMENT.md`](../docs/RAILWAY-DEPLOYMENT.md).
 
 ## Complete startup (from cold)
 
@@ -373,9 +379,9 @@ npm test    # node --test — unit tests for config, client, service, auth, rout
 The auth layer (principal, policy, router) and the service layer are fully unit
 tested against a mocked directory client. discord.js handlers are kept thin.
 
-## Deferred (v1 non-goals)
+## Deferred
 
-Email verification code, role-based authorization, Discord role sync, `/unlink`,
-and any bot-side persistence.
+Email verification code (still a `TODO: verification` in `src/linkService.js`),
+Discord role sync, `/unlink`, and any bot-side persistence.
 
 Team archive/unarchive, `/team info`, editing role/team-admin on existing memberships, team-admin delegation authority, dynamic role_kinds fetch for slash choices, LLM adapter.

@@ -6,7 +6,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions. The machine-readabl
 
 ## Base URL and auth
 
-Local development: `http://localhost:8000`. In production the base URL is whatever host fronts the API (e.g. `https://team-tracking.utmist.ca`).
+Local development: `http://localhost:8000`. In staging/production the API is deployed to Railway and reachable **only over Railway's private network** (no public domain) — consumers (bot, docs-system) hit it at `http://team-tracking.railway.internal:8000`. External access is a one-click "add public domain" in Railway if ever needed.
 
 Every request — read or write — must include a valid **scoped API key** in the `X-API-Key` header:
 
