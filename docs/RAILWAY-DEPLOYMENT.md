@@ -58,6 +58,7 @@ Set these per environment (staging vs production) per service:
 | `DATABASE_URL` | tt Neon branch | docs Neon branch | — |
 | `API_KEY` | a strong random secret | a strong random secret | — |
 | `TT_ENV` | `staging` / `production` | — | — |
+| `PORT` | `8000` | `8000` | — |
 | `DIRECTORY_BASE_URL` | — | `http://${{team-tracking.RAILWAY_PRIVATE_DOMAIN}}:${{team-tracking.PORT}}` | same |
 | `DIRECTORY_API_KEY` | — | *(set by the provisioning script — step 4)* | *(set by the script)* |
 | `DISCORD_TOKEN` | — | — | staging app / prod app token |
@@ -66,7 +67,25 @@ Set these per environment (staging vs production) per service:
 | `ENABLE_DISCORD` | — | — | `true` |
 | `ENABLE_WEB` | — | — | `false` |
 
-Deploy team-tracking first (its pre-deploy runs migrations on the Neon branch).
+> **Why `PORT=8000` explicitly?** `${{team-tracking.PORT}}` in the consumers'
+> `DIRECTORY_BASE_URL` only resolves when `PORT` is an explicit Railway variable.
+> Railway's dynamically-injected `PORT` isn't visible to cross-service template
+> refs. Without this, `DIRECTORY_BASE_URL` resolves to `http://…railway.internal:`
+> (empty port) and every bot → team-tracking call fails with "directory
+> temporarily unavailable." One of the three real bugs shipped through the
+> branching flow — see [`DEPLOYMENT-HISTORY.md`](DEPLOYMENT-HISTORY.md).
+
+Generate the `API_KEY` values locally so nothing sensitive appears in a shell
+transcript:
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+Four of them — one per API service per environment. Paste into Railway's
+variable dashboard, never into a file.
+
+**Deploy team-tracking first** in each environment. Its `preDeployCommand`
+runs `alembic upgrade head` against the environment's Neon branch, which the
+provisioning script (next) depends on.
 
 ## 4. Provision the directory keys
 Once team-tracking is up + migrated in an environment, mint + wire the scoped
@@ -83,10 +102,58 @@ and sets each service's `DIRECTORY_API_KEY`. Re-running issues a fresh key and
 repoints the consumer; the previous key stays active until you revoke it
 manually (`team-tracking-keys revoke <id>`).
 
-## 5. Verify
-- APIs: `railway run --service team-tracking bash -c 'curl -s localhost:$PORT/health'` → `{"status":"ok"}`; pre-deploy logs show `alembic upgrade head` ran.
-- Bot: Railway logs show `Bot ready as …` — staging bot appears in the test guild; prod bot registers globally.
-- End-to-end: run a bot command in the staging guild → reaches staging team-tracking → staging Neon branch.
+## 5. Register Discord slash commands
+The bot has to tell Discord which slash commands it supports. Run once per
+environment (idempotent — safe to re-run whenever the command set changes):
+
+```bash
+cd discord-bot
+railway run --service discord-bot --environment staging    -- node src/registerCommands.js
+railway run --service discord-bot --environment production -- node src/registerCommands.js
+```
+
+The script partitions commands into **stable** (registered globally — visible
+in every server the bot is in) and **beta** (registered only to
+`DISCORD_GUILD_ID` if set). Because we set `DISCORD_GUILD_ID` on staging and
+leave it blank in production, staging gets `beta` commands in the test guild
+only, and production correctly skips them.
+
+Global registrations can take up to ~1 hour to propagate through Discord's
+cache. Guild-scoped (staging) commands appear instantly.
+
+## 6. Seed the first admin
+Nobody is a directory admin on a fresh production DB. Seed yourself as a
+`superuser` so you can grant others. Two ways:
+
+**Option A — Neon SQL editor** (fastest for a one-off):
+```sql
+INSERT INTO people (display_name, primary_email, access_level, created_by, updated_by)
+VALUES ('Your Name', 'you@example.com', 'superuser', 'manual-seed', 'manual-seed')
+ON CONFLICT (primary_email) DO UPDATE
+  SET access_level = 'superuser',
+      updated_by   = 'manual-seed',
+      updated_at   = now()
+RETURNING id, display_name, primary_email, access_level;
+```
+Idempotent (upserts on `primary_email`). Run in the **team-tracking → main
+branch** for production, or `staging` branch for staging.
+
+**Option B — the seed CLI** (more auditable / scriptable):
+```bash
+TT_DB="<team-tracking Neon branch URL for this env>"
+DATABASE_URL="$TT_DB" \
+  uv --project services/team-tracking run team-tracking-seed seed-person \
+    --name "Your Name" --email you@example.com --level superuser
+```
+
+After that, use `/link` in Discord (staging test guild or the real server) to
+attach your Discord account to the seeded person record. New admins get added
+by an existing admin running `/seed` from Discord.
+
+## 7. Verify
+- **APIs:** `railway run --service team-tracking --environment <env> -- bash -c 'curl -s localhost:$PORT/health'` → `{"status":"ok"}`; pre-deploy logs show `alembic upgrade head` ran.
+- **Bot:** Railway logs show `Bot ready as …` — staging bot appears in the test guild; prod bot registers globally.
+- **End-to-end:** run a bot command (e.g. `/whoami`) in the staging guild → reaches staging team-tracking → staging Neon branch. If it returns "directory is temporarily unavailable," the two most common causes are (1) `DIRECTORY_BASE_URL` template not resolving (see the `PORT=8000` note above), or (2) `DIRECTORY_API_KEY` missing on the consumer (re-run the provisioning script).
 
 ## Notes
 - APIs bind **`--host 0.0.0.0`**. Railway's IPv6 private network routes to the
@@ -96,3 +163,5 @@ manually (`team-tracking-keys revoke <id>`).
   (bot → team-tracking) fail, check the `DIRECTORY_BASE_URL` reference next.
 - Staging uses the **separate staging Discord application** + private test guild,
   so staging commands never touch the real UTMIST server.
+- The `sh -c` wrapper on the API `startCommand` is deliberate — see the second
+  bug in [`DEPLOYMENT-HISTORY.md`](DEPLOYMENT-HISTORY.md).
