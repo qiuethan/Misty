@@ -1,180 +1,158 @@
 # UTMIST Ops Platform
 
-Internal operations infrastructure for UTMIST — the canonical record of *who runs
-the org* and *what the org owns*, exposed as small HTTP services that everything
-else can build on.
+The internal operations infrastructure for UTMIST — a canonical, machine-queryable record of *who runs the org*, *what the org owns*, and *how people reach it*. Deployed and running in production.
 
-UTMIST is a student org with rotating leadership and mixed technical fluency. This
-platform exists so that knowledge — who's on which team, where the important docs
-live — survives leadership transitions instead of walking out the door when someone
-graduates. The pieces are designed to be self-hostable, boring to run, and easy for
-the next cohort to pick up.
+UTMIST is a student org with rotating leadership and mixed technical fluency. Every year new leads inherit their predecessor's undocumented spreadsheets and lost Google Docs. This platform is our answer to that: **institutional knowledge that survives graduation.** Everything is exposed as HTTP APIs plus a Discord frontend, self-hostable if you ever want, deployed to Railway today because it's turnover-proof.
 
-## What's here
+**Status:** Live on Railway (staging + production) with Neon Postgres backing each service. Merges to `staging` auto-deploy to staging; merges to `main` auto-deploy to production.
 
-The platform is decomposed into small services, each a **source of truth** for one
-domain and each reachable only over HTTP:
+---
 
-| Service | Domain | Status |
-|---------|--------|--------|
-| [`services/team-tracking/`](services/team-tracking/README.md) | People, teams, roles, memberships + external identity mapping | **Deployed** (staging + prod) |
-| [`services/documentation-system/`](services/documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, snapshots | **Deployed** (staging + prod) |
-| [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend for the directory (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`) — plus a Discord-shaped web playground for iteration without a Discord token | **Deployed** (staging + prod) |
-| Search / retrieval plugin | Full-text + semantic search over the catalog | Deferred (not built) |
+## What you can do with it
 
-The whole platform is live on **Railway** (staging + production environments)
-with **Neon** Postgres backing each service. Merges to `staging` auto-deploy
-to the staging environment; merges to `main` auto-deploy to production. See
-[`docs/RAILWAY-DEPLOYMENT.md`](docs/RAILWAY-DEPLOYMENT.md) for the runbook
-and [`docs/DEPLOYMENT-HISTORY.md`](docs/DEPLOYMENT-HISTORY.md) for the story
-of how it got there.
+### As a UTMIST member (in Discord)
 
-## How the two services relate
+- **`/link`** — attach your Discord account to your directory record so the bot knows who you are.
+- **`/whoami`** — see your linked identity, teams you're on, and access level.
+- **`/team`** — look up a team's members, description, and hierarchy.
+- **`/my-teams`** — quick view of every team you belong to.
 
-The directory (`team-tracking`) is the foundational service. The documentation
-catalog (`documentation-system`) is a **consumer** of it: when you catalog a doc and
-say "the Partnerships team owns this," the catalog validates that team id against the
-directory over HTTP and resolves a human-readable label for it.
+### As an admin (in Discord)
+
+- **`/seed`** — create or promote a person in the directory (member / admin / superuser). Requires admin+.
+
+### As a developer / integration builder
+
+Every domain has a first-class HTTP API — build your own dashboard, sync job, or automation on top:
+
+- **[team-tracking](services/team-tracking/README.md)** — 23 endpoints across `people`, `teams`, `role_kinds`, `team_memberships`, `providers`, `person_identifiers`, `api_keys`. Full point-in-time roster queries. Scoped API keys, per-request audit log.
+- **[documentation-system](services/documentation-system/README.md)** — endpoints over `docs` and `sources`; ingest a URL and it's normalized, dedup'd, fetched (title + snapshot for supported sources), and owner-validated against team-tracking. Ownership degrades gracefully if the directory is unreachable.
+
+Both APIs speak OpenAPI. Point Swagger UI or codegen at them.
+
+### As an operator
+
+- **Deploy is `git push`.** Merge to `staging` → Railway rebuilds and deploys staging automatically. Promote via a `staging → main` PR for production. No separate CD system.
+- **Roll back is `git revert`** + push. If a migration went with it, `railway run … alembic downgrade -1` reverses the schema.
+- **Manage API keys** via the `team-tracking-keys` / `doc-keys` CLIs — scoped, revocable, per-consumer, argon2-hashed at rest.
+
+---
+
+## The services
+
+| Service | What it holds | Status |
+|---------|---------------|--------|
+| [`services/team-tracking/`](services/team-tracking/README.md) | People, teams, roles, memberships, external identity mapping (Discord/GitHub/Notion/UofT email → person) | **Deployed** (staging + prod) |
+| [`services/documentation-system/`](services/documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, and best-effort content snapshots | **Deployed** (staging + prod) |
+| [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend + a browser-based "web playground" for iterating on commands without a Discord token | **Deployed** (staging + prod) |
+| Search / retrieval | Full-text + semantic search over the catalog's snapshots | Deferred (not built) |
+
+**How they relate.** team-tracking is the foundation — everything else references it. documentation-system validates every doc's owner against team-tracking. The discord-bot's commands read/write the directory over HTTP. Each service owns its own database; they never share tables.
 
 ```
                           validates owner ids +
                           resolves labels over HTTP
   documentation-system  ───────────────────────────▶   team-tracking
    (docs catalog)                                        (directory / source of truth)
-        ▲                                                        │
+        ▲                                                        ▲
         │ degrades gracefully                                    │
         │ if the directory is down ◀─────────────────────────────┘
+                                                                 │  slash commands
+                                                        discord-bot
+                                                        (Discord ↔ directory)
 ```
 
-Two properties matter here:
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the cross-service data flow.
 
-- **The directory is a hard dependency for *meaning*, not for *availability*.** You
-  can't tag a doc with a meaningful org owner unless there's an org model to point
-  at — that's why the directory is built first (see
-  [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)).
-- **The catalog uses `degrade-on-directory-down`.** If the directory is unreachable,
-  ingest doesn't block: the owner id is stored, the label is left null with a
-  warning, and a later read or update backfills it once the directory is reachable
-  again. An outage in the directory never takes the catalog down with it.
-
-The full cross-service data flow — ingest → owner validation → label resolution or
-degrade → backfill — is documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-
-## Build roadmap
-
-The services are built in dependency order — each layer needs the one beneath it:
-
-1. **Directory** (`team-tracking`) — *done.* The org model everything else references.
-2. **Documentation catalog** (`documentation-system`) — *done.* References the
-   directory for ownership.
-3. **Search / retrieval** — *deferred, not built.* Full-text + semantic search over
-   the catalog's stored content snapshots. The snapshots are already captured for
-   this; the search surface itself is out of scope until it's actually needed.
+---
 
 ## Repo layout
 
 ```
 UTMIST-Prototypes/
-├── README.md                   You are here — platform overview
-├── .github/workflows/ci.yml    CI — tests, lint, Docker builds on every PR to main
+├── README.md                          You are here
 ├── docs/
-│   ├── ARCHITECTURE.md          Cross-service architecture (how the pieces fit)
-│   ├── RAILWAY-DEPLOYMENT.md    Runbook — deploy, redeploy, provision keys, verify
-│   └── DEPLOYMENT-HISTORY.md    Story of how we shipped + design decisions
+│   ├── ARCHITECTURE.md                Cross-service architecture — how the pieces fit
+│   ├── RAILWAY-DEPLOYMENT.md          Deploy runbook (Railway + Neon setup, key provisioning)
+│   └── DEPLOYMENT-HISTORY.md          Design decisions + lessons learned
 │
-├── services/                   HTTP source-of-truth services — one folder each
-│   ├── team-tracking/           Directory service — source of truth for the org
-│   │   ├── README.md            Service overview + quick start
-│   │   └── docs/                API.md, ARCHITECTURE.md, DEPLOYMENT.md, CONTRIBUTING.md
+├── services/                          HTTP source-of-truth services (each in its own folder)
+│   ├── team-tracking/                 Directory service
+│   │   ├── README.md                  Overview + quick start
+│   │   ├── src/                       FastAPI + SQLAlchemy Core
+│   │   ├── contracts/                 Pydantic types + Protocols (framework-free boundary)
+│   │   ├── migrations/                Alembic
+│   │   ├── tests/                     pytest (in-memory + real-Postgres adapters)
+│   │   ├── Dockerfile, railway.json   Production image + Railway config
+│   │   └── docs/                      API.md, ARCHITECTURE.md, DEPLOYMENT.md, CONTRIBUTING.md
 │   │
-│   └── documentation-system/    Documentation catalog service
-│       ├── README.md            Service overview + quick start
-│       └── docs/                API.md, ARCHITECTURE.md, DEPLOYMENT.md, CONTRIBUTING.md
+│   └── documentation-system/          Catalog service (same shape as team-tracking)
 │
-└── discord-bot/                Discord frontend + web playground for the directory
-    ├── README.md               Service overview + complete startup guide
-    └── src/                    Node.js — thin over team-tracking, no local DB
+├── discord-bot/                       Discord frontend + web playground
+│   ├── src/                           Node.js + discord.js
+│   ├── scripts/dev-web.js             Local playground orchestrator (ephemeral scratch DB)
+│   ├── Dockerfile, railway.json       Production image + Railway config
+│   └── test/                          node --test
+│
+├── scripts/
+│   └── provision-directory-key.sh     Mint + wire scoped API keys per environment
+│
+└── .github/workflows/
+    ├── ci.yml                         Tests + lint + Docker builds on every PR
+    └── main-source-guard.yml          Enforces "PRs to main come from staging"
 ```
 
-Each service is self-contained: its own dependencies, its own Postgres, its own
-tests, its own docs. You can run, deploy, and reason about each one on its own — and
-new source-of-truth services drop into `services/` following the same shape.
+Each service is self-contained: its own dependencies, its own database, its own tests, its own docs. Add a new source-of-truth service by dropping it in `services/` following the same shape.
 
-## Getting started
+---
 
-There's no top-level bootstrap — each service has its own quick start, and you only
-need to stand up the ones you're working on. Follow the service READMEs rather than
-re-deriving the steps here:
+## Running the platform locally
 
-- **Directory:** [`services/team-tracking/README.md` → Quick start](services/team-tracking/README.md#quick-start).
-  Runs on port **8000**.
-- **Catalog:** [`services/documentation-system/README.md` → Quick start](services/documentation-system/README.md#quick-start).
-  Runs on port **8001**; its Postgres is on **5434**. Ports are chosen so both
-  services can run side by side locally.
-- **Discord bot:** [`discord-bot/README.md` → Complete startup](discord-bot/README.md#complete-startup-from-cold).
-  Two modes — a real Discord surface (`npm start`, needs a bot token) and a
-  browser-based web playground (`npm run dev:web`, no token needed). The
-  playground orchestrator manages its own ephemeral team-tracking on port
-  **8001** — the same port `documentation-system` uses, so don't run both at
-  once locally without changing one of the ports.
+Nothing to bootstrap at the root — stand up only what you need:
 
-If you want the catalog to actually validate ownership against a live directory, run
-`team-tracking` first and point the catalog's `DIRECTORY_*` config at it (see the
-catalog's `DEPLOYMENT.md`). Without a reachable directory the catalog still runs — it
-just degrades ownership labels, by design.
+- **Directory API** — [`services/team-tracking/README.md` → Quick start](services/team-tracking/README.md#quick-start). Port **8000**.
+- **Catalog API** — [`services/documentation-system/README.md` → Quick start](services/documentation-system/README.md#quick-start). Port **8001**; its Postgres on **5434** (chosen to coexist with team-tracking's dev Postgres on 5433).
+- **Discord bot** — [`discord-bot/README.md`](discord-bot/README.md). Two modes:
+  - `npm start` — real Discord surface (needs a bot token).
+  - `npm run dev:web` — browser-based playground on `http://localhost:3001`, no Discord token needed. Orchestrates its own scratch team-tracking + ephemeral DB, so it's fully self-contained for hacking on commands.
 
-## Shared conventions
+For catalog-with-real-ownership-validation, run team-tracking first and point the catalog's `DIRECTORY_*` config at it.
 
-Both services are built the same way on purpose, so someone who learns one already
-mostly knows the other:
+---
 
-- **`contracts/` Protocol boundary** — each service has a `contracts/` package of
-  Pydantic domain types plus `Protocol` interfaces. Application code depends on the
-  Protocols, never on a concrete implementation.
-- **Swappable storage adapters** — an `InMemoryStorageAdapter` for fast tests and a
-  `PostgresStorageAdapter` for production, both satisfying the same Protocol.
-- **Scoped API-key auth** — every request carries an `X-API-Key`. Keys are
-  Argon2-hashed in the database and carry a set of per-resource scopes.
-- **Attested actor** — the actor stamped on audit fields is the authenticated key's
-  own identity. A caller can't claim to be someone else.
-- **Per-request audit log** — middleware logs every request with its resolved actor.
-- **Alembic migrations** — schema changes are versioned migrations, applied with
-  `alembic upgrade head`.
-- **API-only, nothing runs inside** — there are no in-process consumers; everything
-  talks to these services over HTTP against their OpenAPI contract.
-- **CI-gated changes** — every pull request to `staging` or `main` runs
-  [`.github/workflows/ci.yml`](.github/workflows/ci.yml): the service test suites
-  (against a real Postgres), `ruff` lint, and Docker image builds (with a boot
-  smoke test). Branch protection keeps anything red from merging. PRs targeting
-  `main` also run [`main-source-guard`](.github/workflows/main-source-guard.yml),
-  which enforces that they come from `staging`.
-- **Branching = deploy** — merges to `staging` auto-deploy to the Railway
-  staging environment; merges to `main` auto-deploy to production.
+## Working conventions
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for why these conventions exist
-and how they play out across service boundaries.
+Both APIs are built the same way on purpose — learning one gives you 80% of the other:
+
+- **`contracts/` Protocol boundary.** Each service has a `contracts/` package of Pydantic domain types plus `Protocol` interfaces. Application code depends on the Protocols, never on a concrete implementation.
+- **Swappable storage adapters.** `InMemoryStorageAdapter` for fast tests, `PostgresStorageAdapter` for real runs — both satisfy the same Protocol. Tests use in-memory; a small integration test suite gates the Postgres adapter too.
+- **Scoped API-key auth.** Every request carries `X-API-Key`. Keys are argon2-hashed in the DB with a set of per-resource scopes (`people:read`, `teams:write`, etc.).
+- **Attested actor.** The `created_by`/`updated_by` on every audit field is the authenticated key's own name — a caller can't claim to be someone else.
+- **Per-request audit log.** Middleware emits one JSON line per request with the resolved actor, endpoint, status, and duration.
+- **Alembic migrations.** Schema changes are versioned; migrations run as Railway's `preDeployCommand` on every deploy.
+- **API-only, nothing runs inside.** No in-process consumers; everything talks to these services over HTTP.
+- **CI-gated changes.** Every PR to `staging` or `main` runs [`ci.yml`](.github/workflows/ci.yml) — full test suites against real Postgres, ruff, and Docker builds with boot smoke tests. PRs to `main` also run [`main-source-guard`](.github/workflows/main-source-guard.yml).
+- **Branching = deploy.** `staging` merges deploy to Railway staging; `main` merges deploy to production.
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for why these choices exist and how they compose.
+
+---
 
 ## Where to go next
 
-- **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — the cross-service picture:
-  API-only source-of-truth principle, the ownership-validation + degrade data flow,
-  and the shared conventions.
-- **[`docs/RAILWAY-DEPLOYMENT.md`](docs/RAILWAY-DEPLOYMENT.md)** — the runbook:
-  how to deploy, redeploy, provision keys, register Discord commands, verify.
-- **[`docs/DEPLOYMENT-HISTORY.md`](docs/DEPLOYMENT-HISTORY.md)** — the story of
-  how the platform got deployed, the decisions we made, the bugs we hit, and
-  the current live state.
-- **Directory service** — [`services/team-tracking/README.md`](services/team-tracking/README.md) and
-  its [`docs/`](services/team-tracking/docs/) (`API.md`, `ARCHITECTURE.md`, `DEPLOYMENT.md`,
-  `CONTRIBUTING.md`).
-- **Catalog service** — [`services/documentation-system/README.md`](services/documentation-system/README.md)
-  and its [`docs/`](services/documentation-system/docs/) (`API.md`, `ARCHITECTURE.md`,
-  `DEPLOYMENT.md`, `CONTRIBUTING.md`).
-- **Discord bot** — [`discord-bot/README.md`](discord-bot/README.md). Covers the
-  bot's neutral command shape (a single handler serves both Discord and web
-  surfaces), the `dev:spoof` scope safety model, and the orchestrated web
-  playground with its ephemeral scratch DB.
+Depending on what you're here to do:
 
-New contributor? Start with this README for orientation, read
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) to see how the pieces fit, then dive
-into whichever service's README and `docs/CONTRIBUTING.md` you'll be working in.
+**Deploying / operating**
+- [`docs/RAILWAY-DEPLOYMENT.md`](docs/RAILWAY-DEPLOYMENT.md) — the runbook (deploy, redeploy, provision keys, register commands, verify).
+- [`docs/DEPLOYMENT-HISTORY.md`](docs/DEPLOYMENT-HISTORY.md) — why the platform is deployed the way it is, and the non-obvious lessons.
+
+**Building against the APIs**
+- [`services/team-tracking/docs/API.md`](services/team-tracking/docs/API.md) — all 23 endpoints with request/response shapes.
+- [`services/documentation-system/docs/API.md`](services/documentation-system/docs/API.md) — ingest, retrieve, and update the catalog.
+
+**Contributing code**
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) first — the cross-service picture.
+- Then whichever service you're touching: [`services/team-tracking/`](services/team-tracking/README.md), [`services/documentation-system/`](services/documentation-system/README.md), or [`discord-bot/`](discord-bot/README.md).
+- Each service has a `docs/CONTRIBUTING.md` with task walkthroughs.
+
+**New to the platform?** Start here, read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), then dive into whichever service you're most likely to touch.
