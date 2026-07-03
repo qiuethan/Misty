@@ -20,7 +20,7 @@ export default defineCommand({
   name: 'team',
   description: 'Manage UTMIST teams and memberships',
   auth: 'linked', // default; subcommands below override
-  beta: true,
+  beta: false,
   options: [],
   subcommands: [
     {
