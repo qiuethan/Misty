@@ -1,5 +1,6 @@
 import { MessageFlags } from 'discord.js';
-import { dispatch } from '../router.js';
+import { dispatch, dispatchAutocomplete } from '../router.js';
+import { authMessages } from '../messages.js';
 
 // The ONLY module (aside from src/index.js and src/registerCommands.js) that
 // imports from discord.js. Everything else — router, commands, services —
@@ -29,6 +30,17 @@ export function interactionToIntent(interaction, command) {
     subcommand,
     discordUserId: interaction.user.id,
     discordHandle: interaction.user.username,
+  };
+}
+
+export function interactionToAutocompleteIntent(interaction) {
+  const focused = interaction.options.getFocused(true); // { name, value, ... }
+  return {
+    commandName: interaction.commandName,
+    subcommand: interaction.options.getSubcommand(false),
+    focusedOption: focused.name,
+    typed: focused.value ?? '',
+    discordUserId: interaction.user.id,
   };
 }
 
@@ -84,6 +96,22 @@ async function safeReply(interaction, payload) {
 
 export function wireDiscordClient(client, { commands, appContext }) {
   client.on('interactionCreate', async (interaction) => {
+    // Autocomplete interactions are a separate path: they CANNOT be deferred and
+    // must respond within 3s. Best-effort — dispatchAutocomplete never throws.
+    if (interaction.isAutocomplete()) {
+      const command = commands.get(interaction.commandName);
+      if (!command) return;
+      try {
+        const intent = interactionToAutocompleteIntent(interaction);
+        const suggestions = await dispatchAutocomplete(intent, { commands, appContext });
+        await interaction.respond(suggestions.slice(0, 25)).catch(() => {});
+      } catch (err) {
+        console.error('Autocomplete error:', err);
+        await interaction.respond([]).catch(() => {});
+      }
+      return;
+    }
+
     if (!interaction.isChatInputCommand()) return;
     const command = commands.get(interaction.commandName);
     if (!command) return;
@@ -100,6 +128,11 @@ export function wireDiscordClient(client, { commands, appContext }) {
       await safeReply(interaction, payload);
     } catch (err) {
       console.error('Unhandled interaction error:', err);
+      // We already deferred, so the user is staring at "thinking…". Resolve the
+      // interaction with a generic error instead of leaving it hanging until the
+      // token expires. safeReply routes this via editReply on the deferred
+      // message; its own catch swallows any follow-on failure.
+      await safeReply(interaction, authMessages.internalError());
     }
   });
 }

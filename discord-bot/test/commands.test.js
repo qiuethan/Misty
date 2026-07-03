@@ -374,10 +374,10 @@ test('registry includes team and my-teams', () => {
   assert.equal(commands.get('my-teams'), myTeamsCmd);
 });
 
-test('team and my-teams are the only beta-channel commands', () => {
+test('team, my-teams, and doc are the only beta-channel commands', () => {
   const { stable, beta } = partitionCommands([...commands.values()]);
-  assert.deepEqual(new Set(beta.map((c) => c.name)), new Set(['team', 'my-teams']));
-  assert.equal(stable.length, commands.size - 2);
+  assert.deepEqual(new Set(beta.map((c) => c.name)), new Set(['team', 'my-teams', 'doc']));
+  assert.equal(stable.length, commands.size - 3);
 });
 
 test('buildDiscordData marks autocomplete string options', () => {
