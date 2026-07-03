@@ -127,7 +127,9 @@ export function renderListTeamsResult(result) {
         return FALLBACK;
     }
   })();
-  return { content, ephemeral: true };
+  // Public: shared reference. Visibility is locked at defer time in the Discord
+  // adapter (see team.js `list` subcommand); this keeps the neutral payload consistent.
+  return { content, ephemeral: false };
 }
 
 export function renderRenameTeamResult(result) {
@@ -208,7 +210,9 @@ export function renderRosterResult(result) {
         return FALLBACK;
     }
   })();
-  return { content, ephemeral: true };
+  // Public: shared reference. Visibility is locked at defer time in the Discord
+  // adapter (see team.js `roster` subcommand); this keeps the neutral payload consistent.
+  return { content, ephemeral: false };
 }
 
 export function renderMyTeamsResult(result) {

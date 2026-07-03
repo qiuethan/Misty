@@ -45,6 +45,7 @@ export default defineCommand({
       name: 'list',
       description: 'List teams',
       auth: 'linked',
+      ephemeral: false, // shared reference — post publicly so the channel can see it
       options: [
         { name: 'active_only', type: 'boolean', required: false, description: 'Only active teams (default true)' },
       ],
@@ -118,6 +119,7 @@ export default defineCommand({
       name: 'roster',
       description: "Show a team's current roster",
       auth: 'linked',
+      ephemeral: false, // shared reference — post publicly so the channel can see it
       options: [
         { name: 'team', type: 'string', required: true, description: 'Team slug' },
         { name: 'as_of', type: 'string', required: false, description: 'ISO date (default today)' },

@@ -41,6 +41,42 @@ test('defineCommand throws on missing handler', () => {
   );
 });
 
+test('defineCommand defaults ephemeral to true', () => {
+  const cmd = defineCommand({
+    name: 'foo',
+    description: 'Foo',
+    handler: async () => ({ content: 'ok' }),
+  });
+  assert.equal(cmd.ephemeral, true);
+});
+
+test('defineCommand preserves explicit ephemeral: false', () => {
+  const cmd = defineCommand({
+    name: 'foo',
+    description: 'Foo',
+    ephemeral: false,
+    handler: async () => ({ content: 'ok' }),
+  });
+  assert.equal(cmd.ephemeral, false);
+});
+
+test('subcommands inherit and override ephemeral', () => {
+  const cmd = defineCommand({
+    name: 'foo',
+    description: 'x',
+    ephemeral: false,
+    subcommands: [
+      { name: 'inherits', description: 'i', handler: async () => ({ content: 'ok' }) },
+      { name: 'overrides', description: 'o', ephemeral: true, handler: async () => ({ content: 'ok' }) },
+    ],
+    handler: async () => ({ content: 'top' }),
+  });
+  const inherits = cmd.subcommands.find((s) => s.name === 'inherits');
+  const overrides = cmd.subcommands.find((s) => s.name === 'overrides');
+  assert.equal(inherits.ephemeral, false); // inherited from parent
+  assert.equal(overrides.ephemeral, true); // own value wins
+});
+
 test('defineCommand normalizes subcommands', () => {
   const cmd = defineCommand({
     name: 'foo',

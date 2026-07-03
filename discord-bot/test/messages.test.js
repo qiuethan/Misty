@@ -233,21 +233,31 @@ test('renderMyTeamsResult covers outcomes', () => {
   assert.match(renderMyTeamsResult({ outcome: 'DIRECTORY_DOWN' }).content, /unavailable|try again/i);
 });
 
-test('all messages.js render functions return ReplyPayload with ephemeral: true', () => {
+test('personal/admin render functions return ReplyPayload with ephemeral: true', () => {
   const payloads = [
     renderLinkResult({ outcome: 'DIRECTORY_DOWN' }),
     renderSeedResult({ outcome: 'DIRECTORY_DOWN' }),
     renderCreateTeamResult({ outcome: 'DIRECTORY_DOWN' }),
-    renderListTeamsResult({ outcome: 'DIRECTORY_DOWN' }),
     renderRenameTeamResult({ outcome: 'DIRECTORY_DOWN' }),
     renderAddMemberResult({ outcome: 'DIRECTORY_DOWN' }),
     renderRemoveMemberResult({ outcome: 'DIRECTORY_DOWN' }),
-    renderRosterResult({ outcome: 'DIRECTORY_DOWN' }),
     renderMyTeamsResult({ outcome: 'DIRECTORY_DOWN' }),
   ];
   for (const p of payloads) {
     assert.equal(typeof p.content, 'string');
     assert.equal(p.ephemeral, true);
+    assert.equal(p.embeds, undefined);
+  }
+});
+
+test('shared-reference render functions (list, roster) are public (ephemeral: false)', () => {
+  const payloads = [
+    renderListTeamsResult({ outcome: 'DIRECTORY_DOWN' }),
+    renderRosterResult({ outcome: 'DIRECTORY_DOWN' }),
+  ];
+  for (const p of payloads) {
+    assert.equal(typeof p.content, 'string');
+    assert.equal(p.ephemeral, false);
     assert.equal(p.embeds, undefined);
   }
 });

@@ -41,10 +41,42 @@ export function payloadToDiscordReply(payload) {
   return out;
 }
 
+// Resolve the visibility hint for an interaction BEFORE the handler runs, so we
+// can defer with the right ephemerality. Mirrors the router's auth resolution:
+// an active subcommand's hint wins, otherwise the command-level hint, otherwise
+// fail-safe to ephemeral (private).
+export function resolveEphemeral(command, subcommandName) {
+  const sub = subcommandName
+    ? command.subcommands.find((s) => s.name === subcommandName)
+    : null;
+  return sub?.ephemeral ?? command.ephemeral ?? true;
+}
+
 async function safeReply(interaction, payload) {
   const dpayload = payloadToDiscordReply(payload);
-  if (!dpayload) return;
-  const method = interaction.replied || interaction.deferred ? 'followUp' : 'reply';
+  if (!dpayload) {
+    // Nothing to say. If we deferred, clear the "thinking…" state so the user
+    // isn't left staring at a spinner.
+    if (interaction.deferred && !interaction.replied) {
+      await interaction
+        .deleteReply()
+        .catch((e) => console.error('deleteReply failed:', e.message));
+    }
+    return;
+  }
+
+  // After deferReply(), the first response must edit the deferred message.
+  // Ephemerality was already locked in at defer time, so editReply ignores the
+  // ephemeral flag — strip it to avoid passing an unsupported option.
+  if (interaction.deferred && !interaction.replied) {
+    const { flags, ...editable } = dpayload;
+    await interaction
+      .editReply(editable)
+      .catch((e) => console.error('reply failed:', e.message));
+    return;
+  }
+
+  const method = interaction.replied ? 'followUp' : 'reply';
   await interaction[method](dpayload).catch((e) =>
     console.error('reply failed:', e.message),
   );
@@ -57,6 +89,13 @@ export function wireDiscordClient(client, { commands, appContext }) {
     if (!command) return;
     try {
       const intent = interactionToIntent(interaction, command);
+      // Acknowledge within Discord's 3s deadline BEFORE running the handler.
+      // The handler may hit a cold-starting (asleep) Neon database that takes
+      // several seconds to boot; without an early defer the interaction token
+      // expires and the reply fails ("Unknown interaction") even though the DB
+      // work succeeds. Deferring extends the response window to 15 minutes.
+      const ephemeral = resolveEphemeral(command, intent.subcommand);
+      await interaction.deferReply(ephemeral ? { flags: MessageFlags.Ephemeral } : {});
       const payload = await dispatch(intent, { commands, appContext });
       await safeReply(interaction, payload);
     } catch (err) {
