@@ -11,6 +11,11 @@ def create_app() -> FastAPI:
         docs_url="/swagger",
     )
     app.add_middleware(AuditLogMiddleware)
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
     from src.api.routers import docs, sources
 
     app.include_router(docs.router)
