@@ -105,7 +105,7 @@ Set `PORT=8000` (or whatever you like) as an **explicit** Railway variable on an
 
 - Both environments fully deployed and healthy.
 - APIs are **private-only** on Railway (no public domains). Only in-project services (the bot, docs-system) reach them, over Railway's internal network. Add a public domain later if an external caller ever needs one — both APIs already have API-key auth.
-- **Discord commands:** staging bot registers stable commands globally + beta commands to the test guild; production bot registers stable commands only (no beta clutter in real servers).
+- **Discord commands.** Stable commands (`/link`, `/whoami`, `/seed`) are registered globally on the production bot. Beta commands (`/team`, `/my-teams`) are still guild-scoped to the test guild — flip `beta: false` in each module + re-run `registerCommands` to promote them to production when confident.
 - **Migrations run automatically** as Railway's `preDeployCommand` on the two API services — `alembic upgrade head` against the environment's Neon branch before every deploy. Idempotent.
 
 ---
