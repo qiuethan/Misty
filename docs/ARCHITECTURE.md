@@ -4,8 +4,8 @@ How the UTMIST ops platform's services fit together. This document is for someon
 deciding *how the pieces relate* — not the internals of either service. For those,
 see each service's own `docs/ARCHITECTURE.md`:
 
-- [`team-tracking/docs/ARCHITECTURE.md`](../team-tracking/docs/ARCHITECTURE.md)
-- [`documentation-system/docs/ARCHITECTURE.md`](../documentation-system/docs/ARCHITECTURE.md)
+- [`team-tracking/docs/ARCHITECTURE.md`](../services/team-tracking/docs/ARCHITECTURE.md)
+- [`documentation-system/docs/ARCHITECTURE.md`](../services/documentation-system/docs/ARCHITECTURE.md)
 - [`discord-bot/README.md`](../discord-bot/README.md) — the Discord bot doesn't have a
   standalone ARCHITECTURE.md yet; the README covers its neutral command shape (a
   single handler serves both the Discord surface and a browser-based web
@@ -63,7 +63,7 @@ resolves that owner against the directory. Here's the path:
 ```
 
 Step by step, when `POST /docs` arrives at the catalog
-([`documentation-system/src/ingest.py`](../documentation-system/src/ingest.py)):
+([`documentation-system/src/ingest.py`](../services/documentation-system/src/ingest.py)):
 
 1. **Normalize + dedup.** The URL is normalized; if it's already catalogued, ingest
    is idempotent — new tags merge onto the existing doc and nothing else happens.
@@ -72,7 +72,7 @@ Step by step, when `POST /docs` arrives at the catalog
    title/content snapshot. Fetch failures become warnings, not errors.
 3. **Validate ownership against the directory.** For each supplied `owning_team_id` /
    `owning_person_id`, the catalog calls the directory over HTTP
-   ([`src/directory/http_client.py`](../documentation-system/src/directory/http_client.py))
+   ([`src/directory/http_client.py`](../services/documentation-system/src/directory/http_client.py))
    — `GET /teams/{id}` or `GET /people/{id}` — to fetch a display label. Three
    outcomes:
    - **Found (2xx):** the label is stored alongside the id. The doc now carries a
