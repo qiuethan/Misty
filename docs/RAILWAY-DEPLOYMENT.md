@@ -10,6 +10,25 @@ setup you run in the Railway + Neon dashboards / CLIs.
 - A Neon account.
 - `uv` locally (for the key-provisioning script).
 
+## Branching + auto-deploy model
+Each Railway environment is wired to a git branch. Merging a PR flips a deploy.
+
+```
+feature branch  ──PR──▶  staging  ──PR──▶  main
+                          │                  │
+                          ▼                  ▼
+                    Railway staging   Railway production
+                    (auto-deploy)     (auto-deploy)
+```
+
+- **`staging`** is the integration branch. Feature PRs target it (it's the repo
+  default). Every merge auto-deploys to the `staging` Railway environment
+  (staging Neon branch + staging Discord app).
+- **`main`** is the release branch. **PRs to `main` may only come from
+  `staging`** — enforced by a GitHub ruleset. Every merge auto-deploys to the
+  `production` Railway environment.
+- Both branches are protected; all four CI checks are required.
+
 ## 1. Neon: databases + branches
 Create **two Neon projects** — `team-tracking` and `documentation-system` (each
 service owns its DB). In each project you get a `main` branch (= production);
