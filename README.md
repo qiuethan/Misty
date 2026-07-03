@@ -17,10 +17,17 @@ domain and each reachable only over HTTP:
 
 | Service | Domain | Status |
 |---------|--------|--------|
-| [`services/team-tracking/`](services/team-tracking/README.md) | People, teams, roles, memberships + external identity mapping | Shipped (v1) |
-| [`services/documentation-system/`](services/documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, snapshots | Shipped (v1) |
-| [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend for the directory (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`) — plus a Discord-shaped web playground for iteration without a Discord token | Shipped (v1) |
+| [`services/team-tracking/`](services/team-tracking/README.md) | People, teams, roles, memberships + external identity mapping | **Deployed** (staging + prod) |
+| [`services/documentation-system/`](services/documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, snapshots | **Deployed** (staging + prod) |
+| [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend for the directory (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`) — plus a Discord-shaped web playground for iteration without a Discord token | **Deployed** (staging + prod) |
 | Search / retrieval plugin | Full-text + semantic search over the catalog | Deferred (not built) |
+
+The whole platform is live on **Railway** (staging + production environments)
+with **Neon** Postgres backing each service. Merges to `staging` auto-deploy
+to the staging environment; merges to `main` auto-deploy to production. See
+[`docs/RAILWAY-DEPLOYMENT.md`](docs/RAILWAY-DEPLOYMENT.md) for the runbook
+and [`docs/DEPLOYMENT-HISTORY.md`](docs/DEPLOYMENT-HISTORY.md) for the story
+of how it got there.
 
 ## How the two services relate
 
@@ -71,7 +78,9 @@ UTMIST-Prototypes/
 ├── README.md                   You are here — platform overview
 ├── .github/workflows/ci.yml    CI — tests, lint, Docker builds on every PR to main
 ├── docs/
-│   └── ARCHITECTURE.md          Cross-service architecture (how the pieces fit)
+│   ├── ARCHITECTURE.md          Cross-service architecture (how the pieces fit)
+│   ├── RAILWAY-DEPLOYMENT.md    Runbook — deploy, redeploy, provision keys, verify
+│   └── DEPLOYMENT-HISTORY.md    Story of how we shipped + design decisions
 │
 ├── services/                   HTTP source-of-truth services — one folder each
 │   ├── team-tracking/           Directory service — source of truth for the org
@@ -133,10 +142,14 @@ mostly knows the other:
   `alembic upgrade head`.
 - **API-only, nothing runs inside** — there are no in-process consumers; everything
   talks to these services over HTTP against their OpenAPI contract.
-- **CI-gated changes** — every pull request to `main` runs
+- **CI-gated changes** — every pull request to `staging` or `main` runs
   [`.github/workflows/ci.yml`](.github/workflows/ci.yml): the service test suites
-  (against a real Postgres), `ruff` lint, and Docker image builds. Branch protection
-  keeps anything red from merging.
+  (against a real Postgres), `ruff` lint, and Docker image builds (with a boot
+  smoke test). Branch protection keeps anything red from merging. PRs targeting
+  `main` also run [`main-source-guard`](.github/workflows/main-source-guard.yml),
+  which enforces that they come from `staging`.
+- **Branching = deploy** — merges to `staging` auto-deploy to the Railway
+  staging environment; merges to `main` auto-deploy to production.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for why these conventions exist
 and how they play out across service boundaries.
@@ -146,6 +159,11 @@ and how they play out across service boundaries.
 - **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — the cross-service picture:
   API-only source-of-truth principle, the ownership-validation + degrade data flow,
   and the shared conventions.
+- **[`docs/RAILWAY-DEPLOYMENT.md`](docs/RAILWAY-DEPLOYMENT.md)** — the runbook:
+  how to deploy, redeploy, provision keys, register Discord commands, verify.
+- **[`docs/DEPLOYMENT-HISTORY.md`](docs/DEPLOYMENT-HISTORY.md)** — the story of
+  how the platform got deployed, the decisions we made, the bugs we hit, and
+  the current live state.
 - **Directory service** — [`services/team-tracking/README.md`](services/team-tracking/README.md) and
   its [`docs/`](services/team-tracking/docs/) (`API.md`, `ARCHITECTURE.md`, `DEPLOYMENT.md`,
   `CONTRIBUTING.md`).
