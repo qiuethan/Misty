@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dispatch } from '../src/router.js';
+import { dispatch, dispatchAutocomplete } from '../src/router.js';
 import { defineCommand } from '../src/defineCommand.js';
 
 const publicCmd = defineCommand({
@@ -164,4 +164,60 @@ test('dispatch: auth-as-function returning nullish falls back to linked (fail-se
     { commands: new Map([['team', cmd]]), appContext: { directory } },
   );
   assert.ok(out.content.includes('link'));
+});
+
+function cmdWithTeamAutocomplete(resolver) {
+  return new Map([
+    ['doc', {
+      name: 'doc',
+      subcommands: [{ name: 'list', options: [{ name: 'team', type: 'string', autocomplete: resolver }] }],
+      options: [],
+    }],
+  ]);
+}
+
+test('dispatchAutocomplete calls the focused option resolver with principal', async () => {
+  const resolver = async ({ typed, principal }) => {
+    assert.equal(typed, 'm');
+    assert.equal(principal.person.id, 'p1');
+    return [{ name: 'ML', value: 'ml' }];
+  };
+  const commands = cmdWithTeamAutocomplete(resolver);
+  const appContext = { directory: { getPersonByDiscordId: async () => ({ id: 'p1' }) } };
+  const out = await dispatchAutocomplete(
+    { commandName: 'doc', subcommand: 'list', focusedOption: 'team', typed: 'm', discordUserId: 'u1' },
+    { commands, appContext },
+  );
+  assert.deepEqual(out, [{ name: 'ML', value: 'ml' }]);
+});
+
+test('dispatchAutocomplete returns [] when resolver throws', async () => {
+  const commands = cmdWithTeamAutocomplete(async () => { throw new Error('boom'); });
+  const appContext = { directory: { getPersonByDiscordId: async () => ({ id: 'p1' }) } };
+  const out = await dispatchAutocomplete(
+    { commandName: 'doc', subcommand: 'list', focusedOption: 'team', typed: '', discordUserId: 'u1' },
+    { commands, appContext },
+  );
+  assert.deepEqual(out, []);
+});
+
+test('dispatchAutocomplete returns [] for unknown option', async () => {
+  const commands = cmdWithTeamAutocomplete(async () => [{ name: 'ML', value: 'ml' }]);
+  const appContext = { directory: { getPersonByDiscordId: async () => ({ id: 'p1' }) } };
+  const out = await dispatchAutocomplete(
+    { commandName: 'doc', subcommand: 'list', focusedOption: 'nope', typed: '', discordUserId: 'u1' },
+    { commands, appContext },
+  );
+  assert.deepEqual(out, []);
+});
+
+test('dispatchAutocomplete caps at 25', async () => {
+  const many = Array.from({ length: 40 }, (_, i) => ({ name: `t${i}`, value: `t${i}` }));
+  const commands = cmdWithTeamAutocomplete(async () => many);
+  const appContext = { directory: { getPersonByDiscordId: async () => ({ id: 'p1' }) } };
+  const out = await dispatchAutocomplete(
+    { commandName: 'doc', subcommand: 'list', focusedOption: 'team', typed: '', discordUserId: 'u1' },
+    { commands, appContext },
+  );
+  assert.equal(out.length, 25);
 });

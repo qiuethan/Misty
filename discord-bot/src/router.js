@@ -51,3 +51,37 @@ export async function dispatch(intent, { commands, appContext }) {
     return authMessages.internalError();
   }
 }
+
+// Surface-agnostic autocomplete dispatch. Sibling to `dispatch`: takes a neutral
+// autocomplete intent, resolves the focused option's resolver, and returns up to
+// 25 { name, value } suggestions. BEST-EFFORT — it never throws to the surface.
+// Any failure (unlinked caller, directory down, cold DB, resolver error) yields
+// []. Autocomplete cannot be deferred, so a slow/failed lookup simply produces no
+// suggestions and the user types the value manually.
+export async function dispatchAutocomplete(intent, { commands, appContext }) {
+  const command = commands.get(intent.commandName);
+  if (!command) return [];
+  const activeOptions = intent.subcommand
+    ? command.subcommands.find((s) => s.name === intent.subcommand)?.options ?? []
+    : command.options;
+  const option = activeOptions.find((o) => o.name === intent.focusedOption);
+  if (!option || typeof option.autocomplete !== 'function') return [];
+
+  let principal = null;
+  try {
+    principal = await resolvePrincipal(appContext.directory, intent.discordUserId);
+  } catch {
+    principal = null;
+  }
+
+  try {
+    const suggestions = await option.autocomplete({
+      typed: intent.typed ?? '',
+      principal,
+      ctx: appContext,
+    });
+    return Array.isArray(suggestions) ? suggestions.slice(0, 25) : [];
+  } catch {
+    return [];
+  }
+}
