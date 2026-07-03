@@ -7,6 +7,8 @@ import teamCmd from '../src/commands/team.js';
 import myTeamsCmd from '../src/commands/my-teams.js';
 import { commands, partitionCommands } from '../src/commands/index.js';
 import { DirectoryUnavailable } from '../src/directoryClient.js';
+import { buildDiscordData } from '../src/registerCommands.js';
+import { defineCommand } from '../src/defineCommand.js';
 
 test('link is public and links via linkService', async () => {
   assert.equal(link.auth, 'public');
@@ -376,4 +378,17 @@ test('team and my-teams are the only beta-channel commands', () => {
   const { stable, beta } = partitionCommands([...commands.values()]);
   assert.deepEqual(new Set(beta.map((c) => c.name)), new Set(['team', 'my-teams']));
   assert.equal(stable.length, commands.size - 2);
+});
+
+test('buildDiscordData marks autocomplete string options', () => {
+  const cmd = defineCommand({
+    name: 'doc', description: 'd', handler: async () => ({ content: 'x' }),
+    subcommands: [
+      { name: 'list', description: 'l', handler: async () => ({ content: 'y' }),
+        options: [{ name: 'team', type: 'string', description: 't', autocomplete: async () => [] }] },
+    ],
+  });
+  const json = buildDiscordData(cmd);
+  const teamOpt = json.options[0].options.find((o) => o.name === 'team');
+  assert.equal(teamOpt.autocomplete, true);
 });
