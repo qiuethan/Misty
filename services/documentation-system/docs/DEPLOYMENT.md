@@ -1,17 +1,26 @@
-# documentation-system — deployment
+# documentation-system — operational reference
 
-Running the service in production (or a shared staging box). Assumes you've read the
-[README](../README.md). For local dev, the README quickstart is enough — this doc is about
-a real, persistent deployment.
+Runtime operations for the documentation-system service: env-var contract,
+API key management (`doc-keys` CLI), fetcher configuration, and the
+team-tracking dependency.
 
-## What you need
+**Infrastructure** — how the service actually runs in staging + production —
+lives in the platform-wide runbook:
 
-- **Postgres 15+** (the dev compose file uses `postgres:16`). The schema uses
-  `gen_random_uuid()`, available in modern Postgres core.
-- **Python 3.11+** and [uv](https://github.com/astral-sh/uv).
-- **A reachable team-tracking directory** — the source of truth for owners. See the
-  directory-dependency section below; the service runs without it but ownership validation
-  degrades.
+- **[`docs/RAILWAY-DEPLOYMENT.md`](../../../docs/RAILWAY-DEPLOYMENT.md)** — Railway + Neon setup and the branching/auto-deploy flow.
+- **[`docs/DEPLOYMENT-HISTORY.md`](../../../docs/DEPLOYMENT-HISTORY.md)** — how we got there and the bugs we hit.
+
+For local dev, the [README quickstart](../README.md) is enough — this file is
+about the service in a real (staging / production) environment.
+
+## What this service depends on
+
+- **Postgres 16.** Managed via Neon in staging/production (see the runbook);
+  a Postgres 16 container locally. Schema uses `gen_random_uuid()`, standard
+  in modern Postgres core.
+- **A reachable team-tracking directory** — the source of truth for owners.
+  See the directory-dependency section below; the service *runs* without it
+  but ownership validation degrades.
 
 ## Environment variables
 
@@ -25,64 +34,53 @@ All configuration is env-driven (`src/config.py`, loaded from the process enviro
 | `DIRECTORY_BASE_URL` | `directory_base_url` | `http://localhost:8000` | Base URL of the team-tracking directory |
 | `DIRECTORY_API_KEY` | `directory_api_key` | `dev-api-key-change-me` | API key this service uses to call the directory |
 
-Production checklist:
+Staging + production values live in **Railway** — set per environment via the
+runbook's env-var contract. Keep the defaults ONLY for local dev; anything
+running against a real Neon branch must set a strong `API_KEY` and its own
+scoped `DIRECTORY_API_KEY` (issued by the provisioning script — see the
+runbook).
 
-- Set a real `DATABASE_URL` pointing at your managed/hosted Postgres.
-- **Do not** keep the default `API_KEY`. Either set it to a strong random secret used only
-  for bootstrap/admin, or issue per-consumer scoped keys (below) and leave `API_KEY` as a
-  tightly-held admin key. Never share the bootstrap key with individual consumers.
-- Point `DIRECTORY_BASE_URL` at the deployed team-tracking service and set
-  `DIRECTORY_API_KEY` to a `read`-scoped key issued by that service.
+## Postgres
 
-## Postgres setup
-
-The bundled `docker-compose.yml` is for local dev (Postgres on host port **5434**, so it
-doesn't collide with team-tracking's default). In production, point `DATABASE_URL` at your
-real database instead.
-
-```bash
-# Local / self-hosted via compose:
-docker compose up -d postgres
-```
-
-The connection string uses the `psycopg` (v3) driver:
-`postgresql+psycopg://<user>:<password>@<host>:<port>/<db>`.
+- **Local:** `docker compose up -d postgres` inside `services/documentation-system/`
+  spins up the dev DB (host port `5434`, chosen so it doesn't collide with
+  team-tracking's `5433`). Connection string uses the `psycopg` (v3) driver:
+  `postgresql+psycopg://<user>:<pass>@<host>:<port>/<db>`.
+- **Staging / production:** Neon manages this. Each environment points at its
+  own branch of the `documentation-system` Neon project. See the runbook.
 
 ## Migrations (Alembic)
 
-Schema is managed by Alembic (`migrations/`). Alembic reads the same `DATABASE_URL` your
-app uses — `migrations/env.py` pulls it from `src.config.get_settings()`, so there's one
-source of truth for the connection string.
-
-Apply all migrations before starting the server:
-
-```bash
-uv run alembic upgrade head
-```
+Schema is managed by Alembic (`migrations/`). Alembic reads the same
+`DATABASE_URL` the app uses — `migrations/env.py` pulls it from
+`src.config.get_settings()`, one source of truth.
 
 Two migrations ship today:
 
-- **`001_initial_schema`** — creates `sources`, `docs`, `doc_tags`, `api_keys` and their
-  indexes.
-- **`002_seed_sources`** — seeds the eight built-in sources (`web`, `github`, `gdrive`,
-  `gdocs`, `gsheets`, `gslides`, `notion`, `youtube`).
+- **`001_initial_schema`** — creates `sources`, `docs`, `doc_tags`, `api_keys`
+  and their indexes.
+- **`002_seed_sources`** — seeds the eight built-in sources (`web`, `github`,
+  `gdrive`, `gdocs`, `gsheets`, `gslides`, `notion`, `youtube`).
 
-Run migrations as a discrete deploy step (before rolling the app), not from the app
-process.
+**On Railway,** migrations run automatically via `railway.json`'s
+`preDeployCommand: "alembic upgrade head"` before every deploy — idempotent,
+transactional, no manual step. **Locally,** run `uv run alembic upgrade head`
+after cloning or when new migrations land.
 
-## Running the server
+## Running the server locally
 
 ```bash
-uv sync --extra dev              # or without --extra dev for a runtime-only install
+uv sync --extra dev
 uv run uvicorn src.api.app:app --host 0.0.0.0 --port 8001
 ```
 
-Put a reverse proxy (Caddy/nginx) in front for TLS. The audit middleware honors
-`X-Forwarded-For` / `X-Real-IP`, so set those on the proxy to log real client IPs. The
-service listens on **8001** by convention (team-tracking uses 8000).
+The service listens on **8001** locally by convention (team-tracking uses
+`8000`). In Railway, `PORT` is set to `8000` explicitly and the start command
+in `railway.json` picks that up.
 
-Health/observability: the audit middleware emits one JSON log line per request to stdout —
-point your log aggregator (journald, Loki, CloudWatch, …) at the process stdout.
+Health/observability: the audit middleware emits one JSON log line per
+request to stdout. On Railway, view via `railway service logs --service
+documentation-system --environment <env>` or the Railway dashboard.
 
 ## Issuing API keys (`doc-keys` CLI)
 

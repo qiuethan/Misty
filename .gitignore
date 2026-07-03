@@ -1,3 +1,6 @@
 /docs/superpowers
 /.claude
 /.superpowers
+
+# macOS
+.DS_Store

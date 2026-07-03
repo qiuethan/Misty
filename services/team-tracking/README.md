@@ -140,12 +140,12 @@ team-tracking/
 │   ├── API.md              Consumer-facing endpoint reference (all 23 endpoints)
 │   ├── ARCHITECTURE.md     Contributor orientation: boundaries, adapters, auth, data model
 │   ├── CONTRIBUTING.md     Task walkthroughs: add an endpoint, adapter method, migration, tests
-│   ├── DEPLOYMENT.md       Production: Postgres, Alembic, key issuance, reverse proxy
+│   ├── DEPLOYMENT.md       Ops reference: security posture, key management CLI, audit log
 │   └── archive/            Original design + plan specs
 │
-└── deploy/
-    ├── Caddyfile           Production reverse proxy (auto TLS + rate limit + headers)
-    └── nginx.conf.example  nginx alternative
+└── deploy/                 Historical VPS reverse-proxy examples (Caddyfile, nginx.conf).
+                            Superseded by Railway — kept for reference in case we ever
+                            self-host. See docs/RAILWAY-DEPLOYMENT.md for the live path.
 ```
 
 **Seven tables:** `people`, `teams`, `role_kinds`, `team_memberships`, `api_keys`, `providers`, `person_identifiers`.

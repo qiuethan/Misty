@@ -133,7 +133,8 @@ documentation-system/
 │   ├── test_types.py
 │   └── test_url_norm.py
 │
-├── docker-compose.yml           Postgres on host port 5434
+├── docker-compose.yml           Local dev Postgres (host port 5434 — staging/prod use Neon)
+├── Dockerfile                   Production image (built + smoke-tested by CI; used by Railway)
 └── alembic.ini
 ```
 
