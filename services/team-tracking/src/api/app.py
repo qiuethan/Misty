@@ -20,6 +20,11 @@ def create_app() -> FastAPI:
         description="Source of truth for people, teams, and memberships.",
     )
     app.add_middleware(AuditLogMiddleware)
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
     app.include_router(people.router)
     app.include_router(teams.router)
     app.include_router(role_kinds.router)
