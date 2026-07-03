@@ -140,8 +140,7 @@ team-tracking/
 │   ├── API.md              Consumer-facing endpoint reference (all 23 endpoints)
 │   ├── ARCHITECTURE.md     Contributor orientation: boundaries, adapters, auth, data model
 │   ├── CONTRIBUTING.md     Task walkthroughs: add an endpoint, adapter method, migration, tests
-│   ├── DEPLOYMENT.md       Ops reference: security posture, key management CLI, audit log
-│   └── archive/            Original design + plan specs
+│   └── DEPLOYMENT.md       Ops reference: security posture, key management CLI, audit log
 │
 └── deploy/                 Historical VPS reverse-proxy examples (Caddyfile, nginx.conf).
                             Superseded by Railway — kept for reference in case we ever
@@ -220,8 +219,7 @@ See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for task walkthroughs.
 - [docs/API.md](docs/API.md) — consumer-facing endpoint reference (all 23 endpoints, scopes, errors, curl)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — contributor orientation: Protocol boundary, adapters, temporal memberships, Level-2 auth, data model
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — task walkthroughs for adding endpoints, adapter methods, migrations
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — production deployment, TLS, rate limiting, key issuance, secret handling
-- [docs/archive/](docs/archive/) — original design spec and implementation plan
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — ops reference: security posture, key management CLI, audit log
 
 Machine-readable OpenAPI schema: `GET /openapi.json`. Interactive Swagger UI: `GET /docs`.
 
