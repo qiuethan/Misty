@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import doc from '../src/commands/doc.js';
+import doc, { AUTOCOMPLETE_TIMEOUT_MS } from '../src/commands/doc.js';
+import { PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS } from '../src/router.js';
 
 function findSub(name) {
   return doc.subcommands.find((s) => s.name === name);
@@ -90,4 +91,11 @@ test('teamAutocomplete returns [] when directory lookups exceed the budget', asy
   };
   const out = await resolver({ typed: '', principal: { person: { id: 'p1' } }, ctx });
   assert.deepEqual(out, []);
+});
+
+test('stacked autocomplete timeouts stay under Discord\'s 3s window', () => {
+  assert.ok(
+    PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS + AUTOCOMPLETE_TIMEOUT_MS <= 2800,
+    `principal (${PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS}) + lookup (${AUTOCOMPLETE_TIMEOUT_MS}) must stay well under 3000ms`,
+  );
 });

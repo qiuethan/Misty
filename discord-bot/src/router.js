@@ -57,7 +57,10 @@ export async function dispatch(intent, { commands, appContext }) {
 // this many ms; the resolver then runs promptly with an anonymous principal
 // (typically yielding no suggestions) rather than the whole autocomplete timing
 // out. Any directory call left in flight resolves harmlessly.
-const PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS = 1500;
+// NOTE: this timeout runs sequentially before command-specific autocomplete
+// budgets (e.g. doc.js's AUTOCOMPLETE_TIMEOUT_MS). Their sum must stay under
+// Discord's ~3s autocomplete window.
+export const PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS = 1000;
 
 // Resolve to `null` on timeout or rejection — never rejects.
 function resolveWithTimeout(promise, ms) {

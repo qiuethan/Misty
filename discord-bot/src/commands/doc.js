@@ -9,7 +9,10 @@ import {
 // Suggest the caller's own active teams for a `team` option. Best-effort: the
 // router's dispatchAutocomplete already swallows throws, but we also guard here
 // so an unlinked caller (null principal) simply gets no suggestions.
-const AUTOCOMPLETE_TIMEOUT_MS = 2500;
+// This runs after router.js's PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS (1000ms) has
+// already been spent resolving the principal, so 1000 + 1500 = 2500ms worst
+// case, staying under Discord's ~3s autocomplete window.
+export const AUTOCOMPLETE_TIMEOUT_MS = 1500;
 
 async function teamAutocomplete({ typed, principal, ctx }) {
   if (!principal?.person?.id) return [];
@@ -20,6 +23,7 @@ async function teamAutocomplete({ typed, principal, ctx }) {
   let timer;
   const timeout = new Promise((resolve) => {
     timer = setTimeout(() => resolve(null), budget);
+    timer.unref?.();
   });
   // Two directory calls (memberships + all teams) instead of N per-team lookups.
   const lookup = Promise.all([
