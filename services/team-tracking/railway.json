@@ -2,8 +2,8 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": { "builder": "DOCKERFILE", "dockerfilePath": "services/team-tracking/Dockerfile" },
   "deploy": {
-    "startCommand": "sh -c 'cd services/team-tracking && uvicorn src.api.app:app --host 0.0.0.0 --port ${PORT}'",
-    "preDeployCommand": "sh -c 'cd services/team-tracking && alembic upgrade head'",
+    "startCommand": "sh -c 'uvicorn src.api.app:app --host 0.0.0.0 --port ${PORT}'",
+    "preDeployCommand": "alembic upgrade head",
     "healthcheckPath": "/health",
     "restartPolicyType": "ON_FAILURE"
   }
