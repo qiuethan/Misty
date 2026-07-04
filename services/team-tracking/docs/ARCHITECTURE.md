@@ -69,7 +69,7 @@ The same "never hard-delete" rule applies to `people` and `teams` (soft-retire w
 
 ## Level-2 authentication
 
-Auth lives in `src/api/auth.py` and `src/api/hashing.py`. The model is "Level 2": DB-issued, per-consumer, scoped keys with a cryptographically attested actor and an audit log.
+The auth machinery itself lives in the shared `platform_auth` package (`packages/auth/`) — a pure leaf package with no imports of any service's `src/` or `contracts/`, shared with documentation-system. `src/api/auth.py`, `src/api/hashing.py`, and `src/api/middleware.py` are thin (~15-line) shims that call `platform_auth`'s `build_auth(...)` factory, binding team-tracking's `tt_` key envelope and config (`enable_dev_spoof=True`, `bootstrap_honors_x_actor=True`, `dev_spoof_reject_log_fields={"tt_env": "production"}`), and re-export the same names (`require_api_key`, `require_scope`, `get_actor`, `AuditLogMiddleware`). The auth behavior and contract are unchanged by this move. The model is still "Level 2": DB-issued, per-consumer, scoped keys with a cryptographically attested actor and an audit log.
 
 **Key format and storage.** A key is `tt_<prefix>_<secret>` — an 8-char public prefix plus a secret. Only an **argon2 hash** of the full key is stored (in the `api_keys` table), alongside the plaintext prefix. On a request, `require_api_key` parses the prefix, looks up the row, and argon2-verifies the candidate against the stored hash. The plaintext is shown once at issuance (by the `team-tracking-keys` CLI) and is never recoverable. All auth failures return an identical `401` — the code never leaks which check failed.
 
@@ -79,13 +79,13 @@ Auth lives in `src/api/auth.py` and `src/api/hashing.py`. The model is "Level 2"
 
 **Env bootstrap key.** The `API_KEY` setting is a deprecated grace-period key: if set and matched (constant-time compare), it grants `admin` scope so a brand-new deployment can reach the API before any DB keys exist. Every real consumer should have its own DB-issued key.
 
-**Audit middleware.** `AuditLogMiddleware` (`src/api/middleware.py`) emits exactly one JSON line to stdout per request — method, path, status, duration, the resolved `key_name`, `is_bootstrap`, and the real client IP (read from `X-Real-IP`/`X-Forwarded-For` set by the reverse proxy). Auth stashes the resolved key on `request.state.auth_key`; the middleware reads it after the handler runs. Logging never fails the request. Ship stdout to any aggregator; grep by `key_name`/`status` for investigations (see [DEPLOYMENT.md](DEPLOYMENT.md)).
+**Audit middleware.** `AuditLogMiddleware` (from the shared `platform_auth` package, wired in via `src/api/middleware.py`) emits exactly one JSON line to stdout per request — method, path, status, duration, the resolved `key_name`, `is_bootstrap`, and the real client IP (read from `X-Real-IP`/`X-Forwarded-For` set by the reverse proxy). Auth stashes the resolved key on `request.state.auth_key`; the middleware reads it after the handler runs. Logging never fails the request. Ship stdout to any aggregator; grep by `key_name`/`status` for investigations (see [DEPLOYMENT.md](DEPLOYMENT.md)).
 
 **Self-introspection.** `GET /api-keys/self` returns the calling key's `{name, scopes}` sorted alphabetically. No additional scope required. The discord-bot uses this at startup to decide whether it holds `dev:spoof` and can therefore enable its "act as any Discord ID" web playground mode.
 
 **The `dev:spoof` scope.** A new dev-only scope guarded by the environment tier config (`TT_ENV`, see [DEPLOYMENT.md](DEPLOYMENT.md)). The scope itself gates nothing on team-tracking's HTTP surface — no endpoint requires it. Its purpose is to be a *declaration* that a caller (typically the discord-bot playground) intends to run in a spoofable dev environment. Two defense-in-depth guards fire only when `TT_ENV=production`:
 1. The `team-tracking-keys issue` CLI refuses to grant `dev:spoof` on issuance.
-2. Request-time auth (`_enforce_dev_scope_environment` in `src/api/auth.py`) 403s any request whose key has literal `dev:spoof` scope — the `admin` wildcard does NOT satisfy this literal check, precisely so an accidental admin+dev:spoof key against production is trapped, not bypassed.
+2. Request-time auth (enforced in the shared `platform_auth` package, bound with team-tracking's `dev_spoof_reject_log_fields={"tt_env": "production"}` via `src/api/auth.py`) 403s any request whose key has literal `dev:spoof` scope — the `admin` wildcard does NOT satisfy this literal check, precisely so an accidental admin+dev:spoof key against production is trapped, not bypassed.
 
 The result: a `dev:spoof` key cannot be created against a production directory, and if one leaks in via a copied backup or bug, every request it makes is refused at the door. Local dev (`TT_ENV=local` or unset) permits the scope freely.
 

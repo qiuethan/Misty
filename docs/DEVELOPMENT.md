@@ -85,7 +85,10 @@ use Docker for their local Postgres.
   package manager and runner for both APIs. It creates the virtualenv, installs
   deps (`uv sync`), and runs commands inside it (`uv run ...`). You do not
   `pip install` or activate a venv by hand. Install `uv`, and it manages Python
-  for you.
+  for you. The repo is a single **uv workspace**: one root `pyproject.toml`
+  (`services/*`, `packages/*`) and one root `uv.lock` cover both APIs and the
+  shared `packages/auth` (`platform_auth`) library — `uv sync` resolves the whole
+  workspace even when run from a service subdirectory.
 - **Node 20+** — for the discord-bot. Check with `node --version`. The bot reads
   its `.env` via Node's built-in `--env-file`, so no `dotenv` package needed.
 
@@ -181,7 +184,8 @@ is the workflow around them.
    uv run pytest --ignore=tests/test_postgres_adapter.py   # fast, in-memory adapter
    ```
 
-   For the bot: `cd discord-bot && npm test`.
+   For the bot: `cd discord-bot && npm test`. If you touched the shared auth
+   library, its own tests live alongside it: `cd packages/auth && uv run pytest`.
 
 4. **Open a PR into `staging`.** Every PR runs
    [`ci.yml`](../.github/workflows/ci.yml): full test suites against real

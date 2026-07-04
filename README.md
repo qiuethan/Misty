@@ -78,6 +78,8 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the cross-service data fl
 ```
 UTMIST-Prototypes/
 ├── README.md                          You are here
+├── pyproject.toml                     Root uv workspace (members: services/*, packages/*)
+├── uv.lock                            Single lockfile for the whole workspace
 ├── docs/
 │   ├── DEVELOPMENT.md                Developer onboarding — clone to first PR
 │   ├── ARCHITECTURE.md                Cross-service architecture — how the pieces fit
@@ -96,6 +98,11 @@ UTMIST-Prototypes/
 │   │
 │   └── documentation-system/          Catalog service (same shape as team-tracking)
 │
+├── packages/
+│   └── auth/                          platform_auth — shared API-key auth lib (argon2 hashing,
+│                                       scopes, FastAPI deps, audit middleware); a pure leaf
+│                                       consumed by both services below via thin shims
+│
 ├── discord-bot/                       Discord frontend + web playground
 │   ├── src/                           Node.js + discord.js
 │   ├── scripts/dev-web.js             Local playground orchestrator (ephemeral scratch DB)
@@ -110,7 +117,7 @@ UTMIST-Prototypes/
     └── main-source-guard.yml          Enforces "PRs to main come from staging"
 ```
 
-Each service is self-contained: its own dependencies, its own database, its own tests, its own docs. Add a new source-of-truth service by dropping it in `services/` following the same shape.
+Each service is self-contained: its own database, its own tests, its own docs. Dependencies are managed as one uv workspace rooted at this repo's `pyproject.toml`/`uv.lock`, and team-tracking and documentation-system now share one leaf, `packages/auth` (`platform_auth`), for API-key auth — a shared *library* dependency, not a dependency between the two services, which remain independent of each other. Add a new source-of-truth service by dropping it in `services/` following the same shape.
 
 ---
 
@@ -136,7 +143,7 @@ Both APIs are built the same way on purpose — learning one gives you 80% of th
 
 - **`contracts/` Protocol boundary.** Each service has a `contracts/` package of Pydantic domain types plus `Protocol` interfaces. Application code depends on the Protocols, never on a concrete implementation.
 - **Swappable storage adapters.** `InMemoryStorageAdapter` for fast tests, `PostgresStorageAdapter` for real runs — both satisfy the same Protocol. Tests use in-memory; a small integration test suite gates the Postgres adapter too.
-- **Scoped API-key auth.** Every request carries `X-API-Key`. Keys are argon2-hashed in the DB with a set of per-resource scopes (`people:read`, `teams:write`, etc.).
+- **Scoped API-key auth.** Every request carries `X-API-Key`. Keys are argon2-hashed in the DB with a set of per-resource scopes (`people:read`, `teams:write`, etc.). This machinery is implemented once in the shared [`packages/auth`](packages/auth) (`platform_auth`) library and consumed by each service through a thin shim (`src/api/auth.py`, `hashing.py`, `middleware.py`) that binds its own key prefix and config.
 - **Attested actor.** The `created_by`/`updated_by` on every audit field is the authenticated key's own name — a caller can't claim to be someone else.
 - **Per-request audit log.** Middleware emits one JSON line per request with the resolved actor, endpoint, status, and duration.
 - **Alembic migrations.** Schema changes are versioned; migrations run as Railway's `preDeployCommand` on every deploy.
