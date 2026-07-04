@@ -13,7 +13,7 @@ def create_app() -> FastAPI:
         description="Catalog of URLs: ingest, browse, and own documents.",
         docs_url="/swagger",
     )
-    app.add_middleware(AuditLogMiddleware)
+    app.add_middleware(AuditLogMiddleware, logger_name="documentation_system.audit")
 
     @app.get("/health")
     def health() -> dict[str, str]:
