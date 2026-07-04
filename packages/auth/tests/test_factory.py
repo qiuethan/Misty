@@ -97,3 +97,37 @@ def test_dev_spoof_rejected_in_prod():
     key = store.add("spoofer", ["dev:spoof", "people:read"])
     client = TestClient(_app(store, is_prod=lambda: True, enable_dev_spoof=True))
     assert client.get("/read", headers={"X-API-Key": key}).status_code == 403
+
+
+def test_dev_spoof_reject_log_includes_injected_fields(caplog):
+    import json
+    import logging
+
+    store = _Store()
+    key = store.add("playground", ["dev:spoof", "people:read"])
+    deps = build_auth(
+        lambda: store,
+        envelope="tt_",
+        get_env_key=lambda: "",
+        is_prod=lambda: True,
+        enable_dev_spoof=True,
+        dev_spoof_reject_log_fields={"tt_env": "production"},
+        audit_logger_name="test.spoof.audit",
+    )
+    app = FastAPI()
+
+    @app.get("/read")
+    def read(_=Depends(deps.require_scope("people:read"))):
+        return {"ok": True}
+
+    client = TestClient(app)
+    with caplog.at_level(logging.WARNING, logger="test.spoof.audit"):
+        r = client.get("/read", headers={"X-API-Key": key})
+    assert r.status_code == 403
+    warnings = [rec for rec in caplog.records if rec.levelname == "WARNING"]
+    assert warnings, "expected a WARNING audit record"
+    parsed = json.loads(warnings[0].message)
+    assert parsed["event"] == "dev_spoof_key_rejected"
+    assert parsed["scope"] == "dev:spoof"
+    assert parsed["tt_env"] == "production"
+    assert parsed["key_name"] == "playground"

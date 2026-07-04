@@ -48,6 +48,7 @@ def build_auth(
     enable_dev_spoof: bool = False,
     bootstrap_honors_x_actor: bool = False,
     audit_logger_name: str = "platform.audit",
+    dev_spoof_reject_log_fields: dict[str, str] | None = None,
 ) -> AuthDeps:
     audit = logging.getLogger(audit_logger_name)
 
@@ -57,11 +58,14 @@ def build_auth(
             return
         if not is_prod():
             return
-        audit.warning(json.dumps({
+        payload = {
             "event": "dev_spoof_key_rejected",
             "scope": DEV_SPOOF_SCOPE,
             "key_name": authed.name,
-        }))
+        }
+        if dev_spoof_reject_log_fields:
+            payload.update(dev_spoof_reject_log_fields)
+        audit.warning(json.dumps(payload))
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="dev:spoof keys forbidden in production",
