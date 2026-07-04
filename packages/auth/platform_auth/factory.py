@@ -119,4 +119,8 @@ def build_auth(
             return x_actor
         return key.name
 
-    return AuthDeps(require_api_key=require_api_key, require_scope=require_scope, get_actor=get_actor)
+    return AuthDeps(
+        require_api_key=require_api_key,
+        require_scope=require_scope,
+        get_actor=get_actor,
+    )
