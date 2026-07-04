@@ -149,6 +149,19 @@ jobs:
             // a newly-created (or newly-edited) issue — the close/reopen paths below
             // only ever act on an issue's *dependents*, never on the issue itself.
             if (action === 'opened' || action === 'edited') {
+              // Only sync availability while the issue is open and unassigned. An
+              // edit can land on a closed issue (would mark a done issue ready) or
+              // an assigned/in-progress one (would undo the assignment strip and put
+              // it back on the queue) — mirror the assigned/unassigned guards.
+              if (context.payload.issue.state === 'closed') {
+                core.info(`#${changed}: closed — blocker sync skipped.`);
+                return;
+              }
+              const assignees = context.payload.issue.assignees || [];
+              if (assignees.length > 0) {
+                core.info(`#${changed}: assigned — blocker sync skipped.`);
+                return;
+              }
               const selfBlockers = blockersOf(context.payload.issue.body);
               if (selfBlockers.length === 0) {
                 core.info(`#${changed}: no "Blocked by:" line — nothing to do.`);
