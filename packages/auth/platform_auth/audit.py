@@ -1,0 +1,78 @@
+"""Structured audit-log middleware: one JSON line per request to stdout.
+
+The logger name is per-service (passed via add_middleware(..., logger_name=...)).
+Reads request.state.auth_key (set by require_api_key) for key_name/is_bootstrap.
+"""
+
+import json
+import logging
+import sys
+import time
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+
+
+class _SysStdoutStream:
+    """Resolve sys.stdout at write time so pytest's capsys can capture it."""
+
+    def write(self, msg: str) -> int:
+        return sys.stdout.write(msg)
+
+    def flush(self) -> None:
+        sys.stdout.flush()
+
+
+def _configure(logger: logging.Logger) -> None:
+    if logger.handlers:
+        return
+    handler = logging.StreamHandler(_SysStdoutStream())  # type: ignore[arg-type]
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+class AuditLogMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, logger_name: str = "platform.audit"):
+        super().__init__(app)
+        self._logger = logging.getLogger(logger_name)
+
+    async def dispatch(self, request: Request, call_next):
+        _configure(self._logger)
+        request_id = str(uuid4())
+        request.state.request_id = request_id
+        start = time.monotonic()
+        response = None
+        try:
+            response = await call_next(request)
+            return response
+        finally:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            try:
+                auth_key = getattr(request.state, "auth_key", None)
+                remote = (
+                    request.headers.get("X-Real-IP")
+                    or (request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or None)
+                    or (request.client.host if request.client else None)
+                )
+                entry = {
+                    "ts": _now_iso(),
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status": response.status_code if response is not None else 500,
+                    "duration_ms": duration_ms,
+                    "key_name": auth_key.name if auth_key else None,
+                    "is_bootstrap": auth_key.is_bootstrap if auth_key else False,
+                    "remote": remote,
+                }
+                self._logger.info(json.dumps(entry, separators=(",", ":")))
+            except Exception:
+                pass
