@@ -41,10 +41,17 @@ form (append `?sslmode=require` if not present).
 ## 2. Railway: project, environments, services
 1. Create a Railway project; it starts with a `production` environment — add a
    `staging` environment too.
-2. Add three services from this repo, each with its **root directory** set:
-   - `services/team-tracking`
-   - `services/documentation-system`
-   - `discord-bot`
+2. Add three services from this repo:
+   - `services/team-tracking` and `services/documentation-system` — Python
+     services. Their Dockerfiles now build from the **repo root** as context (so
+     `packages/` is reachable) and install their workspace member with
+     `uv sync --frozen --no-dev --package <team-tracking|documentation-system>`
+     into a venv at `/app/.venv`. So each of these two services' Railway **root
+     directory is `/`**, with `railway.json` → `dockerfilePath` pointing at
+     `services/team-tracking/Dockerfile` / `services/documentation-system/Dockerfile`
+     respectively.
+   - `discord-bot` — Node, unaffected by the workspace change; its root
+     directory stays `discord-bot`.
    Railway picks up each service's `railway.json` (Dockerfile build, start
    command, health check, and — for the APIs — the `alembic upgrade head`
    pre-deploy step).
@@ -172,6 +179,11 @@ by an existing admin running `/seed` from Discord.
 - **End-to-end:** run a bot command (e.g. `/whoami`) in the staging guild → reaches staging team-tracking → staging Neon branch. If it returns "directory is temporarily unavailable," the two most common causes are (1) `DIRECTORY_BASE_URL` template not resolving (see the `PORT=8000` note above), or (2) `DIRECTORY_API_KEY` missing on the consumer (re-run the provisioning script).
 
 ## Notes
+- The two API Dockerfiles build with the repo root as context and
+  `uv sync --frozen --no-dev --package <name>` to install just that workspace
+  member (plus the shared `platform_auth` leaf from `packages/auth`) — that's
+  why their Railway root directory is `/` while `discord-bot`'s stays
+  `discord-bot`.
 - APIs bind **`--host 0.0.0.0`**. Railway's IPv6 private network routes to the
   container's port regardless of the bind family, and `0.0.0.0` is what
   Railway's healthcheck reaches (an IPv6-only bind like `::` fails healthcheck

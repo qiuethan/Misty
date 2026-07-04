@@ -1,0 +1,3 @@
+# Virtual workspace root — has no project of its own; just declares members.
+[tool.uv.workspace]
+members = ["services/*", "packages/*"]

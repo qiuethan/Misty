@@ -46,6 +46,8 @@ uv run alembic upgrade head
 uv run uvicorn src.api.app:app --reload --port 8001
 ```
 
+> The repo is a single [uv workspace](https://docs.astral.sh/uv/concepts/workspaces/) (root `pyproject.toml` with `[tool.uv.workspace] members = ["services/*", "packages/*"]`, one root `uv.lock`). documentation-system depends on the shared `platform-auth` package (`[tool.uv.sources] platform-auth = { workspace = true }`) but the commands above are unchanged — `uv sync`, `uv run pytest`, `uv run alembic` still work exactly as shown when run from this directory.
+
 The API is now running at `http://localhost:8001`. Interactive Swagger UI is at `http://localhost:8001/swagger` (note: relocated from `/docs`, since `/docs` is the docs-resource router). Machine-readable OpenAPI schema is at `GET /openapi.json`.
 
 The default dev API key is `dev-api-key-change-me` (set in `.env`). Pass it as `X-API-Key` on every request:
@@ -86,10 +88,10 @@ documentation-system/
 ├── src/
 │   ├── api/                 FastAPI application
 │   │   ├── app.py           App factory (create_app); docs_url="/swagger"
-│   │   ├── auth.py          require_api_key / require_scope / get_actor
+│   │   ├── auth.py          Thin shim over the shared `platform_auth` package: require_api_key / require_scope / get_actor
 │   │   ├── deps.py          get_storage / get_fetchers / get_directory
-│   │   ├── hashing.py       Argon2 API key hashing + prefix parsing
-│   │   ├── middleware.py    AuditLogMiddleware
+│   │   ├── hashing.py       Thin shim over `platform_auth`: Argon2 API key hashing + prefix parsing
+│   │   ├── middleware.py    Thin shim over `platform_auth`: AuditLogMiddleware
 │   │   └── routers/         docs.py, sources.py
 │   │
 │   ├── storage/              Concrete StorageAdapter implementations
@@ -134,7 +136,9 @@ documentation-system/
 │   └── test_url_norm.py
 │
 ├── docker-compose.yml           Local dev Postgres (host port 5434 — staging/prod use Neon)
-├── Dockerfile                   Production image (built + smoke-tested by CI; used by Railway)
+├── Dockerfile                   Production image (built + smoke-tested by CI; used by Railway).
+│                                 Build context is the repo root (so packages/ is reachable);
+│                                 installs via `uv sync --frozen --no-dev --package documentation-system`.
 └── alembic.ini
 ```
 

@@ -25,6 +25,8 @@ uv sync --extra dev
 uv run alembic upgrade head
 ```
 
+> Note: the repo is a uv workspace (one root `pyproject.toml`, one root `uv.lock` shared with `packages/auth` and documentation-system). team-tracking depends on the shared `platform-auth` package via `[tool.uv.sources] platform-auth = { workspace = true }`, but `uv sync`/`uv run` from this directory work exactly as shown above.
+
 Run the fast tests to confirm your environment works:
 
 ```bash
