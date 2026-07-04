@@ -55,6 +55,22 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
+  auth-lib-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/auth
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Run tests
+        run: uv run pytest
+      - name: Ruff check
+        run: uv run ruff check .
+
   node-test:
     runs-on: ubuntu-latest
     defaults:
@@ -77,11 +93,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build team-tracking image
-        run: docker build -t team-tracking:ci ./services/team-tracking
+        run: docker build -f services/team-tracking/Dockerfile -t team-tracking:ci .
       - name: Smoke-test team-tracking image (imports incl. contracts/ resolve at boot)
         run: docker run --rm team-tracking:ci python -c "import src.api.app"
       - name: Build documentation-system image
-        run: docker build -t documentation-system:ci ./services/documentation-system
+        run: docker build -f services/documentation-system/Dockerfile -t documentation-system:ci .
       - name: Smoke-test documentation-system image (imports incl. contracts/ resolve at boot)
         run: docker run --rm documentation-system:ci python -c "import src.api.app"
       - name: Build discord-bot image
