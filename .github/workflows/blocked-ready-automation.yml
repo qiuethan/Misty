@@ -8,10 +8,21 @@ name: blocked-ready-automation
 # that still have an open blocker; `ready` marks issues whose blockers are all
 # resolved.
 #
+# - When an issue is OPENED or EDITED: it evaluates its OWN `Blocked by:` line and
+#   sets its own state — `blocked` if any blocker is still open, `ready` if all are
+#   closed (or there is no `Blocked by:` line to act on). This is what makes a
+#   freshly-created blocked issue land its state without manual labelling.
 # - When a blocker issue is CLOSED: every issue it blocks whose blockers are now
 #   ALL closed gets `blocked` removed + `ready` added.
 # - When a blocker issue is REOPENED: the issues it blocks get re-blocked
 #   (`ready` removed + `blocked` added).
+#
+# Assignment tracking (keeps the "ready" queue and the board honest):
+# - When an issue is ASSIGNED: it's being worked, so it's no longer up for grabs
+#   — the `ready` label is removed. Board Status is left untouched (a human moves
+#   the card to In progress / In review).
+# - When an issue is UNASSIGNED and no assignees remain: if it is not blocked, it
+#   goes back on the queue — `ready` label restored and board Status set to Ready.
 #
 # Board Status (optional): if a Projects-scoped PAT is stored as the
 # PROJECTS_TOKEN repo secret, the dependent issue's project Status is also set to
@@ -23,7 +34,7 @@ name: blocked-ready-automation
 
 on:
   issues:
-    types: [closed, reopened]
+    types: [opened, edited, closed, reopened, assigned, unassigned]
 
 permissions:
   issues: write
@@ -46,7 +57,7 @@ jobs:
 
             const { owner, repo } = context.repo;
             const changed = context.payload.issue.number;
-            const action  = context.payload.action; // 'closed' | 'reopened'
+            const action  = context.payload.action; // opened|edited|closed|reopened|assigned|unassigned
             const token   = process.env.PROJECTS_TOKEN;
 
             // Parse a "Blocked by: #1, #2" line into blocker numbers.
@@ -118,14 +129,78 @@ jobs:
               }
             };
 
+            // add and/or remove a label; pass null to skip either side (assign only
+            // removes `ready`, so it calls setLabels(n, null, 'ready')).
             const setLabels = async (issueNumber, add, remove) => {
-              try { await github.rest.issues.addLabels({ owner, repo, issue_number: issueNumber, labels: [add] }); }
-              catch (e) { core.warning(`#${issueNumber}: add '${add}' failed: ${e.message}`); }
-              try { await github.rest.issues.removeLabel({ owner, repo, issue_number: issueNumber, name: remove }); }
-              catch (e) { if (e.status !== 404) core.warning(`#${issueNumber}: remove '${remove}' failed: ${e.message}`); }
+              if (add) {
+                try { await github.rest.issues.addLabels({ owner, repo, issue_number: issueNumber, labels: [add] }); }
+                catch (e) { core.warning(`#${issueNumber}: add '${add}' failed: ${e.message}`); }
+              }
+              if (remove) {
+                try { await github.rest.issues.removeLabel({ owner, repo, issue_number: issueNumber, name: remove }); }
+                catch (e) { if (e.status !== 404) core.warning(`#${issueNumber}: remove '${remove}' failed: ${e.message}`); }
+              }
             };
 
             if (!token) core.info('PROJECTS_TOKEN not set — updating labels only (board Status skipped).');
+
+            // opened / edited: the changed issue evaluates its OWN blockers and sets
+            // its own state. This is what lands the initial 'blocked'/'ready' state on
+            // a newly-created (or newly-edited) issue — the close/reopen paths below
+            // only ever act on an issue's *dependents*, never on the issue itself.
+            if (action === 'opened' || action === 'edited') {
+              const selfBlockers = blockersOf(context.payload.issue.body);
+              if (selfBlockers.length === 0) {
+                core.info(`#${changed}: no "Blocked by:" line — nothing to do.`);
+                return;
+              }
+              const states = await Promise.all(selfBlockers.map(stateOf));
+              const outstanding = selfBlockers.filter((_, idx) => states[idx] !== 'closed');
+              if (outstanding.length === 0) {
+                await setLabels(changed, 'ready', 'blocked');
+                await setBoardStatus(changed, OPT_READY);
+                core.info(`#${changed}: all blockers resolved → ready.`);
+              } else {
+                await setLabels(changed, 'blocked', 'ready');
+                await setBoardStatus(changed, OPT_BLOCKED);
+                core.info(`#${changed}: blocked by ${outstanding.map((n) => '#' + n).join(', ')}.`);
+              }
+              return;
+            }
+
+            // assigned / unassigned: sync the changed issue's OWN availability.
+            // Assigning claims it (drop `ready`); fully unassigning frees it again
+            // (restore `ready` + board Ready) unless it's still blocked.
+            if (action === 'assigned' || action === 'unassigned') {
+              if (context.payload.issue.state === 'closed') {
+                core.info(`#${changed}: closed — assignment sync skipped.`);
+                return;
+              }
+              if (action === 'assigned') {
+                // Being worked → no longer up for grabs. Strip `ready` only; leave
+                // the board Status to a human (In progress / In review).
+                await setLabels(changed, null, 'ready');
+                core.info(`#${changed}: assigned → 'ready' label removed.`);
+                return;
+              }
+              // unassigned: only re-open the queue once nobody is left assigned.
+              const assignees = context.payload.issue.assignees || [];
+              if (assignees.length > 0) {
+                core.info(`#${changed}: still has ${assignees.length} assignee(s) — no change.`);
+                return;
+              }
+              const selfBlockers = blockersOf(context.payload.issue.body);
+              const states = await Promise.all(selfBlockers.map(stateOf));
+              const outstanding = selfBlockers.filter((_, idx) => states[idx] !== 'closed');
+              if (outstanding.length === 0) {
+                await setLabels(changed, 'ready', 'blocked');
+                await setBoardStatus(changed, OPT_READY);
+                core.info(`#${changed}: fully unassigned & unblocked → ready.`);
+              } else {
+                core.info(`#${changed}: unassigned but still blocked by ${outstanding.map((n) => '#' + n).join(', ')} — 'ready' not restored.`);
+              }
+              return;
+            }
 
             // Find open issues that declare the changed issue as a blocker.
             const open = await github.paginate(github.rest.issues.listForRepo, {
