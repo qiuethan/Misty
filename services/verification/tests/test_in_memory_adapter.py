@@ -41,6 +41,14 @@ def test_latest_unconsumed_ignores_consumed():
     assert s.latest_unconsumed_for_email("x@y.com").subject == "s2"
 
 
+def test_latest_unconsumed_returns_most_recent_of_several():
+    s = InMemoryVerificationStore()
+    now = datetime.now(timezone.utc)
+    s.create_code(_rec(subject="s_old", email="m@x.com", created_at=now - timedelta(minutes=5)))
+    s.create_code(_rec(subject="s_new", email="m@x.com", created_at=now - timedelta(minutes=1)))
+    assert s.latest_unconsumed_for_email("m@x.com").subject == "s_new"
+
+
 def test_set_attempts_and_mark_consumed():
     s = InMemoryVerificationStore()
     s.create_code(_rec())

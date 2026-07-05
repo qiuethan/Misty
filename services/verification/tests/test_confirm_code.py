@@ -73,6 +73,18 @@ def test_confirm_lockout_after_five(client, store):
     assert r.json()["detail"] == "too_many_attempts"
 
 
+def test_confirm_locked_out_rejects_even_correct_code(client, store):
+    store.create_code(_code(attempts=5))  # already at MAX_ATTEMPTS
+    r = client.post(
+        "/verification/confirm-code", headers=AUTH, json={"subject": "discord:1", "code": "123456"}
+    )  # the CORRECT code
+    assert r.status_code == 429
+    assert r.json()["detail"] == "too_many_attempts"
+    stored = store.get_code("discord:1")
+    assert stored.consumed_at is None  # correct code was NOT consumed
+    assert stored.attempts == 5  # not incremented past the cap
+
+
 def test_confirm_no_pending(client):
     r = client.post(
         "/verification/confirm-code", headers=AUTH, json={"subject": "nope", "code": "123456"}
