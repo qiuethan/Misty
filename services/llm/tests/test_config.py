@@ -22,3 +22,19 @@ def test_production_with_empty_region_raises():
 def test_production_fully_configured_ok():
     s = Settings(llm_env="production", api_key="strong-unique-key", aws_region="us-east-1")
     verify_production_secrets(s)  # no raise
+
+
+def test_malformed_consumer_keys_fails_on_boot(monkeypatch):
+    from src.api import deps
+    from src.config import get_settings
+
+    monkeypatch.setenv("CONSUMER_KEYS", "{not valid json")
+    get_settings.cache_clear()
+    deps._key_store.cache_clear()
+    from src.api.app import create_app
+
+    with pytest.raises(RuntimeError, match="CONSUMER_KEYS"):
+        create_app()
+
+    deps._key_store.cache_clear()
+    get_settings.cache_clear()

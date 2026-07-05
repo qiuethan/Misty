@@ -69,6 +69,18 @@ def test_chat_happy_path(env_key):
     assert provider.last_request.thinking is True
 
 
+def test_chat_thinking_false_roundtrips(env_key):
+    provider = _FakeProvider(result=_ok_result())
+    client, headers = _client(env_key, provider)
+    resp = client.post(
+        "/chat",
+        headers=headers,
+        json={"messages": [{"role": "user", "content": "hi"}], "thinking": False},
+    )
+    assert resp.status_code == 200
+    assert provider.last_request.thinking is False
+
+
 def test_chat_requires_auth(env_key):
     client, _ = _client(env_key, _FakeProvider(result=_ok_result()))
     resp = client.post("/chat", json={"messages": [{"role": "user", "content": "hi"}]})

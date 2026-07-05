@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from src.api.hashing import generate_key, parse_prefix, verify_key
 from src.key_store import InMemoryKeyStore, key_store_from_config
 
@@ -44,3 +46,13 @@ def test_from_config_parses_entries():
     assert row is not None and row.name == "docs-bot"
     assert row.scopes == []  # default when omitted
     assert parse_prefix(plaintext) == prefix
+
+
+def test_from_config_malformed_json_raises():
+    with pytest.raises(RuntimeError, match="CONSUMER_KEYS"):
+        key_store_from_config("{not valid json")
+
+
+def test_from_config_missing_required_field_raises():
+    with pytest.raises(RuntimeError, match="CONSUMER_KEYS"):
+        key_store_from_config(json.dumps([{"name": "x"}]))

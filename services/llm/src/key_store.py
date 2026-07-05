@@ -42,11 +42,15 @@ def key_store_from_config(consumer_keys_json: str) -> InMemoryKeyStore:
     raw = (consumer_keys_json or "").strip()
     if not raw:
         return store
-    for entry in json.loads(raw):
-        store.add(
-            prefix=entry["prefix"],
-            key_hash=entry["key_hash"],
-            name=entry["name"],
-            scopes=entry.get("scopes", []),
-        )
+    try:
+        entries = json.loads(raw)
+        for entry in entries:
+            store.add(
+                prefix=entry["prefix"],
+                key_hash=entry["key_hash"],
+                name=entry["name"],
+                scopes=entry.get("scopes", []),
+            )
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise RuntimeError(f"Invalid CONSUMER_KEYS config: {exc}") from exc
     return store
