@@ -98,7 +98,7 @@ class BedrockConverseProvider:
         except (KeyError, TypeError) as exc:
             # Content-filtered / guardrail / unexpected-shape responses.
             raise ProviderUnavailable(f"unexpected Bedrock response shape: {exc}") from exc
-        text = "".join(b["text"] for b in blocks if "text" in b)
+        text = "".join(b["text"] for b in blocks if isinstance(b, dict) and "text" in b)
         usage = response.get("usage", {})
         return LLMResult(
             content=text,
