@@ -1,6 +1,12 @@
 import pytest
+from pydantic import ValidationError
 
 from src.config import Settings, verify_production_secrets
+
+
+def test_non_positive_timeout_rejected():
+    with pytest.raises(ValidationError):
+        Settings(request_timeout_s=0)
 
 
 def test_local_env_never_raises():

@@ -9,7 +9,13 @@ AWS_BEARER_TOKEN_BEDROCK).
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import (
+    BotoCoreError,
+    ClientError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+)
 
 from src.providers.base import (
     LLMRequest,
@@ -33,9 +39,17 @@ _RATE_LIMIT_CODES = {
     "ServiceQuotaExceededException",
 }
 
+# Genuine timeout/connection failures (map to 504). Other BotoCoreError subtypes
+# — NoCredentialsError, ParamValidationError, etc. — are config faults, not timeouts.
+_TIMEOUT_ERRORS = (ReadTimeoutError, ConnectTimeoutError, EndpointConnectionError)
+
 
 class BedrockConverseProvider:
     def __init__(self, *, aws_region: str, default_model: str, timeout_s: float, client=None):
+        if default_model not in _MODEL_IDS:
+            raise ValueError(
+                f"unsupported default model {default_model!r}; expected one of {sorted(_MODEL_IDS)}"
+            )
         self._client = client or boto3.client(
             "bedrock-runtime",
             region_name=aws_region,
@@ -74,10 +88,16 @@ class BedrockConverseProvider:
             if code in _RATE_LIMIT_CODES:
                 raise ProviderRateLimited(str(exc)) from exc
             raise ProviderUnavailable(str(exc)) from exc
-        except BotoCoreError as exc:  # connection / read timeout
+        except _TIMEOUT_ERRORS as exc:
             raise ProviderTimeout(str(exc)) from exc
+        except BotoCoreError as exc:  # credential/param/other boto-side faults
+            raise ProviderUnavailable(str(exc)) from exc
 
-        blocks = response["output"]["message"].get("content", [])
+        try:
+            blocks = response["output"]["message"]["content"]
+        except (KeyError, TypeError) as exc:
+            # Content-filtered / guardrail / unexpected-shape responses.
+            raise ProviderUnavailable(f"unexpected Bedrock response shape: {exc}") from exc
         text = "".join(b["text"] for b in blocks if "text" in b)
         usage = response.get("usage", {})
         return LLMResult(

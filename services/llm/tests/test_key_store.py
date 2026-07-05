@@ -56,3 +56,22 @@ def test_from_config_malformed_json_raises():
 def test_from_config_missing_required_field_raises():
     with pytest.raises(RuntimeError, match="CONSUMER_KEYS"):
         key_store_from_config(json.dumps([{"name": "x"}]))
+
+
+def test_from_config_duplicate_prefix_raises():
+    _, prefix, key_hash = generate_key()
+    cfg = json.dumps(
+        [
+            {"name": "a", "prefix": prefix, "key_hash": key_hash},
+            {"name": "b", "prefix": prefix, "key_hash": key_hash},
+        ]
+    )
+    with pytest.raises(RuntimeError, match="CONSUMER_KEYS"):
+        key_store_from_config(cfg)
+
+
+def test_from_config_non_list_scopes_raises():
+    _, prefix, key_hash = generate_key()
+    cfg = json.dumps([{"name": "a", "prefix": prefix, "key_hash": key_hash, "scopes": "chat"}])
+    with pytest.raises(RuntimeError, match="CONSUMER_KEYS"):
+        key_store_from_config(cfg)

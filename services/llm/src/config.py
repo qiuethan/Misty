@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Built-in dev secret. Only acceptable when llm_env == "local"; any other
@@ -19,7 +20,7 @@ class Settings(BaseSettings):
     llm_provider: str = "bedrock-converse"
     llm_model: str = "claude-sonnet-4-6"
     aws_region: str = ""
-    request_timeout_s: float = 60.0
+    request_timeout_s: float = Field(default=60.0, gt=0)
     thinking_default: bool = True
 
 

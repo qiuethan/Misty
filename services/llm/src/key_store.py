@@ -23,6 +23,8 @@ class InMemoryKeyStore:
         self._row_by_prefix: dict[str, ConsumerKeyRow] = {}
 
     def add(self, *, prefix: str, key_hash: str, name: str, scopes: list[str]) -> None:
+        if prefix in self._hash_by_prefix:
+            raise ValueError(f"duplicate key prefix in config: {prefix!r}")
         self._hash_by_prefix[prefix] = key_hash
         self._row_by_prefix[prefix] = ConsumerKeyRow(id=uuid4(), name=name, scopes=list(scopes))
 
@@ -45,12 +47,17 @@ def key_store_from_config(consumer_keys_json: str) -> InMemoryKeyStore:
     try:
         entries = json.loads(raw)
         for entry in entries:
+            scopes = entry.get("scopes", [])
+            if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
+                raise TypeError(
+                    f"'scopes' must be a list of strings for entry {entry.get('name')!r}"
+                )
             store.add(
                 prefix=entry["prefix"],
                 key_hash=entry["key_hash"],
                 name=entry["name"],
-                scopes=entry.get("scopes", []),
+                scopes=scopes,
             )
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         raise RuntimeError(f"Invalid CONSUMER_KEYS config: {exc}") from exc
     return store

@@ -117,3 +117,29 @@ def test_read_timeout_maps_to_timeout():
         _provider(_FakeClient(exc=exc)).chat(
             LLMRequest(messages=[LLMMessage(role="user", content="hi")])
         )
+
+
+def test_missing_credentials_maps_to_unavailable_not_timeout():
+    # NoCredentialsError is a BotoCoreError but a config fault, not a timeout.
+    with pytest.raises(ProviderUnavailable):
+        _provider(_FakeClient(exc=botocore.exceptions.NoCredentialsError())).chat(
+            LLMRequest(messages=[LLMMessage(role="user", content="hi")])
+        )
+
+
+def test_unexpected_response_shape_maps_to_unavailable():
+    # e.g. content-filtered / guardrail response with no message content.
+    with pytest.raises(ProviderUnavailable):
+        _provider(_FakeClient(response={"stopReason": "content_filtered"})).chat(
+            LLMRequest(messages=[LLMMessage(role="user", content="hi")])
+        )
+
+
+def test_bad_default_model_raises_at_construction():
+    with pytest.raises(ValueError, match="unsupported default model"):
+        BedrockConverseProvider(
+            aws_region="us-east-1",
+            default_model="claude-sonnet-5",
+            timeout_s=30.0,
+            client=_FakeClient(),
+        )
