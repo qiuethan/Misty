@@ -145,8 +145,8 @@ test('registry includes seed', () => {
   assert.equal(commands.get('seed'), seed);
 });
 
-test('/team is beta and its subcommands carry per-subcommand auth', () => {
-  assert.equal(teamCmd.beta, true);
+test('/team is stable and its subcommands carry per-subcommand auth', () => {
+  assert.equal(teamCmd.beta, false);
   const authFor = (name) => teamCmd.subcommands.find((s) => s.name === name).auth;
   assert.equal(authFor('create'), 'admin');
   assert.equal(authFor('add'), 'admin');
@@ -352,9 +352,9 @@ test('/team handler falls back to a generic reply for an unknown subcommand', as
   assert.match(payload.content, /went wrong/i);
 });
 
-test('/my-teams is linked-gated, beta, and dispatches getMyTeams with caller person id', async () => {
+test('/my-teams is linked-gated, stable, and dispatches getMyTeams with caller person id', async () => {
   assert.equal(myTeamsCmd.auth, 'linked');
-  assert.equal(myTeamsCmd.beta, true);
+  assert.equal(myTeamsCmd.beta, false);
   let seen = null;
   const ctx = {
     teamService: {
@@ -374,10 +374,10 @@ test('registry includes team and my-teams', () => {
   assert.equal(commands.get('my-teams'), myTeamsCmd);
 });
 
-test('team, my-teams, and doc are the only beta-channel commands', () => {
+test('doc is the only beta-channel command', () => {
   const { stable, beta } = partitionCommands([...commands.values()]);
-  assert.deepEqual(new Set(beta.map((c) => c.name)), new Set(['team', 'my-teams', 'doc']));
-  assert.equal(stable.length, commands.size - 3);
+  assert.deepEqual(new Set(beta.map((c) => c.name)), new Set(['doc']));
+  assert.equal(stable.length, commands.size - 1);
 });
 
 test('buildDiscordData marks autocomplete string options', () => {

@@ -115,7 +115,14 @@ describes how it applies them concretely.
   in the database and carry a set of per-resource scopes (e.g. `people:read`,
   `docs:write`, with `admin` as a wildcard). A shared bootstrap env key exists for
   local dev; production uses per-consumer keys issued via each service's CLI
-  (`team-tracking-keys`, `doc-keys`).
+  (`team-tracking-keys`, `doc-keys`). The auth machinery itself (key hashing, the
+  scope model, the `build_auth(...)` FastAPI deps, and the audit-log middleware)
+  lives once in the shared [`packages/auth`](../packages/auth) package
+  (`platform_auth`) — a pure leaf with no dependency on either service's `src/` or
+  `contracts/` — and each service consumes it via a ~15-line shim that binds its own
+  key prefix (`tt_` for team-tracking, `doc_` for documentation-system) and config.
+  This is a repo-level workspace dependency shared between the two services, not a
+  dependency of one service on the other.
 - **Attested actor.** The actor recorded on audit fields (`created_by` / `updated_by`)
   is the authenticated key's own identity — not a value the caller supplies. A
   consumer cannot claim to be someone else. (The directory additionally accepts an

@@ -1,4 +1,5 @@
 import { defineCommand } from '../defineCommand.js';
+import { allTeamsAutocomplete } from './teamAutocomplete.js';
 import {
   renderCreateTeamResult,
   renderListTeamsResult,
@@ -19,7 +20,7 @@ export default defineCommand({
   name: 'team',
   description: 'Manage UTMIST teams and memberships',
   auth: 'linked', // default; subcommands below override
-  beta: true,
+  beta: false,
   options: [],
   subcommands: [
     {
@@ -62,7 +63,7 @@ export default defineCommand({
       description: 'Rename a team (admin)',
       auth: 'admin',
       options: [
-        { name: 'slug', type: 'string', required: true, description: 'Team slug' },
+        { name: 'slug', type: 'string', required: true, description: 'Team slug', autocomplete: allTeamsAutocomplete },
         { name: 'new_label', type: 'string', required: true, description: 'New display name' },
       ],
       async handler({ options, principal, ctx }) {
@@ -80,7 +81,7 @@ export default defineCommand({
       auth: 'admin',
       options: [
         { name: 'user', type: 'user', required: true, description: 'Discord user' },
-        { name: 'team', type: 'string', required: true, description: 'Team slug' },
+        { name: 'team', type: 'string', required: true, description: 'Team slug', autocomplete: allTeamsAutocomplete },
         { name: 'role', type: 'string', required: false, description: 'Role (default member)', choices: ROLE_CHOICES },
         { name: 'team_admin', type: 'boolean', required: false, description: 'Grant team-admin flag' },
       ],
@@ -104,7 +105,7 @@ export default defineCommand({
       auth: 'admin',
       options: [
         { name: 'user', type: 'user', required: true, description: 'Discord user' },
-        { name: 'team', type: 'string', required: true, description: 'Team slug' },
+        { name: 'team', type: 'string', required: true, description: 'Team slug', autocomplete: allTeamsAutocomplete },
       ],
       async handler({ options, principal, ctx }) {
         const caller = principal?.person;
@@ -121,7 +122,7 @@ export default defineCommand({
       auth: 'linked',
       ephemeral: false, // shared reference — post publicly so the channel can see it
       options: [
-        { name: 'team', type: 'string', required: true, description: 'Team slug' },
+        { name: 'team', type: 'string', required: true, description: 'Team slug', autocomplete: allTeamsAutocomplete },
         { name: 'as_of', type: 'string', required: false, description: 'ISO date (default today)' },
       ],
       async handler({ options, principal, ctx }) {

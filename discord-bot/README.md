@@ -152,6 +152,14 @@ guild exclusively (re-running also clears stale/promoted beta commands from the
 guild). If any command is beta and `DISCORD_GUILD_ID` is unset, registration warns
 and skips them.
 
+> **Local vs. Railway.** `npm run register` uses `--env-file=.env`, so it targets
+> your **local test bot** only. To register the deployed bots, use the
+> Railway-targeted wrappers — `npm run register:all` (staging then production),
+> or `npm run register:staging` / `npm run register:production` for one
+> environment. There's also a guarded `./scripts/register.sh <staging|production|all>`
+> that confirms before touching production. See
+> [RAILWAY-DEPLOYMENT.md §5](../docs/RAILWAY-DEPLOYMENT.md).
+
 ## Commands
 
 - `/link email:<your UTMIST email>` (public) — links your Discord account to your

@@ -186,15 +186,22 @@ Every table carries the audit quartet `created_at` / `updated_at` / `created_by`
 
 ## Auth
 
-Level 2 (scoped API keys), the same model as team-tracking:
+Level 2 (scoped API keys), the same model as team-tracking. The machinery itself now lives
+in the shared `platform_auth` package (`packages/auth/`) — a pure leaf package with no
+imports of any service's `src/` or `contracts/`, shared with team-tracking. This service's
+`src/api/auth.py`, `src/api/hashing.py`, and `src/api/middleware.py` are thin (~15-line)
+shims that call `platform_auth`'s `build_auth(...)` factory, binding documentation-system's
+`doc_` key envelope and config (using `platform_auth`'s defaults — no dev-spoof affordance,
+unlike team-tracking), and re-export the same names. The auth behavior and contract are
+unchanged by this move:
 
-- **`src/api/hashing.py`** — key format `doc_<prefix>_<secret>` (8-char prefix), Argon2
+- **`hashing.py`** (shim) — key format `doc_<prefix>_<secret>` (8-char prefix), Argon2
   hashing, `parse_prefix` for extracting the lookup prefix.
-- **`src/api/auth.py`** — `require_api_key` looks the key up by prefix, verifies the hash,
+- **`auth.py`** (shim) — `require_api_key` looks the key up by prefix, verifies the hash,
   and checks `active` / not-revoked; the bootstrap env key is accepted as scope `admin`.
   `require_scope(scope)` gates each route; `admin` is a wildcard. `get_actor` returns the
   key's own name — the **attested actor** (no `X-Actor` header, no impersonation).
-- **`src/api/middleware.py`** — `AuditLogMiddleware` emits one structured JSON log line per
+- **`middleware.py`** (shim) — `AuditLogMiddleware` emits one structured JSON log line per
   request (method, path, status, duration, resolved key name, remote IP), reading the
   `request.state.auth_key` that auth stamped. It never fails the request.
 

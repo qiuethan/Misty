@@ -1,4 +1,5 @@
 import { defineCommand } from '../defineCommand.js';
+import { myTeamsAutocomplete as teamAutocomplete } from './teamAutocomplete.js';
 import {
   renderDocAddResult,
   renderDocListResult,
@@ -6,45 +7,9 @@ import {
   renderDocRemoveResult,
 } from '../messages.js';
 
-// Suggest the caller's own active teams for a `team` option. Best-effort: the
-// router's dispatchAutocomplete already swallows throws, but we also guard here
-// so an unlinked caller (null principal) simply gets no suggestions.
-// This runs after router.js's PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS (1000ms) has
-// already been spent resolving the principal, so 1000 + 1500 = 2500ms worst
-// case, staying under Discord's ~3s autocomplete window.
-export const AUTOCOMPLETE_TIMEOUT_MS = 1500;
-
-async function teamAutocomplete({ typed, principal, ctx }) {
-  if (!principal?.person?.id) return [];
-  // Autocomplete cannot be deferred and must answer within Discord's ~3s window.
-  // Bound the directory lookups so a cold/slow directory yields no suggestions
-  // rather than hanging past the window — the field still accepts a typed slug.
-  const budget = ctx._autocompleteTimeoutMs ?? AUTOCOMPLETE_TIMEOUT_MS;
-  let timer;
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => resolve(null), budget);
-    timer.unref?.();
-  });
-  // Two directory calls (memberships + all teams) instead of N per-team lookups.
-  const lookup = Promise.all([
-    ctx.directory.listMemberships({ personId: principal.person.id, activeOnly: true }),
-    ctx.directory.listTeams({ activeOnly: true }),
-  ]);
-  const result = await Promise.race([lookup, timeout]);
-  clearTimeout(timer);
-  if (result === null) return []; // timed out — degrade to no suggestions
-  const [memberships, teams] = result;
-  const myTeamIds = new Set(memberships.map((m) => m.team_id));
-  const needle = (typed ?? '').toLowerCase();
-  return teams
-    .filter((t) => myTeamIds.has(t.id))
-    // A team with no usable label can't be shown as a suggestion — drop it
-    // instead of emitting a { name: null } choice Discord would reject.
-    .filter((t) => typeof t.label === 'string' && t.label.length > 0)
-    .filter((t) => t.label.toLowerCase().includes(needle) || (t.slug ?? '').toLowerCase().includes(needle))
-    .slice(0, 25)
-    .map((t) => ({ name: t.label, value: t.slug }));
-}
+// Re-exported for callers/tests that reference /doc's autocomplete budget. The
+// implementation now lives in the shared teamAutocomplete module.
+export { AUTOCOMPLETE_TIMEOUT_MS } from './teamAutocomplete.js';
 
 function parseTags(raw) {
   if (raw === null || raw === undefined) return [];

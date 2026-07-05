@@ -31,6 +31,8 @@ uv sync --extra dev
 docker compose up -d postgres      # only needed for the Postgres test suite / running the server
 ```
 
+> Note: the repo is a uv workspace (one root `pyproject.toml`, one root `uv.lock` shared with `packages/auth` and team-tracking). documentation-system depends on the shared `platform-auth` package via `[tool.uv.sources] platform-auth = { workspace = true }`, but `uv sync`/`uv run` from this directory work exactly as shown above.
+
 ---
 
 ## Add an endpoint

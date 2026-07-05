@@ -16,23 +16,24 @@ UTMIST is a student org with rotating leadership and mixed technical fluency. Ev
 
 - **`/link`** — attach your Discord account to your directory record so the bot knows who you are. Public (you don't need to be linked yet).
 - **`/whoami`** — see your linked identity, teams you're on, and access level. Requires you to be linked.
+- **`/team`** — look up, create, rename, add/remove members, and view rosters (subcommands: `create`, `list`, `rename`, `add`, `remove`, `roster`). Reads are public; writes are admin-only.
+- **`/my-teams`** — list your active memberships. Requires you to be linked.
 
 **Beta (currently visible only in the test guild; promote by flipping `beta: false` in each command module + re-registering):**
 
-- **`/team`** — look up, create, rename, add/remove members, and view rosters (subcommands: `create`, `list`, `rename`, `add`, `remove`, `roster`). Reads are public; writes are admin-only.
-- **`/my-teams`** — list your active memberships. Requires you to be linked.
+- **`/doc`** — catalog and browse links (subcommands: `add`, `list`, `show`, `remove`), backed by documentation-system. Reads are public; writes are admin-only. Team-owner field has slug autocomplete.
 
 ### As an admin (in Discord)
 
 - **`/seed`** — create or promote a person in the directory (member / admin / superuser). Requires admin+. Stable (visible globally). You can only grant a level at or below your own.
-- **`/team create`**, **`/team add`**, **`/team remove`**, **`/team rename`** — the write subcommands are admin-gated. Still beta at the moment.
+- **`/team create`**, **`/team add`**, **`/team remove`**, **`/team rename`** — the write subcommands are admin-gated. Stable (visible globally).
 
 ### As a developer / integration builder
 
 Every domain has a first-class HTTP API — build your own dashboard, sync job, or automation on top:
 
 - **[team-tracking](services/team-tracking/README.md)** — 23 endpoints across `people`, `teams`, `role_kinds`, `team_memberships`, `providers`, `person_identifiers`, `api_keys`. Full point-in-time roster queries. Scoped API keys, per-request audit log. **Actively consumed** by the Discord bot in production.
-- **[documentation-system](services/documentation-system/README.md)** — endpoints over `docs` and `sources`; ingest a URL and it's normalized, dedup'd, fetched (title + snapshot for supported sources), and owner-validated against team-tracking. Ownership degrades gracefully if the directory is unreachable. **No production consumer yet** — the API is deployed and ready but nothing is calling it.
+- **[documentation-system](services/documentation-system/README.md)** — endpoints over `docs` and `sources`; ingest a URL and it's normalized, dedup'd, fetched (title + snapshot for supported sources), and owner-validated against team-tracking. Ownership degrades gracefully if the directory is unreachable. **Consumed** by the Discord bot's `/doc` command group (`add`, `list`, `show`, `remove`), currently in beta.
 
 Both APIs speak OpenAPI. Point Swagger UI or codegen at them.
 
@@ -49,8 +50,8 @@ Both APIs speak OpenAPI. Point Swagger UI or codegen at them.
 | Service | What it holds | Status |
 |---------|---------------|--------|
 | [`services/team-tracking/`](services/team-tracking/README.md) | People, teams, roles, memberships, external identity mapping (Discord/GitHub/Notion/UofT email → person) | **Deployed** (staging + prod). Directory is empty on prod until seeded. |
-| [`services/documentation-system/`](services/documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, and best-effort content snapshots | **Deployed** (staging + prod), **no consumer yet.** The API is running but has no Discord commands or dashboard on top; the catalog is empty. Ship a consumer (e.g. `/doc` commands) to make it usable. |
-| [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend + a browser-based "web playground" for iterating on commands without a Discord token | **Deployed** (staging + prod). 3 stable commands (`/link`, `/whoami`, `/seed`) registered globally; 2 beta (`/team`, `/my-teams`) in test guild only. |
+| [`services/documentation-system/`](services/documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, and best-effort content snapshots | **Deployed** (staging + prod). Consumed by the bot's `/doc` command group (`add`/`list`/`show`/`remove`), currently in beta (test guild only). |
+| [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend + a browser-based "web playground" for iterating on commands without a Discord token | **Deployed** (staging + prod). 5 stable commands (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`) registered globally; 1 beta (`/doc`) in test guild only. |
 | Search / retrieval | Full-text + semantic search over the catalog's snapshots | Deferred (not built) |
 
 **How they relate.** team-tracking is the foundation — everything else references it. documentation-system validates every doc's owner against team-tracking. The discord-bot's commands read/write the directory over HTTP. Each service owns its own database; they never share tables.
@@ -77,6 +78,8 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the cross-service data fl
 ```
 UTMIST-Prototypes/
 ├── README.md                          You are here
+├── pyproject.toml                     Root uv workspace (members: services/*, packages/*)
+├── uv.lock                            Single lockfile for the whole workspace
 ├── docs/
 │   ├── DEVELOPMENT.md                Developer onboarding — clone to first PR
 │   ├── ARCHITECTURE.md                Cross-service architecture — how the pieces fit
@@ -95,6 +98,11 @@ UTMIST-Prototypes/
 │   │
 │   └── documentation-system/          Catalog service (same shape as team-tracking)
 │
+├── packages/
+│   └── auth/                          platform_auth — shared API-key auth lib (argon2 hashing,
+│                                       scopes, FastAPI deps, audit middleware); a pure leaf
+│                                       consumed by both services below via thin shims
+│
 ├── discord-bot/                       Discord frontend + web playground
 │   ├── src/                           Node.js + discord.js
 │   ├── scripts/dev-web.js             Local playground orchestrator (ephemeral scratch DB)
@@ -109,7 +117,7 @@ UTMIST-Prototypes/
     └── main-source-guard.yml          Enforces "PRs to main come from staging"
 ```
 
-Each service is self-contained: its own dependencies, its own database, its own tests, its own docs. Add a new source-of-truth service by dropping it in `services/` following the same shape.
+Each service is self-contained: its own database, its own tests, its own docs. Dependencies are managed as one uv workspace rooted at this repo's `pyproject.toml`/`uv.lock`, and team-tracking and documentation-system now share one leaf, `packages/auth` (`platform_auth`), for API-key auth — a shared *library* dependency, not a dependency between the two services, which remain independent of each other. Add a new source-of-truth service by dropping it in `services/` following the same shape.
 
 ---
 
@@ -135,7 +143,7 @@ Both APIs are built the same way on purpose — learning one gives you 80% of th
 
 - **`contracts/` Protocol boundary.** Each service has a `contracts/` package of Pydantic domain types plus `Protocol` interfaces. Application code depends on the Protocols, never on a concrete implementation.
 - **Swappable storage adapters.** `InMemoryStorageAdapter` for fast tests, `PostgresStorageAdapter` for real runs — both satisfy the same Protocol. Tests use in-memory; a small integration test suite gates the Postgres adapter too.
-- **Scoped API-key auth.** Every request carries `X-API-Key`. Keys are argon2-hashed in the DB with a set of per-resource scopes (`people:read`, `teams:write`, etc.).
+- **Scoped API-key auth.** Every request carries `X-API-Key`. Keys are argon2-hashed in the DB with a set of per-resource scopes (`people:read`, `teams:write`, etc.). This machinery is implemented once in the shared [`packages/auth`](packages/auth) (`platform_auth`) library and consumed by each service through a thin shim (`src/api/auth.py`, `hashing.py`, `middleware.py`) that binds its own key prefix and config.
 - **Attested actor.** The `created_by`/`updated_by` on every audit field is the authenticated key's own name — a caller can't claim to be someone else.
 - **Per-request audit log.** Middleware emits one JSON line per request with the resolved actor, endpoint, status, and duration.
 - **Alembic migrations.** Schema changes are versioned; migrations run as Railway's `preDeployCommand` on every deploy.

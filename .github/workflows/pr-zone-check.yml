@@ -1,0 +1,66 @@
+name: pr-zone-check
+
+# Discourages multi-zone PRs. Zones mirror the areas in .github/CODEOWNERS.
+# A PR touching more than one zone gets a warning (non-blocking) — keep changes
+# scoped to a single area so ownership/review stays clean.
+#
+# To ENFORCE instead of discourage, change the `exit 0` at the end to `exit 1`
+# and add this job as a required status check in branch protection.
+#
+# See issue #34.
+
+on:
+  pull_request:
+    branches: [staging, main]
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  zone-check:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Detect zones touched
+        run: |
+          zone_for() {
+            case "$1" in
+              discord-bot/*)                    echo discord-bot ;;
+              services/team-tracking/*)         echo services/team-tracking ;;
+              services/documentation-system/*)  echo services/documentation-system ;;
+              services/*)                       echo services/other ;;
+              docs/*)                           echo docs ;;
+              scripts/*)                        echo scripts ;;
+              .github/*)                        echo .github ;;
+              *)                                echo root ;;
+            esac
+          }
+
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')
+          if [ -z "$files" ]; then
+            echo "No changed files reported; nothing to check."
+            exit 0
+          fi
+
+          zones=$(while IFS= read -r f; do [ -n "$f" ] && zone_for "$f"; done <<< "$files" | sort -u)
+          count=$(echo "$zones" | grep -c .)
+
+          echo "### PR zone check" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Zones touched ($count):" >> "$GITHUB_STEP_SUMMARY"
+          echo "$zones" | sed 's/^/- `/;s/$/`/' >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$count" -gt 1 ]; then
+            joined=$(echo "$zones" | paste -sd ',' - | sed 's/,/, /g')
+            echo "::warning::This PR touches multiple zones ($joined). Multi-zone PRs are discouraged — consider splitting so each area is reviewed on its own."
+          else
+            echo "OK: single-zone PR."
+          fi
+
+          # Non-blocking by design. Change to `exit 1` (and require this check) to enforce.
+          exit 0

@@ -1,41 +1,15 @@
-"""Key hashing + generation for the API-key auth system (argon2)."""
+"""Thin shim over platform_auth, binding the docs key envelope."""
 
-import secrets
+from platform_auth import PREFIX_LENGTH, verify_key  # noqa: F401
+from platform_auth import generate_key as _generate_key
+from platform_auth import parse_prefix as _parse_prefix
 
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
-
-_hasher = PasswordHasher()
-
-PREFIX_LENGTH = 8
 KEY_ENVELOPE = "doc_"
 
 
 def generate_key() -> tuple[str, str, str]:
-    """Return (plaintext, prefix, key_hash). Plaintext shown once. Format:
-    doc_<prefix>_<secret>."""
-    raw_prefix = secrets.token_urlsafe(12).replace("_", "-")
-    prefix = raw_prefix[:PREFIX_LENGTH]
-    secret = secrets.token_urlsafe(32)
-    plaintext = f"{KEY_ENVELOPE}{prefix}_{secret}"
-    key_hash = _hasher.hash(plaintext)
-    return plaintext, prefix, key_hash
-
-
-def verify_key(candidate: str, key_hash: str) -> bool:
-    try:
-        return _hasher.verify(key_hash, candidate)
-    except VerifyMismatchError:
-        return False
-    except Exception:
-        return False
+    return _generate_key(KEY_ENVELOPE)
 
 
 def parse_prefix(candidate: str) -> str | None:
-    if not candidate.startswith(KEY_ENVELOPE):
-        return None
-    body = candidate[len(KEY_ENVELOPE):]
-    parts = body.split("_", 1)
-    if len(parts) != 2 or len(parts[0]) != PREFIX_LENGTH:
-        return None
-    return parts[0]
+    return _parse_prefix(candidate, KEY_ENVELOPE)

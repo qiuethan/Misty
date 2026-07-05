@@ -22,6 +22,7 @@ dependencies = [
     "alembic>=1.13",
     "uvicorn[standard]>=0.32",
     "argon2-cffi>=23.1",
+    "platform-auth",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +32,9 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.6",
 ]
+
+[tool.uv.sources]
+platform-auth = { workspace = true }
 
 [project.scripts]
 team-tracking-keys = "src.cli:main"

@@ -22,7 +22,7 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description="Source of truth for people, teams, and memberships.",
     )
-    app.add_middleware(AuditLogMiddleware)
+    app.add_middleware(AuditLogMiddleware, logger_name="team_tracking.audit")
 
     @app.get("/health")
     def health() -> dict[str, str]:
