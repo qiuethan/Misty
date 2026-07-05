@@ -1,0 +1,46 @@
+import json
+
+from src.api.hashing import generate_key, parse_prefix, verify_key
+from src.key_store import InMemoryKeyStore, key_store_from_config
+
+
+def test_add_and_lookup_by_prefix():
+    plaintext, prefix, key_hash = generate_key()
+    store = InMemoryKeyStore()
+    store.add(prefix=prefix, key_hash=key_hash, name="reviewer", scopes=["chat"])
+
+    assert store.get_api_key_hash(prefix) == key_hash
+    row = store.get_api_key_by_prefix(prefix)
+    assert row is not None
+    assert row.name == "reviewer"
+    assert row.scopes == ["chat"]
+    assert row.active is True
+    assert row.revoked_at is None
+    # hash verifies against the plaintext
+    assert verify_key(plaintext, store.get_api_key_hash(prefix)) is True
+
+
+def test_unknown_prefix_returns_none():
+    store = InMemoryKeyStore()
+    assert store.get_api_key_hash("nope") is None
+    assert store.get_api_key_by_prefix("nope") is None
+
+
+def test_touch_is_noop():
+    store = InMemoryKeyStore()
+    assert store.touch_api_key_last_used("anything") is None
+
+
+def test_from_config_empty_is_empty_store():
+    assert key_store_from_config("").get_api_key_by_prefix("x") is None
+    assert key_store_from_config("   ").get_api_key_by_prefix("x") is None
+
+
+def test_from_config_parses_entries():
+    plaintext, prefix, key_hash = generate_key()
+    cfg = json.dumps([{"name": "docs-bot", "prefix": prefix, "key_hash": key_hash}])
+    store = key_store_from_config(cfg)
+    row = store.get_api_key_by_prefix(prefix)
+    assert row is not None and row.name == "docs-bot"
+    assert row.scopes == []  # default when omitted
+    assert parse_prefix(plaintext) == prefix
