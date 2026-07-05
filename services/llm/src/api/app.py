@@ -14,6 +14,10 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(AuditLogMiddleware, logger_name="llm.audit")
 
+    from src.api.routers import chat as chat_router
+
+    app.include_router(chat_router.router)
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
