@@ -19,7 +19,9 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    # Routers are included in Task 5 (endpoints).
+    from src.api.routers import verification
+
+    app.include_router(verification.router)
     return app
 
 
