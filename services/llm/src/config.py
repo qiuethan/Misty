@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     api_key: str = DEFAULT_DEV_API_KEY
     # JSON array of consumer keys: [{"name","prefix","key_hash","scopes"?}]
     consumer_keys: str = ""
-    llm_provider: str = "bedrock"
-    llm_model: str = "claude-sonnet-5"
+    llm_provider: str = "bedrock-converse"
+    llm_model: str = "claude-sonnet-4-6"
     aws_region: str = ""
     request_timeout_s: float = 60.0
     thinking_default: bool = True

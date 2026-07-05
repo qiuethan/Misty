@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-ALLOWED_MODELS = {"claude-sonnet-5", "claude-opus-4-8", "claude-haiku-4-5"}
+ALLOWED_MODELS = {"claude-sonnet-4-6", "claude-opus-4-6"}
 
 
 class Message(BaseModel):

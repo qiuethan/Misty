@@ -594,6 +594,7 @@ source = { editable = "services/llm" }
 dependencies = [
     { name = "anthropic", extra = ["bedrock"] },
     { name = "argon2-cffi" },
+    { name = "boto3" },
     { name = "fastapi" },
     { name = "platform-auth" },
     { name = "pydantic" },
@@ -612,6 +613,7 @@ dev = [
 requires-dist = [
     { name = "anthropic", extras = ["bedrock"] },
     { name = "argon2-cffi", specifier = ">=23.1" },
+    { name = "boto3", specifier = ">=1.40" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "platform-auth", editable = "packages/auth" },

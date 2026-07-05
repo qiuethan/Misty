@@ -23,6 +23,7 @@ dependencies = [
     # the resolved version in uv.lock. If `from anthropic import
     # AnthropicBedrockMantle` fails in Task 3, run `uv add "anthropic[bedrock]@latest"`.
     "anthropic[bedrock]",
+    "boto3>=1.40",
     "platform-auth",
 ]
 

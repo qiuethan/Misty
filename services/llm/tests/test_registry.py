@@ -2,6 +2,7 @@ import pytest
 
 from src.config import Settings
 from src.providers.bedrock import BedrockClaudeProvider
+from src.providers.bedrock_converse import BedrockConverseProvider
 from src.providers.registry import get_provider
 
 
@@ -18,6 +19,14 @@ def test_get_provider_returns_bedrock():
     settings = Settings(llm_provider="bedrock", aws_region="us-east-1", llm_model="claude-sonnet-5")
     provider = get_provider(settings)
     assert isinstance(provider, BedrockClaudeProvider)
+
+
+def test_get_provider_returns_bedrock_converse():
+    settings = Settings(
+        llm_provider="bedrock-converse", aws_region="us-east-1", llm_model="claude-sonnet-4-6"
+    )
+    provider = get_provider(settings)
+    assert isinstance(provider, BedrockConverseProvider)
 
 
 def test_unknown_provider_raises():
