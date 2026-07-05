@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.uv]
+package = true
+
+[project]
+name = "llm"
+version = "0.1.0"
+description = "UTMIST shared internal LLM API service"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+    "uvicorn[standard]>=0.32",
+    "argon2-cffi>=23.1",
+    # Unpinned floor: `AnthropicBedrockMantle` is a recent client. `uv sync` pins
+    # the resolved version in uv.lock. If `from anthropic import
+    # AnthropicBedrockMantle` fails in Task 3, run `uv add "anthropic[bedrock]@latest"`.
+    "anthropic[bedrock]",
+    "platform-auth",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "httpx>=0.27",
+    "ruff>=0.6",
+]
+
+[tool.uv.sources]
+platform-auth = { workspace = true }
+
+[project.scripts]
+llm-keys = "src.mint_key:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
