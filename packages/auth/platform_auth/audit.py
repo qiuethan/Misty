@@ -14,6 +14,11 @@ from uuid import uuid4
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
+_RESERVED_AUDIT_KEYS = frozenset(
+    {"ts", "request_id", "method", "path", "status",
+     "duration_ms", "key_name", "is_bootstrap", "remote"}
+)
+
 
 class _SysStdoutStream:
     """Resolve sys.stdout at write time so pytest's capsys can capture it."""
@@ -73,6 +78,11 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                     "is_bootstrap": auth_key.is_bootstrap if auth_key else False,
                     "remote": remote,
                 }
+                extra = getattr(request.state, "audit_extra", None)
+                if isinstance(extra, dict):
+                    for k, v in extra.items():
+                        if k not in _RESERVED_AUDIT_KEYS:
+                            entry[k] = v
                 self._logger.info(json.dumps(entry, separators=(",", ":")))
             except Exception:
                 pass
