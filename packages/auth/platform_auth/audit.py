@@ -15,8 +15,17 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
 _RESERVED_AUDIT_KEYS = frozenset(
-    {"ts", "request_id", "method", "path", "status",
-     "duration_ms", "key_name", "is_bootstrap", "remote"}
+    {
+        "ts",
+        "request_id",
+        "method",
+        "path",
+        "status",
+        "duration_ms",
+        "key_name",
+        "is_bootstrap",
+        "remote",
+    }
 )
 
 
@@ -90,8 +99,9 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                 extra = getattr(request.state, "audit_extra", None)
                 if isinstance(extra, dict):
                     for k, v in extra.items():
-                        if k not in _RESERVED_AUDIT_KEYS:
-                            entry[k] = v
+                        key = str(k)  # keys must be JSON strings; default= only covers values
+                        if key not in _RESERVED_AUDIT_KEYS:
+                            entry[key] = v
                 self._logger.info(json.dumps(entry, separators=(",", ":"), default=str))
             except Exception:
                 pass
