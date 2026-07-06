@@ -45,6 +45,15 @@ def _now_iso() -> str:
 
 
 class AuditLogMiddleware(BaseHTTPMiddleware):
+    """Emits one JSON audit line per request.
+
+    Consumer contract: a route may set ``request.state.audit_extra`` to a
+    dict of additional fields to merge into the log entry. Keys that collide
+    with reserved core fields (see ``_RESERVED_AUDIT_KEYS``) are ignored, and
+    values that are not JSON-native are stringified (via ``default=str``)
+    rather than causing the whole line to be dropped.
+    """
+
     def __init__(self, app, logger_name: str = "platform.audit"):
         super().__init__(app)
         self._logger = logging.getLogger(logger_name)
@@ -83,6 +92,6 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                     for k, v in extra.items():
                         if k not in _RESERVED_AUDIT_KEYS:
                             entry[k] = v
-                self._logger.info(json.dumps(entry, separators=(",", ":")))
+                self._logger.info(json.dumps(entry, separators=(",", ":"), default=str))
             except Exception:
                 pass

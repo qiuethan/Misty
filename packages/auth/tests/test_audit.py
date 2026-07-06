@@ -53,3 +53,23 @@ def test_audit_extra_cannot_override_reserved_keys(capsys):
     entry = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert entry["status"] == 200      # real status wins
     assert entry["path"] == "/y"       # real path wins
+
+
+def test_audit_extra_non_serializable_value_does_not_drop_line(capsys):
+    app = FastAPI()
+    app.add_middleware(AuditLogMiddleware, logger_name="test.audit.nonserializable")
+
+    @app.get("/z")
+    def z(request: Request):
+        request.state.audit_extra = {"blob": {1, 2, 3}}
+        return {"ok": True}
+
+    TestClient(app).get("/z")
+    out = capsys.readouterr().out.strip().splitlines()
+    assert out, "audit line was dropped entirely"
+    entry = json.loads(out[-1])
+    assert entry["status"] == 200
+    assert entry["path"] == "/z"
+    assert "blob" in entry
+    assert entry["blob"] != {1, 2, 3}
+    assert isinstance(entry["blob"], str)
