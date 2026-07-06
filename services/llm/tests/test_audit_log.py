@@ -55,14 +55,15 @@ def _last_line(capsys) -> dict:
 def test_success_line_has_model_and_tokens(env_key, capsys):
     client, headers = _client(env_key, _FakeProvider(result=_ok_result()))
     resp = client.post(
-        "/chat", headers=headers,
+        "/chat",
+        headers=headers,
         json={"messages": [{"role": "user", "content": "hi"}]},
     )
     assert resp.status_code == 200
     entry = _last_line(capsys)
     assert entry["path"] == "/chat"
     assert entry["status"] == 200
-    assert entry["model"] == "claude-sonnet-4-6"   # neutral default, not the bedrock id
+    assert entry["model"] == "claude-sonnet-4-6"  # neutral default, not the bedrock id
     assert entry["input_tokens"] == 11
     assert entry["output_tokens"] == 7
     assert entry["key_name"] == "env-bootstrap"
@@ -73,27 +74,28 @@ def test_line_omits_prompt_and_key(env_key, capsys):
     client, headers = _client(env_key, _FakeProvider(result=_ok_result()))
     secret_prompt = "SUPER-SECRET-PROMPT-TEXT"
     client.post(
-        "/chat", headers=headers,
-        json={"messages": [{"role": "user", "content": secret_prompt}],
-              "system": "SYSTEM-SECRET"},
+        "/chat",
+        headers=headers,
+        json={"messages": [{"role": "user", "content": secret_prompt}], "system": "SYSTEM-SECRET"},
     )
     entry = _last_line(capsys)
     line = json.dumps(entry)
     assert secret_prompt not in line
     assert "SYSTEM-SECRET" not in line
     assert "the completion body" not in line
-    assert "env-bootstrap-key-value" not in line   # the raw API key never appears
+    assert "env-bootstrap-key-value" not in line  # the raw API key never appears
 
 
 def test_error_line_has_model_no_tokens(env_key, capsys):
     client, headers = _client(env_key, _FakeProvider(exc=ProviderUnavailable("boom")))
     resp = client.post(
-        "/chat", headers=headers,
+        "/chat",
+        headers=headers,
         json={"messages": [{"role": "user", "content": "hi"}], "model": "claude-opus-4-6"},
     )
     assert resp.status_code == 502
     entry = _last_line(capsys)
     assert entry["status"] == 502
-    assert entry["model"] == "claude-opus-4-6"     # attempted model recorded
+    assert entry["model"] == "claude-opus-4-6"  # attempted model recorded
     assert "input_tokens" not in entry
     assert "output_tokens" not in entry
