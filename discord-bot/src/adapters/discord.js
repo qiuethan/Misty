@@ -154,6 +154,7 @@ const HISTORY_LIMIT = 20;
 const LINK_PROMPT = 'You need to link your account first. Run `/link` to identify yourself, then try again.';
 const VERIFY_UNAVAILABLE = "I can't verify you right now — the directory is unavailable. Please try again shortly.";
 const LLM_UNAVAILABLE = "I'm having trouble reaching the assistant right now — please try again shortly.";
+const EMPTY_ANSWER = "I couldn't come up with an answer that time — please try rephrasing.";
 
 // Handle a message that starts with the bot's mention. Linked-only. In a
 // channel it opens a thread; in a thread it replays the thread's history as
@@ -199,6 +200,10 @@ export async function handleMention(message, { appContext, botId }) {
   } catch (err) {
     console.error('helper answer failed:', err.message);
     await target.send(LLM_UNAVAILABLE).catch(() => {});
+    return;
+  }
+  if (!content || !content.trim()) {
+    await target.send(EMPTY_ANSWER).catch((e) => console.error('helper reply failed:', e.message));
     return;
   }
   for (const chunk of chunkForDiscord(content)) {

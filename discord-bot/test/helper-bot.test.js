@@ -144,6 +144,16 @@ test('handleMention: LlmUnavailable posts a friendly error, no throw', async () 
   assert.match(thread.sent[0], /trouble/i);
 });
 
+test('handleMention: empty LLM answer posts a friendly fallback, no silent dead-end', async () => {
+  const thread = fakeChannel({ isThread: true });
+  const channel = fakeChannel({ isThread: false });
+  const message = fakeMessage({ content: `<@${BOT_ID}> hi`, channel, thread });
+  const answer = async () => ({ content: '' });
+  await handleMention(message, { appContext: ctx({ answer }), botId: BOT_ID });
+  assert.equal(thread.sent.length, 1);
+  assert.match(thread.sent[0], /couldn't come up with an answer/i);
+});
+
 test('handleMention: a bare ping with no question does nothing', async () => {
   const channel = fakeChannel({ isThread: false });
   const message = fakeMessage({ content: `<@${BOT_ID}>`, channel });
