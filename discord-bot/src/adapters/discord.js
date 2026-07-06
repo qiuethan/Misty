@@ -94,6 +94,59 @@ async function safeReply(interaction, payload) {
   );
 }
 
+const DISCORD_MAX_MESSAGE = 2000;
+
+export function startsWithBotMention(content, botId) {
+  const trimmed = (content ?? '').trimStart();
+  return trimmed.startsWith(`<@${botId}>`) || trimmed.startsWith(`<@!${botId}>`);
+}
+
+export function stripLeadingMention(content, botId) {
+  const trimmed = (content ?? '').trimStart();
+  for (const tag of [`<@${botId}>`, `<@!${botId}>`]) {
+    if (trimmed.startsWith(tag)) return trimmed.slice(tag.length).trimStart();
+  }
+  return trimmed;
+}
+
+// Chronological array of fetched messages -> neutral /chat messages array.
+// bot -> assistant, everyone else -> user; strip a leading mention from user
+// turns; drop empties; collapse consecutive same-role turns (join with \n);
+// drop leading assistant turns. Bedrock Converse needs strict user/assistant
+// alternation starting with a user turn.
+export function threadHistoryToMessages(fetched, botId) {
+  const mapped = fetched
+    .map((m) => {
+      const role = m.author?.id === botId ? 'assistant' : 'user';
+      const raw = m.content ?? '';
+      const content = role === 'user' ? stripLeadingMention(raw, botId) : raw;
+      return { role, content: content.trim() };
+    })
+    .filter((m) => m.content.length > 0);
+
+  const collapsed = [];
+  for (const m of mapped) {
+    const last = collapsed[collapsed.length - 1];
+    if (last && last.role === m.role) last.content += `\n${m.content}`;
+    else collapsed.push({ ...m });
+  }
+  while (collapsed.length && collapsed[0].role === 'assistant') collapsed.shift();
+  return collapsed;
+}
+
+export function chunkForDiscord(text) {
+  const chunks = [];
+  let remaining = text ?? '';
+  while (remaining.length > DISCORD_MAX_MESSAGE) {
+    let cut = remaining.lastIndexOf('\n', DISCORD_MAX_MESSAGE);
+    if (cut <= 0) cut = DISCORD_MAX_MESSAGE; // no newline → hard split
+    chunks.push(remaining.slice(0, cut));
+    remaining = remaining.slice(cut).replace(/^\n/, '');
+  }
+  if (remaining.length > 0) chunks.push(remaining);
+  return chunks;
+}
+
 export function wireDiscordClient(client, { commands, appContext }) {
   client.on('interactionCreate', async (interaction) => {
     // Autocomplete interactions are a separate path: they CANNOT be deferred and
