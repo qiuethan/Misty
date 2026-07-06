@@ -12,7 +12,9 @@ async function main() {
   const enableWeb = process.env.ENABLE_WEB === 'true';
 
   if (enableDiscord) {
-    const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+    const client = new Client({
+      intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+    });
     wireDiscordClient(client, { commands, appContext });
     client.once('clientReady', (c) => console.log(`Bot ready as ${c.user.tag}`));
     await client.login(config.discordToken).catch((err) => {
