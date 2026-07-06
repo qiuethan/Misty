@@ -14,6 +14,20 @@ from uuid import uuid4
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
+_RESERVED_AUDIT_KEYS = frozenset(
+    {
+        "ts",
+        "request_id",
+        "method",
+        "path",
+        "status",
+        "duration_ms",
+        "key_name",
+        "is_bootstrap",
+        "remote",
+    }
+)
+
 
 class _SysStdoutStream:
     """Resolve sys.stdout at write time so pytest's capsys can capture it."""
@@ -40,6 +54,15 @@ def _now_iso() -> str:
 
 
 class AuditLogMiddleware(BaseHTTPMiddleware):
+    """Emits one JSON audit line per request.
+
+    Consumer contract: a route may set ``request.state.audit_extra`` to a
+    dict of additional fields to merge into the log entry. Keys that collide
+    with reserved core fields (see ``_RESERVED_AUDIT_KEYS``) are ignored, and
+    values that are not JSON-native are stringified (via ``default=str``)
+    rather than causing the whole line to be dropped.
+    """
+
     def __init__(self, app, logger_name: str = "platform.audit"):
         super().__init__(app)
         self._logger = logging.getLogger(logger_name)
@@ -73,6 +96,12 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
                     "is_bootstrap": auth_key.is_bootstrap if auth_key else False,
                     "remote": remote,
                 }
-                self._logger.info(json.dumps(entry, separators=(",", ":")))
+                extra = getattr(request.state, "audit_extra", None)
+                if isinstance(extra, dict):
+                    for k, v in extra.items():
+                        key = str(k)  # keys must be JSON strings; default= only covers values
+                        if key not in _RESERVED_AUDIT_KEYS:
+                            entry[key] = v
+                self._logger.info(json.dumps(entry, separators=(",", ":"), default=str))
             except Exception:
                 pass
