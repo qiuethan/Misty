@@ -6,6 +6,7 @@ import {
   threadHistoryToMessages,
   chunkForDiscord,
   handleMention,
+  wireDiscordClient,
 } from '../src/adapters/discord.js';
 import { DirectoryUnavailable } from '../src/directoryClient.js';
 
@@ -148,4 +149,67 @@ test('handleMention: a bare ping with no question does nothing', async () => {
   const message = fakeMessage({ content: `<@${BOT_ID}>`, channel });
   await handleMention(message, { appContext: ctx(), botId: BOT_ID });
   assert.equal(channel.replies, undefined);
+});
+
+test('handleMention: directory-down fails closed, no thread created', async () => {
+  const channel = fakeChannel({ isThread: false });
+  const message = fakeMessage({ content: `<@${BOT_ID}> hi`, channel });
+  await handleMention(message, { appContext: ctx({ dirThrows: true }), botId: BOT_ID });
+  assert.equal(channel.replies.length, 1);
+  assert.match(channel.replies[0], /can't verify you right now|directory is unavailable/i);
+  assert.equal(channel.sent.length, 0);
+});
+
+// ctx variant whose directory lookup throws a plain (non-DirectoryUnavailable)
+// error, to exercise handleMention's re-throw + the listener's own catch.
+function ctxThrowingPlainError() {
+  return {
+    directory: {
+      getPersonByDiscordId: async () => { throw new Error('boom'); },
+    },
+    helperService: { answer: async () => ({ content: 'the answer' }) },
+  };
+}
+
+test('messageCreate listener: ignores bot-authored messages (no self-trigger)', async () => {
+  const handlers = {};
+  const client = { user: { id: BOT_ID }, on: (evt, fn) => { handlers[evt] = fn; } };
+  wireDiscordClient(client, { commands: new Map(), appContext: ctx() });
+
+  const thread = fakeChannel({ isThread: true });
+  const channel = fakeChannel({ isThread: false });
+  const message = fakeMessage({ content: `<@${BOT_ID}> hi`, channel, thread });
+  message.author.bot = true;
+
+  await handlers.messageCreate(message);
+
+  assert.equal(channel.replies, undefined);
+  assert.equal(channel.sent.length, 0);
+  assert.equal(thread.sent.length, 0);
+  assert.equal(thread.typing, 0);
+});
+
+test('messageCreate listener: dispatches a real leading-mention message to handleMention', async () => {
+  const handlers = {};
+  const client = { user: { id: BOT_ID }, on: (evt, fn) => { handlers[evt] = fn; } };
+  wireDiscordClient(client, { commands: new Map(), appContext: ctx() });
+
+  const thread = fakeChannel({ isThread: true });
+  const channel = fakeChannel({ isThread: false });
+  const message = fakeMessage({ content: `<@${BOT_ID}> how do I link?`, channel, thread });
+
+  await handlers.messageCreate(message);
+
+  assert.deepEqual(thread.sent, ['the answer']);
+});
+
+test('messageCreate listener: swallows a throw from handleMention', async () => {
+  const handlers = {};
+  const client = { user: { id: BOT_ID }, on: (evt, fn) => { handlers[evt] = fn; } };
+  wireDiscordClient(client, { commands: new Map(), appContext: ctxThrowingPlainError() });
+
+  const channel = fakeChannel({ isThread: false });
+  const message = fakeMessage({ content: `<@${BOT_ID}> hi`, channel });
+
+  await assert.doesNotReject(() => handlers.messageCreate(message));
 });
