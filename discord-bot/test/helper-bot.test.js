@@ -5,7 +5,9 @@ import {
   stripLeadingMention,
   threadHistoryToMessages,
   chunkForDiscord,
+  handleMention,
 } from '../src/adapters/discord.js';
+import { DirectoryUnavailable } from '../src/directoryClient.js';
 
 const BOT = '999';
 
@@ -64,4 +66,86 @@ test('chunkForDiscord hard-splits a single oversized line', () => {
   assert.equal(chunks.length, 3);
   assert.ok(chunks.every((c) => c.length <= 2000));
   assert.equal(chunks.join(''), 'x'.repeat(4500));
+});
+
+const BOT_ID = '999';
+
+// Fake channel/thread: records sent messages + typing; can be a thread or not.
+function fakeChannel({ isThread = false, history = [] } = {}) {
+  const sent = [];
+  return {
+    sent,
+    typing: 0,
+    isThread: () => isThread,
+    async send(content) { sent.push(content); },
+    async sendTyping() { this.typing += 1; },
+    messages: { fetch: async () => ({ values: () => history }) },
+  };
+}
+
+function fakeMessage({ content, authorId = '1', channel, thread }) {
+  return {
+    content,
+    author: { id: authorId, bot: false },
+    channel,
+    reply: async (c) => { (channel.replies ??= []).push(c); },
+    startThread: async () => thread,
+  };
+}
+
+function ctx({ principal = { person: { id: 'p1', display_name: 'Alex' } }, answer, dirThrows = false } = {}) {
+  return {
+    directory: {
+      getPersonByDiscordId: async () => (dirThrows ? (() => { throw new DirectoryUnavailable('down'); })() : principal?.person ?? null),
+    },
+    helperService: { answer: answer ?? (async () => ({ content: 'the answer' })) },
+  };
+}
+
+test('handleMention in a channel: opens a thread and posts the answer', async () => {
+  const thread = fakeChannel({ isThread: true });
+  const channel = fakeChannel({ isThread: false });
+  const message = fakeMessage({ content: `<@${BOT_ID}> how do I link?`, channel, thread });
+  await handleMention(message, { appContext: ctx(), botId: BOT_ID });
+  assert.deepEqual(thread.sent, ['the answer']);
+  assert.equal(thread.typing, 1);
+});
+
+test('handleMention in a thread: replays history and posts in the thread', async () => {
+  let seen;
+  const answer = async ({ messages }) => { seen = messages; return { content: 'reply' }; };
+  const history = [
+    { author: { id: BOT_ID }, content: 'earlier answer' },
+    { author: { id: '1' }, content: `<@${BOT_ID}> follow up` },
+  ];
+  const thread = fakeChannel({ isThread: true, history });
+  const message = fakeMessage({ content: `<@${BOT_ID}> follow up`, channel: thread });
+  await handleMention(message, { appContext: ctx({ answer }), botId: BOT_ID });
+  assert.deepEqual(thread.sent, ['reply']);
+  assert.deepEqual(seen, [{ role: 'assistant', content: 'earlier answer' }, { role: 'user', content: 'follow up' }].filter((m) => m.role === 'user'));
+});
+
+test('handleMention: unlinked author gets the link prompt, no thread', async () => {
+  const channel = fakeChannel({ isThread: false });
+  const message = fakeMessage({ content: `<@${BOT_ID}> hi`, channel });
+  await handleMention(message, { appContext: ctx({ principal: null }), botId: BOT_ID });
+  assert.equal(channel.replies.length, 1);
+  assert.match(channel.replies[0], /link/i);
+});
+
+test('handleMention: LlmUnavailable posts a friendly error, no throw', async () => {
+  const thread = fakeChannel({ isThread: true });
+  const channel = fakeChannel({ isThread: false });
+  const message = fakeMessage({ content: `<@${BOT_ID}> hi`, channel, thread });
+  const answer = async () => { throw new Error('llm down'); };
+  await handleMention(message, { appContext: ctx({ answer }), botId: BOT_ID });
+  assert.equal(thread.sent.length, 1);
+  assert.match(thread.sent[0], /trouble/i);
+});
+
+test('handleMention: a bare ping with no question does nothing', async () => {
+  const channel = fakeChannel({ isThread: false });
+  const message = fakeMessage({ content: `<@${BOT_ID}>`, channel });
+  await handleMention(message, { appContext: ctx(), botId: BOT_ID });
+  assert.equal(channel.replies, undefined);
 });

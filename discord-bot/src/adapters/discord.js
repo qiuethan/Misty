@@ -1,6 +1,9 @@
 import { MessageFlags } from 'discord.js';
 import { dispatch, dispatchAutocomplete } from '../router.js';
 import { authMessages } from '../messages.js';
+import { resolvePrincipal } from '../auth/principal.js';
+import { authorize } from '../auth/policy.js';
+import { DirectoryUnavailable } from '../directoryClient.js';
 
 // The ONLY module (aside from src/index.js and src/registerCommands.js) that
 // imports from discord.js. Everything else — router, commands, services —
@@ -147,6 +150,62 @@ export function chunkForDiscord(text) {
   return chunks;
 }
 
+const HISTORY_LIMIT = 20;
+const LINK_PROMPT = 'You need to link your account first. Run `/link` to identify yourself, then try again.';
+const VERIFY_UNAVAILABLE = "I can't verify you right now — the directory is unavailable. Please try again shortly.";
+const LLM_UNAVAILABLE = "I'm having trouble reaching the assistant right now — please try again shortly.";
+
+// Handle a message that starts with the bot's mention. Linked-only. In a
+// channel it opens a thread; in a thread it replays the thread's history as
+// memory. Never throws to discord.js.
+export async function handleMention(message, { appContext, botId }) {
+  const question = stripLeadingMention(message.content, botId);
+  if (!question) return; // bare ping, nothing to answer
+
+  let principal;
+  try {
+    principal = await resolvePrincipal(appContext.directory, message.author.id);
+  } catch (e) {
+    if (e instanceof DirectoryUnavailable) {
+      await message.reply(VERIFY_UNAVAILABLE).catch(() => {});
+      return;
+    }
+    throw e;
+  }
+  if (!authorize('linked', principal).ok) {
+    await message.reply(LINK_PROMPT).catch(() => {});
+    return;
+  }
+
+  let target;
+  let messages;
+  if (message.channel.isThread()) {
+    target = message.channel;
+    const fetched = await target.messages.fetch({ limit: HISTORY_LIMIT });
+    const ordered = [...fetched.values()].sort(
+      (a, b) => (a.createdTimestamp ?? 0) - (b.createdTimestamp ?? 0),
+    );
+    messages = threadHistoryToMessages(ordered, botId);
+  } else {
+    target = await message.startThread({ name: question.slice(0, 100) });
+    messages = [{ role: 'user', content: question }];
+  }
+  if (!messages.length) return;
+
+  await target.sendTyping().catch(() => {});
+  let content;
+  try {
+    ({ content } = await appContext.helperService.answer({ messages, principal }));
+  } catch (err) {
+    console.error('helper answer failed:', err.message);
+    await target.send(LLM_UNAVAILABLE).catch(() => {});
+    return;
+  }
+  for (const chunk of chunkForDiscord(content)) {
+    await target.send(chunk).catch((e) => console.error('helper reply failed:', e.message));
+  }
+}
+
 export function wireDiscordClient(client, { commands, appContext }) {
   client.on('interactionCreate', async (interaction) => {
     // Autocomplete interactions are a separate path: they CANNOT be deferred and
@@ -186,6 +245,17 @@ export function wireDiscordClient(client, { commands, appContext }) {
       // token expires. safeReply routes this via editReply on the deferred
       // message; its own catch swallows any follow-on failure.
       await safeReply(interaction, authMessages.internalError());
+    }
+  });
+
+  client.on('messageCreate', async (message) => {
+    try {
+      if (message.author?.bot) return;
+      const botId = client.user?.id;
+      if (!botId || !startsWithBotMention(message.content, botId)) return;
+      await handleMention(message, { appContext, botId });
+    } catch (err) {
+      console.error('Unhandled mention error:', err);
     }
   });
 }
