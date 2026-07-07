@@ -1,6 +1,9 @@
 import { MessageFlags } from 'discord.js';
 import { dispatch, dispatchAutocomplete } from '../router.js';
 import { authMessages } from '../messages.js';
+import { resolvePrincipal } from '../auth/principal.js';
+import { authorize } from '../auth/policy.js';
+import { DirectoryUnavailable } from '../directoryClient.js';
 
 // The ONLY module (aside from src/index.js and src/registerCommands.js) that
 // imports from discord.js. Everything else — router, commands, services —
@@ -94,6 +97,127 @@ async function safeReply(interaction, payload) {
   );
 }
 
+const DISCORD_MAX_MESSAGE = 2000;
+
+export function startsWithBotMention(content, botId) {
+  const trimmed = (content ?? '').trimStart();
+  return trimmed.startsWith(`<@${botId}>`) || trimmed.startsWith(`<@!${botId}>`);
+}
+
+export function stripLeadingMention(content, botId) {
+  const trimmed = (content ?? '').trimStart();
+  for (const tag of [`<@${botId}>`, `<@!${botId}>`]) {
+    if (trimmed.startsWith(tag)) return trimmed.slice(tag.length).trimStart();
+  }
+  return trimmed;
+}
+
+// Chronological array of fetched messages -> neutral /chat messages array.
+// bot -> assistant, everyone else -> user; strip a leading mention from user
+// turns; drop empties; collapse consecutive same-role turns (join with \n);
+// drop leading assistant turns. Bedrock Converse needs strict user/assistant
+// alternation starting with a user turn.
+export function threadHistoryToMessages(fetched, botId) {
+  const mapped = fetched
+    .map((m) => {
+      const role = m.author?.id === botId ? 'assistant' : 'user';
+      const raw = m.content ?? '';
+      const content = role === 'user' ? stripLeadingMention(raw, botId) : raw;
+      return { role, content: content.trim() };
+    })
+    .filter((m) => m.content.length > 0);
+
+  const collapsed = [];
+  for (const m of mapped) {
+    const last = collapsed[collapsed.length - 1];
+    if (last && last.role === m.role) last.content += `\n${m.content}`;
+    else collapsed.push({ ...m });
+  }
+  while (collapsed.length && collapsed[0].role === 'assistant') collapsed.shift();
+  return collapsed;
+}
+
+export function chunkForDiscord(text) {
+  const chunks = [];
+  let remaining = text ?? '';
+  while (remaining.length > DISCORD_MAX_MESSAGE) {
+    let cut = remaining.lastIndexOf('\n', DISCORD_MAX_MESSAGE);
+    if (cut <= 0) cut = DISCORD_MAX_MESSAGE; // no newline → hard split
+    chunks.push(remaining.slice(0, cut));
+    remaining = remaining.slice(cut).replace(/^\n/, '');
+  }
+  if (remaining.length > 0) chunks.push(remaining);
+  return chunks;
+}
+
+const HISTORY_LIMIT = 20;
+const LINK_PROMPT = 'You need to link your account first. Run `/link` to identify yourself, then try again.';
+const VERIFY_UNAVAILABLE = "I can't verify you right now — the directory is unavailable. Please try again shortly.";
+const LLM_UNAVAILABLE = "I'm having trouble reaching the assistant right now — please try again shortly.";
+const EMPTY_ANSWER = "I couldn't come up with an answer that time — please try rephrasing.";
+const THREAD_UNAVAILABLE = "I couldn't open a thread for that — please try again. (I may be missing the 'Create Public Threads' or 'Read Message History' permission.)";
+
+// Handle a message that starts with the bot's mention. Linked-only. In a
+// channel it opens a thread; in a thread it replays the thread's history as
+// memory. Never throws to discord.js.
+export async function handleMention(message, { appContext, botId }) {
+  const question = stripLeadingMention(message.content, botId);
+  if (!question) return; // bare ping, nothing to answer
+
+  let principal;
+  try {
+    principal = await resolvePrincipal(appContext.directory, message.author.id);
+  } catch (e) {
+    if (e instanceof DirectoryUnavailable) {
+      await message.reply(VERIFY_UNAVAILABLE).catch(() => {});
+      return;
+    }
+    throw e;
+  }
+  if (!authorize('linked', principal).ok) {
+    await message.reply(LINK_PROMPT).catch(() => {});
+    return;
+  }
+
+  let target;
+  let messages;
+  try {
+    if (message.channel.isThread()) {
+      target = message.channel;
+      const fetched = await target.messages.fetch({ limit: HISTORY_LIMIT });
+      const ordered = [...fetched.values()].sort(
+        (a, b) => (a.createdTimestamp ?? 0) - (b.createdTimestamp ?? 0),
+      );
+      messages = threadHistoryToMessages(ordered, botId);
+    } else {
+      target = await message.startThread({ name: question.slice(0, 100) });
+      messages = [{ role: 'user', content: question }];
+    }
+  } catch (e) {
+    console.error('thread create/fetch failed:', e.message);
+    await message.reply(THREAD_UNAVAILABLE).catch(() => {});
+    return;
+  }
+  if (!messages.length) return;
+
+  await target.sendTyping().catch(() => {});
+  let content;
+  try {
+    ({ content } = await appContext.helperService.answer({ messages, principal }));
+  } catch (err) {
+    console.error('helper answer failed:', err.message);
+    await target.send(LLM_UNAVAILABLE).catch(() => {});
+    return;
+  }
+  if (!content || !content.trim()) {
+    await target.send(EMPTY_ANSWER).catch((e) => console.error('helper reply failed:', e.message));
+    return;
+  }
+  for (const chunk of chunkForDiscord(content)) {
+    await target.send(chunk).catch((e) => console.error('helper reply failed:', e.message));
+  }
+}
+
 export function wireDiscordClient(client, { commands, appContext }) {
   client.on('interactionCreate', async (interaction) => {
     // Autocomplete interactions are a separate path: they CANNOT be deferred and
@@ -133,6 +257,17 @@ export function wireDiscordClient(client, { commands, appContext }) {
       // token expires. safeReply routes this via editReply on the deferred
       // message; its own catch swallows any follow-on failure.
       await safeReply(interaction, authMessages.internalError());
+    }
+  });
+
+  client.on('messageCreate', async (message) => {
+    try {
+      if (message.author?.bot) return;
+      const botId = client.user?.id;
+      if (!botId || !startsWithBotMention(message.content, botId)) return;
+      await handleMention(message, { appContext, botId });
+    } catch (err) {
+      console.error('Unhandled mention error:', err);
     }
   });
 }

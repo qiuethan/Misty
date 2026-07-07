@@ -12,7 +12,14 @@ async function main() {
   const enableWeb = process.env.ENABLE_WEB === 'true';
 
   if (enableDiscord) {
-    const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+    // GuildMessages (non-privileged) is enough for the @mention helper: Discord
+    // always delivers message.content for messages that mention the bot, so the
+    // privileged MessageContent intent is intentionally NOT requested.
+    // (Consequence: thread messages that don't re-mention the bot arrive with
+    // empty content and are ignored — matches the "re-mention to follow up" design.)
+    const client = new Client({
+      intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+    });
     wireDiscordClient(client, { commands, appContext });
     client.once('clientReady', (c) => console.log(`Bot ready as ${c.user.tag}`));
     await client.login(config.discordToken).catch((err) => {
