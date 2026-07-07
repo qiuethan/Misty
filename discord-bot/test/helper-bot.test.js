@@ -154,6 +154,15 @@ test('handleMention: empty LLM answer posts a friendly fallback, no silent dead-
   assert.match(thread.sent[0], /couldn't come up with an answer/i);
 });
 
+test('handleMention: startThread failure gets a friendly reply, no throw', async () => {
+  const channel = fakeChannel({ isThread: false });
+  const message = fakeMessage({ content: `<@${BOT_ID}> hi`, channel });
+  message.startThread = async () => { throw new Error('missing permission'); };
+  await assert.doesNotReject(() => handleMention(message, { appContext: ctx(), botId: BOT_ID }));
+  assert.equal(channel.replies.length, 1);
+  assert.match(channel.replies[0], /couldn't open a thread/i);
+});
+
 test('handleMention: a bare ping with no question does nothing', async () => {
   const channel = fakeChannel({ isThread: false });
   const message = fakeMessage({ content: `<@${BOT_ID}>`, channel });

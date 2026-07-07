@@ -155,6 +155,7 @@ const LINK_PROMPT = 'You need to link your account first. Run `/link` to identif
 const VERIFY_UNAVAILABLE = "I can't verify you right now — the directory is unavailable. Please try again shortly.";
 const LLM_UNAVAILABLE = "I'm having trouble reaching the assistant right now — please try again shortly.";
 const EMPTY_ANSWER = "I couldn't come up with an answer that time — please try rephrasing.";
+const THREAD_UNAVAILABLE = "I couldn't open a thread for that — please try again. (I may be missing the 'Create Public Threads' or 'Read Message History' permission.)";
 
 // Handle a message that starts with the bot's mention. Linked-only. In a
 // channel it opens a thread; in a thread it replays the thread's history as
@@ -180,16 +181,22 @@ export async function handleMention(message, { appContext, botId }) {
 
   let target;
   let messages;
-  if (message.channel.isThread()) {
-    target = message.channel;
-    const fetched = await target.messages.fetch({ limit: HISTORY_LIMIT });
-    const ordered = [...fetched.values()].sort(
-      (a, b) => (a.createdTimestamp ?? 0) - (b.createdTimestamp ?? 0),
-    );
-    messages = threadHistoryToMessages(ordered, botId);
-  } else {
-    target = await message.startThread({ name: question.slice(0, 100) });
-    messages = [{ role: 'user', content: question }];
+  try {
+    if (message.channel.isThread()) {
+      target = message.channel;
+      const fetched = await target.messages.fetch({ limit: HISTORY_LIMIT });
+      const ordered = [...fetched.values()].sort(
+        (a, b) => (a.createdTimestamp ?? 0) - (b.createdTimestamp ?? 0),
+      );
+      messages = threadHistoryToMessages(ordered, botId);
+    } else {
+      target = await message.startThread({ name: question.slice(0, 100) });
+      messages = [{ role: 'user', content: question }];
+    }
+  } catch (e) {
+    console.error('thread create/fetch failed:', e.message);
+    await message.reply(THREAD_UNAVAILABLE).catch(() => {});
+    return;
   }
   if (!messages.length) return;
 

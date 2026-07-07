@@ -38,6 +38,7 @@ test('chat POSTs /chat with key header and maps a 200 response', async () => {
   assert.equal(call.opts.method, 'POST');
   assert.equal(call.opts.headers['X-API-Key'], KEY);
   assert.equal(call.opts.headers['Content-Type'], 'application/json');
+  assert.ok(call.opts.signal instanceof AbortSignal); // timeout wiring present
   const sent = JSON.parse(call.opts.body);
   assert.deepEqual(sent.messages, [{ role: 'user', content: 'hi' }]);
   assert.equal(sent.system, 'be nice');
@@ -69,5 +70,14 @@ test('chat throws LlmUnavailable on network error', async () => {
 test('chat throws LlmUnavailable on malformed JSON', async () => {
   const fetchImpl = fakeFetch([{ status: 200, badJson: true }]);
   const client = createLlmClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await assert.rejects(() => client.chat({ messages: [{ role: 'user', content: 'q' }] }), LlmUnavailable);
+});
+
+test('chat aborts and throws LlmUnavailable when the request stalls past timeoutMs', async () => {
+  const fetchImpl = (url, opts) =>
+    new Promise((_, reject) => {
+      opts.signal.addEventListener('abort', () => reject(new Error('aborted')));
+    });
+  const client = createLlmClient({ baseUrl: BASE, apiKey: KEY, fetchImpl, timeoutMs: 10 });
   await assert.rejects(() => client.chat({ messages: [{ role: 'user', content: 'q' }] }), LlmUnavailable);
 });
