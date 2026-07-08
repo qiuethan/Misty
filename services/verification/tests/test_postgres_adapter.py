@@ -55,9 +55,14 @@ def test_latest_unconsumed_for_email(store):
     assert store.latest_unconsumed_for_email("x@y.com").subject == "s2"
 
 
-def test_set_attempts_and_consume(store):
+def test_increment_attempts_and_consume(store):
     store.create_code(_rec())
-    store.set_attempts("s", 2)
+    assert store.increment_attempts("s") == 1
+    assert store.increment_attempts("s") == 2
     assert store.get_code("s").attempts == 2
     store.mark_consumed("s", datetime.now(timezone.utc))
     assert store.get_code("s").consumed_at is not None
+
+
+def test_increment_attempts_missing_subject_returns_zero(store):
+    assert store.increment_attempts("nope") == 0

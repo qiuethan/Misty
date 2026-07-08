@@ -14,7 +14,7 @@ from src.api.auth import AuthedKey, require_scope
 from src.api.deps import get_email_sender, get_storage
 from src.codes import generate_code, hash_code, verify_code
 from src.config import get_settings
-from src.email.base import EmailSender
+from src.email.base import EmailSender, EmailSendError
 from src.policy import CODE_TTL, MAX_ATTEMPTS, RATE_LIMIT_WINDOW
 
 router = APIRouter(prefix="/verification", tags=["verification"])
@@ -41,6 +41,16 @@ def request_code(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="rate_limited")
 
     code = generate_code()
+    # Send before persisting: if delivery fails we neither store an unsendable
+    # code nor rate-limit the user out of an immediate retry.
+    try:
+        email_sender.send(
+            to=payload.email,
+            subject="Your UTMIST verification code",
+            body=f"Your verification code is {code}. It expires in 10 minutes.",
+        )
+    except EmailSendError:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="email_send_failed")
     storage.create_code(
         VerificationCode(
             subject=payload.subject,
@@ -51,11 +61,6 @@ def request_code(
             consumed_at=None,
             created_at=now,
         )
-    )
-    email_sender.send(
-        to=payload.email,
-        subject="Your UTMIST verification code",
-        body=f"Your verification code is {code}. It expires in 10 minutes.",
     )
     return RequestCodeOut()
 
@@ -85,8 +90,8 @@ def confirm_code(
         )
 
     if not verify_code(payload.code, code.code_hash, get_settings().code_hmac_secret):
-        storage.set_attempts(payload.subject, code.attempts + 1)
-        if code.attempts + 1 >= MAX_ATTEMPTS:
+        attempts = storage.increment_attempts(payload.subject)
+        if attempts >= MAX_ATTEMPTS:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="too_many_attempts"
             )

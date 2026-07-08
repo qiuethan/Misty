@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 
 from contracts.types import VerificationCode
@@ -24,21 +25,25 @@ class PostgresVerificationStore:
         self._engine = engine
 
     def create_code(self, code: VerificationCode) -> None:
+        # Atomic upsert: one live row per subject, safe under concurrent
+        # request-code calls (a delete+insert pair could collide on the
+        # subject unique constraint and 500).
+        values = {
+            "subject": code.subject,
+            "email": code.email,
+            "code_hash": code.code_hash,
+            "expires_at": code.expires_at,
+            "attempts": code.attempts,
+            "consumed_at": code.consumed_at,
+            "created_at": code.created_at,
+        }
+        stmt = pg_insert(verification_codes).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[verification_codes.c.subject],
+            set_={k: getattr(stmt.excluded, k) for k in values if k != "subject"},
+        )
         with self._engine.begin() as conn:
-            conn.execute(
-                delete(verification_codes).where(verification_codes.c.subject == code.subject)
-            )
-            conn.execute(
-                insert(verification_codes).values(
-                    subject=code.subject,
-                    email=code.email,
-                    code_hash=code.code_hash,
-                    expires_at=code.expires_at,
-                    attempts=code.attempts,
-                    consumed_at=code.consumed_at,
-                    created_at=code.created_at,
-                )
-            )
+            conn.execute(stmt)
 
     def get_code(self, subject: str) -> VerificationCode | None:
         with self._engine.begin() as conn:
@@ -58,13 +63,17 @@ class PostgresVerificationStore:
             ).first()
         return _row_to_code(row) if row is not None else None
 
-    def set_attempts(self, subject: str, attempts: int) -> None:
+    def increment_attempts(self, subject: str) -> int:
+        # Atomic read-and-increment in a single statement so parallel invalid
+        # confirms can't lose increments and bypass the attempt-lockout.
         with self._engine.begin() as conn:
-            conn.execute(
+            row = conn.execute(
                 update(verification_codes)
                 .where(verification_codes.c.subject == subject)
-                .values(attempts=attempts)
-            )
+                .values(attempts=verification_codes.c.attempts + 1)
+                .returning(verification_codes.c.attempts)
+            ).first()
+        return row.attempts if row is not None else 0
 
     def mark_consumed(self, subject: str, consumed_at: datetime) -> None:
         with self._engine.begin() as conn:

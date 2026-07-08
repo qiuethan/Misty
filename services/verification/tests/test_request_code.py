@@ -23,3 +23,23 @@ def test_request_code_rate_limited(client, email):
     assert r.status_code == 429
     assert r.json()["detail"] == "rate_limited"
     assert len(email.sent) == 1  # second request did not send
+
+
+def test_request_code_email_failure_returns_502_and_persists_nothing(client, store):
+    from src.api.deps import get_email_sender
+    from src.email.base import EmailSendError
+
+    class _Boom:
+        def send(self, *, to, subject, body):
+            raise EmailSendError("delivery failed")
+
+    client.app.dependency_overrides[get_email_sender] = lambda: _Boom()
+    r = client.post(
+        "/verification/request-code",
+        headers=AUTH,
+        json={"subject": "discord:9", "email": "a@b.com"},
+    )
+    assert r.status_code == 502
+    assert r.json()["detail"] == "email_send_failed"
+    # A failed send must not leave a code behind (else the user is rate-limited).
+    assert store.get_code("discord:9") is None

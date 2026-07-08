@@ -29,18 +29,24 @@ def verify_production_secrets(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
     if settings.vf_env == "local":
         return
-    insecure: list[str] = []
+    problems: list[str] = []
     if settings.api_key == DEFAULT_DEV_API_KEY:
-        insecure.append("API_KEY")
+        problems.append("API_KEY")
     if settings.code_hmac_secret == DEFAULT_DEV_HMAC_SECRET:
-        insecure.append("CODE_HMAC_SECRET")
+        problems.append("CODE_HMAC_SECRET")
+    if "dev_password@localhost" in settings.database_url:
+        problems.append("DATABASE_URL")
+    if settings.email_backend == "fake":
+        # The fake sender silently drops mail — a non-local deploy on it would
+        # 202 every request while delivering nothing.
+        problems.append("EMAIL_BACKEND=fake")
     if settings.email_backend == "gmail" and not settings.gmail_sender:
-        insecure.append("GMAIL_SENDER")
+        problems.append("GMAIL_SENDER")
     if settings.email_backend == "gmail" and not settings.gmail_credentials_json:
-        insecure.append("GMAIL_CREDENTIALS_JSON")
-    if insecure:
+        problems.append("GMAIL_CREDENTIALS_JSON")
+    if problems:
         raise RuntimeError(
             f"Refusing to start in vf_env={settings.vf_env!r}: "
-            f"{', '.join(insecure)} missing or still the built-in dev default. "
-            "Set strong, unique values via environment variables."
+            f"{', '.join(problems)} — still a built-in dev default, missing, or unsafe "
+            "for a non-local deployment. Set strong, unique values via environment variables."
         )

@@ -21,10 +21,13 @@ class InMemoryVerificationStore:
         ]
         return max(candidates, key=lambda c: c.created_at) if candidates else None
 
-    def set_attempts(self, subject: str, attempts: int) -> None:
+    def increment_attempts(self, subject: str) -> int:
         code = self._by_subject.get(subject)
-        if code is not None:
-            self._by_subject[subject] = code.model_copy(update={"attempts": attempts})
+        if code is None:
+            return 0
+        new_attempts = code.attempts + 1
+        self._by_subject[subject] = code.model_copy(update={"attempts": new_attempts})
+        return new_attempts
 
     def mark_consumed(self, subject: str, consumed_at: datetime) -> None:
         code = self._by_subject.get(subject)

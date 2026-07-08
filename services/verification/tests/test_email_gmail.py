@@ -1,5 +1,8 @@
 import base64
 
+import pytest
+
+from src.email.base import EmailSendError
 from src.email.gmail import GmailSender
 
 
@@ -11,7 +14,7 @@ class _FakeMessages:
         self.sent.append((userId, body))
         return self
 
-    def execute(self):
+    def execute(self, **kwargs):  # accepts num_retries=...
         return {"id": "x"}
 
 
@@ -42,3 +45,21 @@ def test_gmail_sender_builds_and_sends_message():
     assert "a@b.com" in raw
     assert "123456" in raw
     assert "noreply@utmist.ca" in raw
+
+
+class _RaisingMessages(_FakeMessages):
+    def execute(self, **kwargs):
+        raise RuntimeError("gmail unreachable")
+
+
+class _RaisingService(_FakeService):
+    def __init__(self):
+        self.messages_obj = _RaisingMessages()
+
+
+def test_gmail_send_wraps_provider_error_as_email_send_error():
+    sender = GmailSender(
+        sender="noreply@utmist.ca", credentials_json_b64="", service=_RaisingService()
+    )
+    with pytest.raises(EmailSendError):
+        sender.send(to="a@b.com", subject="Hi", body="Your verification code is 123456.")

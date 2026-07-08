@@ -73,6 +73,8 @@ jobs:
 
   verification-test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     services:
       postgres:
         image: postgres:16
@@ -94,6 +96,8 @@ jobs:
         working-directory: services/verification
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Install uv
         uses: astral-sh/setup-uv@v5
       - name: Install dependencies
