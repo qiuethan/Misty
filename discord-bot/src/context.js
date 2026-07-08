@@ -4,6 +4,8 @@ import { createLinkService } from './linkService.js';
 import { createSeedService } from './seedService.js';
 import { createTeamService } from './teamService.js';
 import { createDocService } from './docService.js';
+import { createLlmClient } from './llmClient.js';
+import { createHelperService } from './helperService.js';
 
 // Wire the application services once. The router spreads this into every
 // command's ctx (alongside the request-scoped principal).
@@ -20,5 +22,10 @@ export function createAppContext(config) {
   const seedService = createSeedService({ directory });
   const teamService = createTeamService({ directory });
   const docService = createDocService({ docClient, directory });
-  return { directory, docClient, linkService, seedService, teamService, docService };
+  const llmClient = createLlmClient({
+    baseUrl: config.llmBaseUrl,
+    apiKey: config.llmApiKey,
+  });
+  const helperService = createHelperService({ llmClient, directory });
+  return { directory, docClient, linkService, seedService, teamService, docService, llmClient, helperService };
 }
