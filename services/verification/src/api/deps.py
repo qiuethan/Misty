@@ -28,8 +28,11 @@ def get_key_store() -> NullApiKeyStore:
 
 def get_email_sender() -> EmailSender:
     settings = get_settings()
+    if settings.email_backend == "resend":
+        from src.email.resend import ResendSender
+
+        return ResendSender(api_key=settings.resend_api_key, sender=settings.email_from)
     if settings.email_backend == "gmail":
-        # Lazy import: gmail adapter lands in Task 7.
         from src.email.gmail import GmailSender
 
         return GmailSender(

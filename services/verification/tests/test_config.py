@@ -45,6 +45,26 @@ def test_prod_rejects_fake_email_backend():
         verify_production_secrets(_prod(email_backend="fake"))
 
 
+def test_prod_resend_backend_passes_with_key_and_from():
+    verify_production_secrets(
+        _prod(email_backend="resend", resend_api_key="re_live_key", email_from="x@utmist.ca")
+    )
+
+
+def test_prod_rejects_resend_without_api_key():
+    with pytest.raises(RuntimeError, match="RESEND_API_KEY"):
+        verify_production_secrets(
+            _prod(email_backend="resend", resend_api_key="", email_from="x@utmist.ca")
+        )
+
+
+def test_prod_rejects_resend_without_from():
+    with pytest.raises(RuntimeError, match="EMAIL_FROM"):
+        verify_production_secrets(
+            _prod(email_backend="resend", resend_api_key="re_live_key", email_from="")
+        )
+
+
 def test_prod_rejects_dev_api_key():
     with pytest.raises(RuntimeError, match="API_KEY"):
         verify_production_secrets(_prod(api_key=DEFAULT_DEV_API_KEY))

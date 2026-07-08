@@ -14,7 +14,9 @@ class Settings(BaseSettings):
     api_key: str = DEFAULT_DEV_API_KEY
     code_hmac_secret: str = DEFAULT_DEV_HMAC_SECRET
     vf_env: Literal["local", "staging", "production"] = "local"
-    email_backend: Literal["fake", "gmail"] = "fake"
+    email_backend: Literal["fake", "resend", "gmail"] = "fake"
+    email_from: str = ""  # sender address, e.g. "UTMIST <noreply@utmist.ca>"
+    resend_api_key: str = ""
     gmail_sender: str = ""
     gmail_credentials_json: str = ""  # base64-encoded service-account JSON
 
@@ -40,6 +42,10 @@ def verify_production_secrets(settings: Settings | None = None) -> None:
         # The fake sender silently drops mail — a non-local deploy on it would
         # 202 every request while delivering nothing.
         problems.append("EMAIL_BACKEND=fake")
+    if settings.email_backend == "resend" and not settings.resend_api_key:
+        problems.append("RESEND_API_KEY")
+    if settings.email_backend == "resend" and not settings.email_from:
+        problems.append("EMAIL_FROM")
     if settings.email_backend == "gmail" and not settings.gmail_sender:
         problems.append("GMAIL_SENDER")
     if settings.email_backend == "gmail" and not settings.gmail_credentials_json:
