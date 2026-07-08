@@ -1,5 +1,6 @@
 import { createDirectoryClient } from './directoryClient.js';
 import { createDocClient } from './docClient.js';
+import { createVerificationClient } from './verificationClient.js';
 import { createLinkService } from './linkService.js';
 import { createSeedService } from './seedService.js';
 import { createTeamService } from './teamService.js';
@@ -18,7 +19,11 @@ export function createAppContext(config) {
     baseUrl: config.docBaseUrl,
     apiKey: config.docApiKey,
   });
-  const linkService = createLinkService({ directory });
+  const verification = createVerificationClient({
+    baseUrl: config.verificationBaseUrl,
+    apiKey: config.verificationApiKey,
+  });
+  const linkService = createLinkService({ directory, verification });
   const seedService = createSeedService({ directory });
   const teamService = createTeamService({ directory });
   const docService = createDocService({ docClient, directory });
@@ -27,5 +32,5 @@ export function createAppContext(config) {
     apiKey: config.llmApiKey,
   });
   const helperService = createHelperService({ llmClient, directory });
-  return { directory, docClient, linkService, seedService, teamService, docService, llmClient, helperService };
+  return { directory, docClient, verification, linkService, seedService, teamService, docService, llmClient, helperService };
 }

@@ -7,6 +7,8 @@ const REQUIRED = [
   'DOC_API_KEY',
   'LLM_BASE_URL',
   'LLM_API_KEY',
+  'VERIFICATION_BASE_URL',
+  'VERIFICATION_API_KEY',
 ];
 
 export function loadConfig(env = process.env) {
@@ -26,5 +28,7 @@ export function loadConfig(env = process.env) {
     docApiKey: env.DOC_API_KEY,
     llmBaseUrl: env.LLM_BASE_URL.replace(/\/+$/, ''),
     llmApiKey: env.LLM_API_KEY,
+    verificationBaseUrl: env.VERIFICATION_BASE_URL.replace(/\/+$/, ''),
+    verificationApiKey: env.VERIFICATION_API_KEY,
   };
 }
