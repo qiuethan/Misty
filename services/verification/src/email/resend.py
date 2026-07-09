@@ -38,6 +38,9 @@ class ResendSender:
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
+            # Resend's API is behind Cloudflare, which blocks the default
+            # `Python-urllib/*` User-Agent with error 1010. Send a real UA.
+            "User-Agent": "utmist-verification/0.1",
         }
         try:
             status = self._post(

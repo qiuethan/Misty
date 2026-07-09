@@ -30,6 +30,8 @@ def test_resend_send_builds_request_and_succeeds():
     call = post.calls[0]
     assert call["url"] == "https://api.resend.com/emails"
     assert call["headers"]["Authorization"] == "Bearer re_test_key"
+    # Cloudflare (fronting Resend) blocks the default urllib UA — must send one.
+    assert call["headers"].get("User-Agent")
     payload = json.loads(call["data"])
     assert payload["from"] == "UTMIST <noreply@utmist.ca>"
     assert payload["to"] == ["a@b.com"]
