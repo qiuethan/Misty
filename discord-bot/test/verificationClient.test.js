@@ -135,3 +135,16 @@ test('confirmCode network error becomes VerificationUnavailable', async () => {
     VerificationUnavailable,
   );
 });
+
+test('requestCode aborts and fails when the service hangs past the timeout', async () => {
+  // fetch that never resolves on its own — only the AbortController can end it.
+  const fetchImpl = (url, opts) =>
+    new Promise((_resolve, reject) => {
+      opts.signal.addEventListener('abort', () => reject(new Error('aborted')));
+    });
+  const client = createVerificationClient({ baseUrl: BASE, apiKey: KEY, fetchImpl, timeoutMs: 5 });
+  await assert.rejects(
+    () => client.requestCode({ subject: 'discord:123', email: 'a@b.com' }),
+    VerificationUnavailable,
+  );
+});
