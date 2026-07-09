@@ -4,7 +4,8 @@ name: blocked-ready-automation
 #
 # Declare blockers in an issue body with a line like:
 #   Blocked by: #40, #42
-# (case-insensitive, anywhere in the body). The `blocked` label marks issues
+# (case-insensitive, anywhere in the body; the colon is optional, so
+# "Blocked by #40" also works). The `blocked` label marks issues
 # that still have an open blocker; `ready` marks issues whose blockers are all
 # resolved.
 #
@@ -62,7 +63,7 @@ jobs:
 
             // Parse a "Blocked by: #1, #2" line into blocker numbers.
             const blockersOf = (body) => {
-              const line = (body || '').match(/^.*blocked by:.*$/im);
+              const line = (body || '').match(/^.*blocked by:?\s.*$/im);
               if (!line) return [];
               return [...line[0].matchAll(/#(\d+)/g)].map((m) => Number(m[1]));
             };
