@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   authMessages,
   renderLinkResult,
+  renderVerifyCodeResult,
   renderSeedResult,
   buildWhoamiEmbed,
   renderCreateTeamResult,
@@ -39,14 +40,35 @@ test('authMessages.internalError returns ReplyPayload', () => {
 });
 
 test('renderLinkResult covers every outcome', () => {
-  assert.match(renderLinkResult({ outcome: 'LINKED', person: { display_name: 'Alex' } }).content, /Alex/);
+  assert.match(renderLinkResult({ outcome: 'CODE_SENT', email: 'alex@utmist.ca' }).content, /alex@utmist\.ca/);
   assert.match(renderLinkResult({ outcome: 'NOT_A_MEMBER' }).content, /exec/i);
-  assert.match(renderLinkResult({ outcome: 'ALREADY_LINKED', detail: 'x' }).content, /already|couldn't|could not/i);
   assert.match(renderLinkResult({ outcome: 'DIRECTORY_DOWN' }).content, /unavailable|try again/i);
+  assert.match(renderLinkResult({ outcome: 'VERIFICATION_DOWN' }).content, /unavailable|try again/i);
+  assert.match(renderLinkResult({ outcome: 'RATE_LIMITED' }).content, /too many|wait/i);
+  assert.match(renderLinkResult({ outcome: 'SOMETHING_ELSE' }).content, /wrong|try again/i);
 });
 
 test('renderLinkResult returns ReplyPayload with content', () => {
-  const p = renderLinkResult({ outcome: 'LINKED', person: { display_name: 'Alex' } });
+  const p = renderLinkResult({ outcome: 'CODE_SENT', email: 'alex@utmist.ca' });
+  assert.ok(p.content.includes('alex@utmist.ca'));
+  assert.equal(p.ephemeral, true);
+});
+
+test('renderVerifyCodeResult covers every outcome', () => {
+  assert.match(renderVerifyCodeResult({ outcome: 'LINKED', person: { display_name: 'Alex' } }).content, /Alex/);
+  assert.match(renderVerifyCodeResult({ outcome: 'NOT_A_MEMBER' }).content, /exec/i);
+  assert.match(renderVerifyCodeResult({ outcome: 'ALREADY_LINKED', detail: 'x' }).content, /already|couldn't|could not/i);
+  assert.match(renderVerifyCodeResult({ outcome: 'CODE_EXPIRED' }).content, /expired/i);
+  assert.match(renderVerifyCodeResult({ outcome: 'TOO_MANY_ATTEMPTS' }).content, /too many/i);
+  assert.match(renderVerifyCodeResult({ outcome: 'INVALID_CODE' }).content, /right|invalid|wrong/i);
+  assert.match(renderVerifyCodeResult({ outcome: 'NO_PENDING_CODE' }).content, /pending|link/i);
+  assert.match(renderVerifyCodeResult({ outcome: 'VERIFICATION_DOWN' }).content, /unavailable|try again/i);
+  assert.match(renderVerifyCodeResult({ outcome: 'DIRECTORY_DOWN' }).content, /unavailable|try again/i);
+  assert.match(renderVerifyCodeResult({ outcome: 'SOMETHING_ELSE' }).content, /wrong|try again/i);
+});
+
+test('renderVerifyCodeResult returns ReplyPayload with content', () => {
+  const p = renderVerifyCodeResult({ outcome: 'LINKED', person: { display_name: 'Alex' } });
   assert.ok(p.content.includes('Alex'));
   assert.equal(p.ephemeral, true);
 });
