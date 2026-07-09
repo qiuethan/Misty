@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import link from '../src/commands/link.js';
+import verifyCode from '../src/commands/verify-code.js';
 import whoami from '../src/commands/whoami.js';
 import seed from '../src/commands/seed.js';
 import teamCmd from '../src/commands/team.js';
@@ -10,7 +11,7 @@ import { DirectoryUnavailable } from '../src/directoryClient.js';
 import { buildDiscordData } from '../src/registerCommands.js';
 import { defineCommand } from '../src/defineCommand.js';
 
-test('link is public and links via linkService', async () => {
+test('link is public and requests a verification code via linkService', async () => {
   assert.equal(link.auth, 'public');
   const ctx = {
     linkService: {
@@ -18,12 +19,36 @@ test('link is public and links via linkService', async () => {
         assert.equal(args.email, 'alex@utmist.ca');
         assert.equal(args.discordUserId, '123');
         assert.equal(args.discordHandle, 'alex');
-        return { outcome: 'LINKED', person: { display_name: 'Alex' } };
+        return { outcome: 'CODE_SENT', email: 'alex@utmist.ca' };
       },
     },
   };
   const payload = await link.handler({
     options: { email: 'alex@utmist.ca' },
+    principal: null,
+    ctx,
+    discordUserId: '123',
+    discordHandle: 'alex',
+  });
+  assert.equal(payload.ephemeral, true);
+  assert.match(payload.content, /alex@utmist\.ca/);
+  assert.match(payload.content, /verify-code/);
+});
+
+test('verify-code is public and confirms + links via linkService', async () => {
+  assert.equal(verifyCode.auth, 'public');
+  const ctx = {
+    linkService: {
+      confirmAndLink: async (args) => {
+        assert.equal(args.discordUserId, '123');
+        assert.equal(args.discordHandle, 'alex');
+        assert.equal(args.code, '123456');
+        return { outcome: 'LINKED', person: { display_name: 'Alex' } };
+      },
+    },
+  };
+  const payload = await verifyCode.handler({
+    options: { code: '123456' },
     principal: null,
     ctx,
     discordUserId: '123',
