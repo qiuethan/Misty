@@ -1,7 +1,8 @@
 from typing import Protocol
 from uuid import UUID
 
-from contracts.types import ApiKey, Doc, Source
+from contracts.types import ApiKey, Doc, DocGrant, Source
+from contracts.visibility import ActorContext, SEE_ALL
 
 
 class StorageAdapter(Protocol):
@@ -26,7 +27,7 @@ class StorageAdapter(Protocol):
         tags: list[str],
         actor: str,
     ) -> Doc: ...
-    def get_doc(self, doc_id: UUID) -> Doc | None: ...
+    def get_doc(self, doc_id: UUID, *, visibility: ActorContext = SEE_ALL) -> Doc | None: ...
     def get_doc_by_normalized_url(self, url_normalized: str) -> Doc | None: ...
     def list_docs(
         self,
@@ -36,6 +37,7 @@ class StorageAdapter(Protocol):
         source_id: str | None = None,
         tag: str | None = None,
         active_only: bool = True,
+        visibility: ActorContext = SEE_ALL,
     ) -> list[Doc]: ...
     def update_doc(self, doc_id: UUID, values: dict, *, actor: str) -> Doc | None:
         """Patch scalar columns (title, description, active, owning_* ids/labels,
@@ -47,6 +49,19 @@ class StorageAdapter(Protocol):
         ...
     def remove_tag(self, doc_id: UUID, tag: str) -> bool:
         """Remove a tag. True if a row was deleted, False otherwise."""
+        ...
+    def add_grant(
+        self, doc_id: UUID, *, grantee_type: str, grantee_id: UUID | None, actor: str
+    ) -> bool:
+        """Idempotently add a grant. False if the doc does not exist."""
+        ...
+    def remove_grant(
+        self, doc_id: UUID, *, grantee_type: str, grantee_id: UUID | None
+    ) -> bool:
+        """Remove a grant. True if a row was deleted."""
+        ...
+    def list_grants(self, doc_id: UUID) -> list[DocGrant]:
+        """Grants for a doc, grantee_label unset (resolved at the API layer)."""
         ...
 
     # Sources

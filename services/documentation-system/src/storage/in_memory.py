@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from contracts.types import ApiKey, Doc, Source
+from contracts.types import ApiKey, Doc, DocGrant, Source
+from contracts.visibility import ActorContext, SEE_ALL, doc_visible
 
 
 def _now() -> datetime:
@@ -18,11 +19,23 @@ class InMemoryStorageAdapter:
         self._sources: dict[str, Source] = {s.id: s for s in (seed_sources or [])}
         self._api_keys: dict[UUID, ApiKey] = {}
         self._api_key_hashes: dict[UUID, str] = {}
+        self._grants: dict[UUID, list[tuple[str, UUID | None, datetime, str]]] = {}
 
     def _hydrate(self, doc: Doc) -> Doc:
         data = doc.model_dump()
         data["tags"] = sorted(self._tags.get(doc.id, set()))
         return Doc(**data)
+
+    def _grant_pairs(self, doc_id: UUID) -> list[tuple[str, UUID | None]]:
+        return [(gt, gid) for (gt, gid, _at, _by) in self._grants.get(doc_id, [])]
+
+    def _visible(self, doc: Doc, visibility: ActorContext) -> bool:
+        return doc_visible(
+            visibility,
+            owning_person_id=doc.owning_person_id,
+            owning_team_id=doc.owning_team_id,
+            grants=self._grant_pairs(doc.id),
+        )
 
     # --- Docs ---
 
@@ -44,9 +57,12 @@ class InMemoryStorageAdapter:
         self._tags[doc.id] = set(tags)
         return self._hydrate(doc)
 
-    def get_doc(self, doc_id: UUID) -> Doc | None:
+    def get_doc(self, doc_id: UUID, *, visibility: ActorContext = SEE_ALL) -> Doc | None:
         doc = self._docs.get(doc_id)
-        return self._hydrate(doc) if doc else None
+        if doc is None or not self._visible(doc, visibility):
+            return None
+        hydrated = self._hydrate(doc)
+        return hydrated.model_copy(update={"grants": self.list_grants(doc_id)})
 
     def get_doc_by_normalized_url(self, url_normalized: str) -> Doc | None:
         for doc in self._docs.values():
@@ -56,7 +72,7 @@ class InMemoryStorageAdapter:
 
     def list_docs(
         self, *, owning_team_id=None, owning_person_id=None,
-        source_id=None, tag=None, active_only=True,
+        source_id=None, tag=None, active_only=True, visibility: ActorContext = SEE_ALL,
     ) -> list[Doc]:
         out = []
         for doc in self._docs.values():
@@ -69,6 +85,8 @@ class InMemoryStorageAdapter:
             if source_id is not None and doc.source_id != source_id:
                 continue
             if tag is not None and tag not in self._tags.get(doc.id, set()):
+                continue
+            if not self._visible(doc, visibility):
                 continue
             out.append(self._hydrate(doc))
         return out
@@ -98,6 +116,29 @@ class InMemoryStorageAdapter:
             return False
         tags.discard(tag)
         return True
+
+    def add_grant(self, doc_id, *, grantee_type, grantee_id, actor) -> bool:
+        if doc_id not in self._docs:
+            return False
+        rows = self._grants.setdefault(doc_id, [])
+        if any(gt == grantee_type and gid == grantee_id for (gt, gid, _a, _b) in rows):
+            return True
+        rows.append((grantee_type, grantee_id, _now(), actor))
+        return True
+
+    def remove_grant(self, doc_id, *, grantee_type, grantee_id) -> bool:
+        rows = self._grants.get(doc_id, [])
+        kept = [r for r in rows if not (r[0] == grantee_type and r[1] == grantee_id)]
+        if len(kept) == len(rows):
+            return False
+        self._grants[doc_id] = kept
+        return True
+
+    def list_grants(self, doc_id) -> list[DocGrant]:
+        return [
+            DocGrant(grantee_type=gt, grantee_id=gid, grantee_label=None, created_at=at, created_by=by)
+            for (gt, gid, at, by) in self._grants.get(doc_id, [])
+        ]
 
     # --- Sources ---
 

@@ -1,12 +1,13 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import and_, delete, insert, select, update
+from sqlalchemy import and_, delete, false, insert, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
-from contracts.types import ApiKey, Doc, Source
-from src.storage.schema import api_keys, doc_tags, docs, sources
+from contracts.types import ApiKey, Doc, DocGrant, Source
+from contracts.visibility import Actor, ActorContext, DENY, SEE_ALL
+from src.storage.schema import api_keys, doc_grants, doc_tags, docs, sources
 
 
 def _now() -> datetime:
@@ -38,6 +39,50 @@ class PostgresStorageAdapter:
 
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
+
+    def _visibility_clause(self, ctx: ActorContext):
+        """None means 'no filter' (SEE_ALL). Otherwise a boolean SQL expression."""
+        if ctx is SEE_ALL:
+            return None
+        if ctx is DENY:
+            return false()
+        actor: Actor = ctx
+        team_ids = list(actor.team_ids)
+        grant_exists = (
+            select(doc_grants.c.id)
+            .where(
+                doc_grants.c.doc_id == docs.c.id,
+                or_(
+                    doc_grants.c.grantee_type == "org",
+                    and_(
+                        doc_grants.c.grantee_type == "person",
+                        doc_grants.c.grantee_id == actor.person_id,
+                    ),
+                    and_(
+                        doc_grants.c.grantee_type == "team",
+                        doc_grants.c.grantee_id.in_(team_ids),
+                    ),
+                ),
+            )
+            .exists()
+        )
+        owner = or_(
+            docs.c.owning_person_id == actor.person_id,
+            docs.c.owning_team_id.in_(team_ids),
+        )
+        return or_(owner, grant_exists)
+
+    def _grants_for(self, conn, doc_id: UUID) -> list[DocGrant]:
+        rows = conn.execute(
+            select(doc_grants).where(doc_grants.c.doc_id == doc_id).order_by(doc_grants.c.created_at)
+        ).all()
+        return [
+            DocGrant(
+                grantee_type=r.grantee_type, grantee_id=r.grantee_id, grantee_label=None,
+                created_at=r.created_at, created_by=r.created_by,
+            )
+            for r in rows
+        ]
 
     def _tags_for(self, conn, doc_id: UUID) -> list[str]:
         rows = conn.execute(
@@ -78,10 +123,17 @@ class PostgresStorageAdapter:
                 conn.execute(insert(doc_tags).values(doc_id=row.id, tag=tag))
             return self._row_to_doc(conn, row)
 
-    def get_doc(self, doc_id: UUID) -> Doc | None:
+    def get_doc(self, doc_id: UUID, *, visibility: ActorContext = SEE_ALL) -> Doc | None:
+        clause = self._visibility_clause(visibility)
+        stmt = select(docs).where(docs.c.id == doc_id)
+        if clause is not None:
+            stmt = stmt.where(clause)
         with self._engine.connect() as conn:
-            row = conn.execute(select(docs).where(docs.c.id == doc_id)).one_or_none()
-            return self._row_to_doc(conn, row) if row else None
+            row = conn.execute(stmt).one_or_none()
+            if row is None:
+                return None
+            doc = self._row_to_doc(conn, row)
+            return doc.model_copy(update={"grants": self._grants_for(conn, row.id)})
 
     def get_doc_by_normalized_url(self, url_normalized: str) -> Doc | None:
         with self._engine.connect() as conn:
@@ -95,7 +147,7 @@ class PostgresStorageAdapter:
 
     def list_docs(
         self, *, owning_team_id=None, owning_person_id=None,
-        source_id=None, tag=None, active_only=True,
+        source_id=None, tag=None, active_only=True, visibility: ActorContext = SEE_ALL,
     ) -> list[Doc]:
         stmt = select(docs)
         conditions = []
@@ -107,6 +159,9 @@ class PostgresStorageAdapter:
             conditions.append(docs.c.owning_person_id == owning_person_id)
         if source_id is not None:
             conditions.append(docs.c.source_id == source_id)
+        clause = self._visibility_clause(visibility)
+        if clause is not None:
+            conditions.append(clause)
         if tag is not None:
             stmt = stmt.where(
                 docs.c.id.in_(select(doc_tags.c.doc_id).where(doc_tags.c.tag == tag))
@@ -148,6 +203,44 @@ class PostgresStorageAdapter:
                 delete(doc_tags).where(doc_tags.c.doc_id == doc_id, doc_tags.c.tag == tag)
             )
             return result.rowcount > 0
+
+    def add_grant(self, doc_id, *, grantee_type, grantee_id, actor) -> bool:
+        with self._engine.begin() as conn:
+            exists = conn.execute(select(docs.c.id).where(docs.c.id == doc_id)).one_or_none()
+            if exists is None:
+                return False
+            already = conn.execute(
+                select(doc_grants.c.id).where(
+                    doc_grants.c.doc_id == doc_id,
+                    doc_grants.c.grantee_type == grantee_type,
+                    doc_grants.c.grantee_id.is_(None) if grantee_id is None
+                    else doc_grants.c.grantee_id == grantee_id,
+                )
+            ).one_or_none()
+            if already is None:
+                conn.execute(
+                    insert(doc_grants).values(
+                        doc_id=doc_id, grantee_type=grantee_type,
+                        grantee_id=grantee_id, created_by=actor,
+                    )
+                )
+            return True
+
+    def remove_grant(self, doc_id, *, grantee_type, grantee_id) -> bool:
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                delete(doc_grants).where(
+                    doc_grants.c.doc_id == doc_id,
+                    doc_grants.c.grantee_type == grantee_type,
+                    doc_grants.c.grantee_id.is_(None) if grantee_id is None
+                    else doc_grants.c.grantee_id == grantee_id,
+                )
+            )
+            return result.rowcount > 0
+
+    def list_grants(self, doc_id) -> list[DocGrant]:
+        with self._engine.connect() as conn:
+            return self._grants_for(conn, doc_id)
 
     # --- Sources ---
 
