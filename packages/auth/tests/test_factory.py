@@ -192,3 +192,42 @@ def test_on_behalf_actor_malformed_uuid_is_400():
     client = TestClient(_app_with_actor(store))
     r = client.get("/actor", headers={"X-API-Key": key, "X-On-Behalf-Of": "not-a-uuid"})
     assert r.status_code == 400
+
+
+def test_on_behalf_actor_rejected_without_scope_is_audit_logged(caplog):
+    import json
+    import logging
+
+    store = _Store()
+    key = store.add("bot", ["people:read"])  # no act-as-user
+    client = TestClient(_app_with_actor(store, audit_logger_name="test.obo.audit"))
+    with caplog.at_level(logging.WARNING, logger="test.obo.audit"):
+        r = client.get(
+            "/actor",
+            headers={"X-API-Key": key, "X-On-Behalf-Of": "11111111-1111-1111-1111-111111111111"},
+        )
+    assert r.status_code == 403
+    warnings = [rec for rec in caplog.records if rec.levelname == "WARNING"]
+    assert warnings, "expected a WARNING audit record"
+    parsed = json.loads(warnings[0].message)
+    assert parsed["event"] == "on_behalf_of_rejected"
+    assert parsed["key_name"] == "bot"
+
+
+def test_on_behalf_actor_success_is_audit_logged(caplog):
+    import json
+    import logging
+
+    store = _Store()
+    key = store.add("bot", ["act-as-user"])
+    client = TestClient(_app_with_actor(store, audit_logger_name="test.obo.audit"))
+    pid = "11111111-1111-1111-1111-111111111111"
+    with caplog.at_level(logging.INFO, logger="test.obo.audit"):
+        r = client.get("/actor", headers={"X-API-Key": key, "X-On-Behalf-Of": pid})
+    assert r.status_code == 200
+    infos = [rec for rec in caplog.records if rec.levelname == "INFO"]
+    assert infos, "expected an INFO audit record"
+    parsed = json.loads(infos[0].message)
+    assert parsed["event"] == "on_behalf_of_asserted"
+    assert parsed["key_name"] == "bot"
+    assert parsed["actor"] == pid

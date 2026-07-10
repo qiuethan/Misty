@@ -88,7 +88,9 @@ def test_grant_endpoints_add_and_remove(ctx):
     doc_id = client.post("/docs", json={"url": "https://d"}, headers=ADMIN).json()["doc"]["id"]
     r = client.post(f"/docs/{doc_id}/grants", json={"grantee_type": "org"}, headers=ADMIN)
     assert r.status_code == 200
-    assert any(g["grantee_type"] == "org" for g in r.json()["grants"])
+    grant = next(g for g in r.json()["grants"] if g["grantee_type"] == "org")
+    # Fix: the grant must record the real authenticated caller, not a hardcoded "api".
+    assert grant["created_by"] == "env-bootstrap"
     d = client.request(
         "DELETE", f"/docs/{doc_id}/grants",
         json={"grantee_type": "org"}, headers=ADMIN,

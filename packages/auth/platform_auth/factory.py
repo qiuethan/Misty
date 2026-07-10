@@ -134,17 +134,24 @@ def build_auth(
             return None
         # Literal check, not has_scope — an admin wildcard must NOT grant this.
         if ACT_AS_USER_SCOPE not in key.scopes:
+            audit.warning(json.dumps({
+                "event": "on_behalf_of_rejected", "key_name": key.name,
+            }))
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"missing scope: {ACT_AS_USER_SCOPE}",
             )
         try:
-            return UUID(x_on_behalf_of)
+            actor_id = UUID(x_on_behalf_of)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="X-On-Behalf-Of must be a UUID",
             )
+        audit.info(json.dumps({
+            "event": "on_behalf_of_asserted", "key_name": key.name, "actor": str(actor_id),
+        }))
+        return actor_id
 
     return AuthDeps(
         require_api_key=require_api_key,

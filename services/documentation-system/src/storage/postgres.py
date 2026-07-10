@@ -220,12 +220,21 @@ class PostgresStorageAdapter:
                 )
             ).one_or_none()
             if already is None:
-                conn.execute(
-                    insert(doc_grants).values(
-                        doc_id=doc_id, grantee_type=grantee_type,
-                        grantee_id=grantee_id, created_by=actor,
-                    )
-                )
+                # Select-then-insert has a race under concurrency: two callers
+                # can both pass the existence check above and one hits the
+                # unique index. Use a SAVEPOINT so a duplicate-insert error
+                # only rolls back the insert, not the whole transaction, and
+                # is treated as idempotent success.
+                try:
+                    with conn.begin_nested():
+                        conn.execute(
+                            insert(doc_grants).values(
+                                doc_id=doc_id, grantee_type=grantee_type,
+                                grantee_id=grantee_id, created_by=actor,
+                            )
+                        )
+                except IntegrityError:
+                    pass  # concurrent insert of the same grant — idempotent success
             return True
 
     def remove_grant(self, doc_id, *, grantee_type, grantee_id) -> bool:

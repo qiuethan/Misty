@@ -137,10 +137,11 @@ def add_grant(
     body: DocGrantInput,
     storage: StorageAdapter = Depends(get_storage),
     wctx: ActorContext = Depends(write_context),
+    actor: str = Depends(get_actor),
     _: AuthedKey = Depends(require_scope("docs:write")),
 ) -> Doc:
     get_visible_doc_or_404(doc_id, wctx, storage)  # 404 if actor can't see it
-    storage.add_grant(doc_id, grantee_type=body.grantee_type, grantee_id=body.grantee_id, actor="api")
+    storage.add_grant(doc_id, grantee_type=body.grantee_type, grantee_id=body.grantee_id, actor=actor)
     return storage.get_doc(doc_id)
 
 
