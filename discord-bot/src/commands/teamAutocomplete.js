@@ -5,10 +5,11 @@
 // to no suggestions (rather than hanging) when the directory is cold/slow — the
 // field still accepts a typed slug.
 //
-// This budget is spent AFTER router.js's PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS (1000ms)
-// has already resolved the principal, so 1000 + 1500 = 2500ms worst case stays
-// under the window.
-export const AUTOCOMPLETE_TIMEOUT_MS = 1500;
+// This budget is spent AFTER router.js's PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS (2000ms)
+// has already resolved the principal, so 2000 + 700 = 2700ms worst case stays
+// under the window. The principal lookup wakes the (possibly cold) directory DB,
+// so by the time this budget runs the same DB is warm (~80ms) and 700ms is ample.
+export const AUTOCOMPLETE_TIMEOUT_MS = 700;
 
 // Race a directory lookup against the autocomplete budget. Resolves to the lookup
 // result, or null if the budget elapses first. The timeout promise still SETTLES
