@@ -491,18 +491,26 @@ class PostgresStorageAdapter:
             ).scalar_one_or_none()
             if primary_owner is not None and primary_owner != person_id:
                 raise ValueError("email_registered_to_another")
-            row = conn.execute(
-                insert(person_identifiers)
-                .values(
-                    person_id=person_id,
-                    provider="email",
-                    external_id=addr,
-                    handle=None,
-                    created_by=actor,
-                    updated_by=actor,
+            try:
+                row = conn.execute(
+                    insert(person_identifiers)
+                    .values(
+                        person_id=person_id,
+                        provider="email",
+                        external_id=addr,
+                        handle=None,
+                        created_by=actor,
+                        updated_by=actor,
+                    )
+                    .returning(person_identifiers)
+                ).one()
+            except IntegrityError as e:
+                constraint = getattr(
+                    getattr(getattr(e, "orig", None), "diag", None), "constraint_name", None
                 )
-                .returning(person_identifiers)
-            ).one()
+                if constraint == "uq_person_identifiers_provider_external":
+                    raise ValueError("email_registered_to_another") from e
+                raise
         return _identifier_row_to_model(row)
 
     # --- API keys ---

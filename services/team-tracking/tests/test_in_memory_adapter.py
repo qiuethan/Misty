@@ -539,6 +539,24 @@ def test_add_email_rejects_another_persons_primary(seeded_adapter):
         seeded_adapter.add_person_email(b.id, "A@X.com", actor="t")  # a's primary
 
 
+def test_add_email_own_primary_creates_identifier(seeded_adapter):
+    p = _seed_person(seeded_adapter, "me@x.com")
+    ident = seeded_adapter.add_person_email(p.id, "Me@X.com", actor="t")
+    assert ident.provider == "email"
+    assert ident.external_id == "me@x.com"
+    email_idents = [
+        i for i in seeded_adapter.list_person_identifiers(p.id) if i.provider == "email"
+    ]
+    assert len(email_idents) == 1
+
+    again = seeded_adapter.add_person_email(p.id, "Me@X.com", actor="t")
+    assert again.id == ident.id
+    email_idents = [
+        i for i in seeded_adapter.list_person_identifiers(p.id) if i.provider == "email"
+    ]
+    assert len(email_idents) == 1
+
+
 def test_generic_identifier_ops_reject_email_provider(seeded_adapter):
     import pytest
 

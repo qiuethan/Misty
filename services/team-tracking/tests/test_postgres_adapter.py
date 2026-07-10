@@ -261,6 +261,20 @@ def test_pg_add_email_rejects_another_persons_primary(adapter):
         adapter.add_person_email(b.id, "A@X.com", actor="t")  # a's primary
 
 
+def test_pg_add_email_own_primary_creates_identifier(adapter):
+    p = _seed_person(adapter, "me@x.com")
+    ident = adapter.add_person_email(p.id, "Me@X.com", actor="t")
+    assert ident.provider == "email"
+    assert ident.external_id == "me@x.com"
+    email_idents = [i for i in adapter.list_person_identifiers(p.id) if i.provider == "email"]
+    assert len(email_idents) == 1
+
+    again = adapter.add_person_email(p.id, "Me@X.com", actor="t")
+    assert again.id == ident.id
+    email_idents = [i for i in adapter.list_person_identifiers(p.id) if i.provider == "email"]
+    assert len(email_idents) == 1
+
+
 def test_pg_generic_identifier_ops_reject_email_provider(adapter):
     p = _seed_person(adapter, "p@x.com")
     with pytest.raises(ValueError, match="email_not_addressable_by_provider"):

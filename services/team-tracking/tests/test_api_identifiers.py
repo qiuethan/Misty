@@ -214,6 +214,16 @@ def test_add_email_endpoint_creates_and_is_idempotent(client):
     assert sum(i["provider"] == "email" for i in ids) == 1
 
 
+def test_add_email_own_primary_creates_and_is_idempotent(client):
+    p = _make_person(client, "me@x.com")
+    pid = p["id"]
+    r1 = client.post(f"/people/{pid}/emails", headers=AUTH, json={"email": p["primary_email"]})
+    assert r1.status_code == 201 and r1.json()["provider"] == "email"
+    assert r1.json()["external_id"] == p["primary_email"]
+    r2 = client.post(f"/people/{pid}/emails", headers=AUTH, json={"email": p["primary_email"]})
+    assert r2.status_code == 201 and r2.json()["id"] == r1.json()["id"]
+
+
 def test_add_email_rejects_another_persons(client):
     a = _make_person(client, "a@x.com")["id"]
     b = _make_person(client, "b@x.com")["id"]
