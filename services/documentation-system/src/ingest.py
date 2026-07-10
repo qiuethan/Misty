@@ -20,6 +20,11 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _apply_grants(storage, doc_id, grants):
+    for g in grants:
+        storage.add_grant(doc_id, grantee_type=g.grantee_type, grantee_id=g.grantee_id, actor="ingest")
+
+
 def ingest_doc(
     payload: DocIngest,
     *,
@@ -36,6 +41,7 @@ def ingest_doc(
     if existing is not None and existing.active:
         for tag in payload.tags:
             storage.add_tag(existing.id, tag)
+        _apply_grants(storage, existing.id, payload.grants)
         refreshed = storage.get_doc(existing.id)
         return IngestResult(
             doc=refreshed,
@@ -94,6 +100,8 @@ def ingest_doc(
         tags=payload.tags,
         actor=actor,
     )
+    _apply_grants(storage, doc.id, payload.grants)
+    doc = storage.get_doc(doc.id)  # re-hydrate with grants for the response
     return IngestResult(doc=doc, created=True, warnings=warnings)
 
 

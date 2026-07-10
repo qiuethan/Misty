@@ -105,3 +105,25 @@ def test_ingest_bad_source_id_raises(store):
     with pytest.raises(BadReference):
         ingest_doc(DocIngest(url="https://x.com", source_id="nope"), storage=store,
                    fetchers=FakeFetchers(), directory=FakeDirectory(), actor="bot")
+
+
+def test_ingest_applies_grants(store):
+    payload = DocIngest(url="https://g.com", grants=[{"grantee_type": "org"}])
+    result = ingest_doc(payload, storage=store,
+                        fetchers=FakeFetchers(result=FetchResult(title="G")),
+                        directory=FakeDirectory(), actor="t")
+    grants = store.list_grants(result.doc.id)
+    assert [(g.grantee_type, g.grantee_id) for g in grants] == [("org", None)]
+
+
+def test_ingest_dedup_applies_grants_to_existing_doc(store):
+    f = FakeFetchers(result=FetchResult(title="X"))
+    first = ingest_doc(DocIngest(url="https://x.com/a"), storage=store,
+                       fetchers=f, directory=FakeDirectory(), actor="bot")
+    second = ingest_doc(
+        DocIngest(url="https://x.com/a/", grants=[{"grantee_type": "org"}]),
+        storage=store, fetchers=f, directory=FakeDirectory(), actor="bot",
+    )
+    assert second.doc.id == first.doc.id
+    grants = store.list_grants(first.doc.id)
+    assert [(g.grantee_type, g.grantee_id) for g in grants] == [("org", None)]

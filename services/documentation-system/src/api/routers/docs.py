@@ -5,10 +5,10 @@ from pydantic import BaseModel, ConfigDict
 
 from contracts.directory import DirectoryClient, DirectoryUnavailable
 from contracts.storage import StorageAdapter
-from contracts.types import Doc, DocIngest, DocUpdate, IngestResult
+from contracts.types import Doc, DocGrantInput, DocIngest, DocUpdate, IngestResult
 from contracts.visibility import ActorContext
 from src.api.auth import AuthedKey, get_actor, require_scope
-from src.api.authz import read_context
+from src.api.authz import get_visible_doc_or_404, read_context, write_context
 from src.api.deps import get_directory, get_fetchers, get_storage
 from src.fetch.registry import FetcherRegistry
 from src.ingest import BadReference, ingest_doc
@@ -122,6 +122,32 @@ def remove_tag(
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="doc not found")
     storage.remove_tag(doc_id, tag.strip().lower())
+    return storage.get_doc(doc_id)
+
+
+@router.post("/{doc_id}/grants", response_model=Doc)
+def add_grant(
+    doc_id: UUID,
+    body: DocGrantInput,
+    storage: StorageAdapter = Depends(get_storage),
+    wctx: ActorContext = Depends(write_context),
+    _: AuthedKey = Depends(require_scope("docs:write")),
+) -> Doc:
+    get_visible_doc_or_404(doc_id, wctx, storage)  # 404 if actor can't see it
+    storage.add_grant(doc_id, grantee_type=body.grantee_type, grantee_id=body.grantee_id, actor="api")
+    return storage.get_doc(doc_id)
+
+
+@router.delete("/{doc_id}/grants", response_model=Doc)
+def remove_grant(
+    doc_id: UUID,
+    body: DocGrantInput,
+    storage: StorageAdapter = Depends(get_storage),
+    wctx: ActorContext = Depends(write_context),
+    _: AuthedKey = Depends(require_scope("docs:write")),
+) -> Doc:
+    get_visible_doc_or_404(doc_id, wctx, storage)
+    storage.remove_grant(doc_id, grantee_type=body.grantee_type, grantee_id=body.grantee_id)
     return storage.get_doc(doc_id)
 
 

@@ -81,3 +81,17 @@ def test_read_all_key_sees_everything(ctx):
     client.post("/docs", json={"url": "https://x"}, headers=ADMIN)
     reader = mk_key(["docs:read:all"])
     assert len(client.get("/docs", headers=reader).json()) == 1
+
+
+def test_grant_endpoints_add_and_remove(ctx):
+    client, adapter, mk_key = ctx
+    doc_id = client.post("/docs", json={"url": "https://d"}, headers=ADMIN).json()["doc"]["id"]
+    r = client.post(f"/docs/{doc_id}/grants", json={"grantee_type": "org"}, headers=ADMIN)
+    assert r.status_code == 200
+    assert any(g["grantee_type"] == "org" for g in r.json()["grants"])
+    d = client.request(
+        "DELETE", f"/docs/{doc_id}/grants",
+        json={"grantee_type": "org"}, headers=ADMIN,
+    )
+    assert d.status_code == 200
+    assert client.get(f"/docs/{doc_id}", headers=ADMIN).json()["grants"] == []
