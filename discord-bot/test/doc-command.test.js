@@ -101,3 +101,28 @@ test('stacked autocomplete timeouts stay under Discord\'s 3s window', () => {
     `principal (${PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS}) + lookup (${AUTOCOMPLETE_TIMEOUT_MS}) must stay well under 3000ms`,
   );
 });
+
+test('list handler passes the caller person id as onBehalfOf', async () => {
+  let received;
+  const ctx = {
+    docService: { listDocs: async (args) => { received = args; return { outcome: 'LISTED', docs: [] }; } },
+  };
+  await findSub('list').handler({
+    options: { team: null, tag: null, source: null },
+    principal: { person: { id: 'p1' } }, ctx,
+  });
+  assert.equal(received.onBehalfOf, 'p1');
+});
+
+test('show handler passes the caller person id as onBehalfOf', async () => {
+  let received;
+  const ctx = {
+    docService: { showDoc: async (args) => { received = args; return { outcome: 'NOT_FOUND' }; } },
+  };
+  await findSub('show').handler({
+    options: { id: 'd1' },
+    principal: { person: { id: 'p1' } }, ctx,
+  });
+  assert.equal(received.id, 'd1');
+  assert.equal(received.onBehalfOf, 'p1');
+});

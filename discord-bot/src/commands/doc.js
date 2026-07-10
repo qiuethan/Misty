@@ -55,11 +55,13 @@ export default defineCommand({
         { name: 'tag', type: 'string', required: false, description: 'Filter by tag' },
         { name: 'source', type: 'string', required: false, description: 'Filter by source kind (e.g. gdocs, github)' },
       ],
-      async handler({ options, ctx }) {
+      async handler({ options, ctx, principal }) {
         const args = {};
         if (options.team !== null && options.team !== undefined) args.teamSlug = options.team;
         if (options.tag !== null && options.tag !== undefined) args.tag = options.tag;
         if (options.source !== null && options.source !== undefined) args.source = options.source;
+        // Read as the linked caller so the doc service filters to what they can see.
+        args.onBehalfOf = principal?.person?.id;
         const result = await ctx.docService.listDocs(args);
         return renderDocListResult(result);
       },
@@ -72,8 +74,8 @@ export default defineCommand({
       options: [
         { name: 'id', type: 'string', required: true, description: 'Doc id (from /doc list)' },
       ],
-      async handler({ options, ctx }) {
-        const result = await ctx.docService.showDoc({ id: options.id });
+      async handler({ options, ctx, principal }) {
+        const result = await ctx.docService.showDoc({ id: options.id, onBehalfOf: principal?.person?.id });
         return renderDocShowResult(result);
       },
     },
