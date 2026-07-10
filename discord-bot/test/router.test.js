@@ -1,6 +1,6 @@
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { dispatch, dispatchAutocomplete } from '../src/router.js';
+import { dispatch, dispatchAutocomplete, PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS } from '../src/router.js';
 import { defineCommand } from '../src/defineCommand.js';
 
 const publicCmd = defineCommand({
@@ -216,7 +216,8 @@ test('dispatchAutocomplete falls back to a null principal when the lookup exceed
       { commandName: 'doc', subcommand: 'list', focusedOption: 'team', typed: '', discordUserId: 'u1' },
       { commands, appContext },
     );
-    mock.timers.tick(1500);
+    // Tick past the principal budget (whatever it currently is) so the timeout fires.
+    mock.timers.tick(PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS + 100);
     const out = await pending;
     assert.equal(seenPrincipal, null);
     assert.deepEqual(out, []);
