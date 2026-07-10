@@ -78,8 +78,10 @@ def update_doc(
     storage: StorageAdapter = Depends(get_storage),
     directory: DirectoryClient = Depends(get_directory),
     actor: str = Depends(get_actor),
+    wctx: ActorContext = Depends(write_context),
     _: AuthedKey = Depends(require_scope("docs:write")),
 ) -> Doc:
+    get_visible_doc_or_404(doc_id, wctx, storage)
     values = payload.model_dump(exclude_unset=True)
     # Re-resolve labels when an owner id changes and the directory is reachable.
     # A genuinely unknown id (directory reachable, record not found) is a 400,
@@ -104,8 +106,10 @@ def add_tag(
     doc_id: UUID,
     body: TagBody,
     storage: StorageAdapter = Depends(get_storage),
+    wctx: ActorContext = Depends(write_context),
     _: AuthedKey = Depends(require_scope("docs:write")),
 ) -> Doc:
+    get_visible_doc_or_404(doc_id, wctx, storage)
     if not storage.add_tag(doc_id, body.tag.strip().lower()):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="doc not found")
     return storage.get_doc(doc_id)
@@ -116,8 +120,10 @@ def remove_tag(
     doc_id: UUID,
     tag: str,
     storage: StorageAdapter = Depends(get_storage),
+    wctx: ActorContext = Depends(write_context),
     _: AuthedKey = Depends(require_scope("docs:write")),
 ) -> Doc:
+    get_visible_doc_or_404(doc_id, wctx, storage)
     doc = storage.get_doc(doc_id)
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="doc not found")
@@ -157,12 +163,14 @@ def refetch(
     storage: StorageAdapter = Depends(get_storage),
     fetchers: FetcherRegistry = Depends(get_fetchers),
     actor: str = Depends(get_actor),
+    wctx: ActorContext = Depends(write_context),
     _: AuthedKey = Depends(require_scope("docs:write")),
 ) -> Doc:
     from datetime import datetime, timezone
 
     from contracts.fetcher import FetchError
 
+    get_visible_doc_or_404(doc_id, wctx, storage)
     doc = storage.get_doc(doc_id)
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="doc not found")

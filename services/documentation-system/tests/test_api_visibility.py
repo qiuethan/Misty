@@ -95,3 +95,20 @@ def test_grant_endpoints_add_and_remove(ctx):
     )
     assert d.status_code == 200
     assert client.get(f"/docs/{doc_id}", headers=ADMIN).json()["grants"] == []
+
+
+def test_on_behalf_write_to_invisible_doc_404(ctx):
+    client, adapter, mk_key = ctx
+    doc_id = client.post("/docs", json={"url": "https://secret"}, headers=ADMIN).json()["doc"]["id"]
+    writer = mk_key(["docs:write", "act-as-user"])
+    obo = {**writer, "X-On-Behalf-Of": P1}  # P1 has no grant on this doc
+    r = client.patch(f"/docs/{doc_id}", json={"description": "x"}, headers=obo)
+    assert r.status_code == 404
+
+
+def test_no_actor_write_key_can_patch(ctx):
+    client, adapter, mk_key = ctx
+    doc_id = client.post("/docs", json={"url": "https://any"}, headers=ADMIN).json()["doc"]["id"]
+    writer = mk_key(["docs:write"])
+    r = client.patch(f"/docs/{doc_id}", json={"description": "x"}, headers=writer)
+    assert r.status_code == 200
