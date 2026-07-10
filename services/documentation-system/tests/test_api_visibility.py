@@ -112,3 +112,37 @@ def test_no_actor_write_key_can_patch(ctx):
     writer = mk_key(["docs:write"])
     r = client.patch(f"/docs/{doc_id}", json={"description": "x"}, headers=writer)
     assert r.status_code == 200
+
+
+def test_team_grant_and_directory_down_degradation(ctx, monkeypatch):
+    client, adapter, mk_key = ctx
+    T1 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    team_doc = client.post("/docs", json={"url": "https://team"}, headers=ADMIN).json()["doc"]["id"]
+    org_doc = client.post("/docs", json={"url": "https://org"}, headers=ADMIN).json()["doc"]["id"]
+    client.post(f"/docs/{team_doc}/grants", json={"grantee_type": "team", "grantee_id": T1}, headers=ADMIN)
+    client.post(f"/docs/{org_doc}/grants", json={"grantee_type": "org"}, headers=ADMIN)
+
+    # Directory that knows the actor is on T1
+    client.app.dependency_overrides[get_directory] = lambda: FakeDirectory(teams=frozenset({UUID(T1)}))
+    reader = mk_key(["docs:read", "act-as-user"])
+    obo = {**reader, "X-On-Behalf-Of": P1}
+    urls = {d["url"] for d in client.get("/docs", headers=obo).json()}
+    assert urls == {"https://team", "https://org"}
+
+    # Directory DOWN: team grant withheld, org grant still visible (partial fail-closed)
+    class DownDir(FakeDirectory):
+        def get_active_team_ids(self, person_id):
+            from contracts.directory import DirectoryUnavailable
+            raise DirectoryUnavailable("down")
+    client.app.dependency_overrides[get_directory] = lambda: DownDir()
+    urls_down = {d["url"] for d in client.get("/docs", headers=obo).json()}
+    assert urls_down == {"https://org"}
+
+
+def test_content_snapshot_withheld_from_unauthorized_via_get(ctx):
+    client, adapter, mk_key = ctx
+    doc_id = client.post("/docs", json={"url": "https://c"}, headers=ADMIN).json()["doc"]["id"]
+    reader = mk_key(["docs:read", "act-as-user"])
+    obo = {**reader, "X-On-Behalf-Of": P1}
+    # Not granted -> 404, no content leaks
+    assert client.get(f"/docs/{doc_id}", headers=obo).status_code == 404
