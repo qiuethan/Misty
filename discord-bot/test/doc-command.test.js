@@ -126,3 +126,28 @@ test('show handler passes the caller person id as onBehalfOf', async () => {
   assert.equal(received.id, 'd1');
   assert.equal(received.onBehalfOf, 'p1');
 });
+
+test('list handler omits onBehalfOf when the caller is not linked (fail-closed)', async () => {
+  let received;
+  const ctx = {
+    docService: { listDocs: async (args) => { received = args; return { outcome: 'LISTED', docs: [] }; } },
+  };
+  await findSub('list').handler({
+    options: { team: null, tag: null, source: null },
+    principal: null, ctx,
+  });
+  assert.equal(received.onBehalfOf, undefined);
+});
+
+test('show handler omits onBehalfOf when the caller is not linked (fail-closed)', async () => {
+  let received;
+  const ctx = {
+    docService: { showDoc: async (args) => { received = args; return { outcome: 'NOT_FOUND' }; } },
+  };
+  await findSub('show').handler({
+    options: { id: 'd1' },
+    principal: null, ctx,
+  });
+  assert.equal(received.id, 'd1');
+  assert.equal(received.onBehalfOf, undefined);
+});
