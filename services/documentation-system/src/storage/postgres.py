@@ -171,6 +171,8 @@ class PostgresStorageAdapter:
         stmt = stmt.order_by(docs.c.created_at)
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).all()
+            # grants are intentionally omitted here (left as []) to avoid an
+            # N+1 grant lookup per doc; only get_doc hydrates grants.
             return [self._row_to_doc(conn, r) for r in rows]
 
     def update_doc(self, doc_id: UUID, values: dict, *, actor: str) -> Doc | None:

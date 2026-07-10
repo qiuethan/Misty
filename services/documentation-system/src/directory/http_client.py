@@ -55,4 +55,7 @@ class HttpDirectoryClient:
                 client.close()
         if not (200 <= resp.status_code < 300):
             raise DirectoryUnavailable(f"directory returned {resp.status_code}")
-        return frozenset(UUID(m["team_id"]) for m in resp.json())
+        try:
+            return frozenset(UUID(m["team_id"]) for m in resp.json())
+        except (KeyError, ValueError, TypeError) as e:
+            raise DirectoryUnavailable(f"malformed memberships response: {e}") from e

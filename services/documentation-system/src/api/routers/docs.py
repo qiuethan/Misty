@@ -228,5 +228,8 @@ def _backfill_labels(doc: Doc, storage: StorageAdapter, directory: DirectoryClie
         if label is not None:
             values["owning_person_label"] = label
     if values:
-        return storage.update_doc(doc.id, values, actor="label-backfill")
+        updated = storage.update_doc(doc.id, values, actor="label-backfill")
+        # update_doc's Doc reconstruction always yields grants=[]; the input
+        # doc is already hydrated with grants, so carry them forward.
+        return updated.model_copy(update={"grants": doc.grants})
     return doc

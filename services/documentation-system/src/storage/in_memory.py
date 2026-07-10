@@ -88,6 +88,8 @@ class InMemoryStorageAdapter:
                 continue
             if not self._visible(doc, visibility):
                 continue
+            # grants are intentionally omitted here (left as []) to avoid an
+            # N+1 grant lookup per doc; only get_doc hydrates grants.
             out.append(self._hydrate(doc))
         return out
 

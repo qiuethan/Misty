@@ -146,3 +146,31 @@ def test_content_snapshot_withheld_from_unauthorized_via_get(ctx):
     obo = {**reader, "X-On-Behalf-Of": P1}
     # Not granted -> 404, no content leaks
     assert client.get(f"/docs/{doc_id}", headers=obo).status_code == 404
+
+
+def test_get_preserves_grants_when_label_backfill_fires(ctx):
+    """A GET that triggers _backfill_labels (owner set, label null because the
+    directory was down at ingest) must still return the doc's grants — the
+    backfill's storage.update_doc round-trip must not silently drop them."""
+    client, adapter, mk_key = ctx
+    T1 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
+    class DownDirectory(FakeDirectory):
+        def get_team_label(self, team_id):
+            from contracts.directory import DirectoryUnavailable
+            raise DirectoryUnavailable("down")
+
+    # Directory unavailable at ingest -> owning_team_label stays null.
+    client.app.dependency_overrides[get_directory] = lambda: DownDirectory()
+    doc_id = client.post(
+        "/docs", json={"url": "https://backfill", "owning_team_id": T1}, headers=ADMIN
+    ).json()["doc"]["id"]
+    client.post(f"/docs/{doc_id}/grants", json={"grantee_type": "org"}, headers=ADMIN)
+
+    # Directory reachable again -> the next GET triggers _backfill_labels.
+    client.app.dependency_overrides[get_directory] = lambda: FakeDirectory()
+    r = client.get(f"/docs/{doc_id}", headers=ADMIN)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["owning_team_label"] == "T"
+    assert any(g["grantee_type"] == "org" for g in body["grants"])
