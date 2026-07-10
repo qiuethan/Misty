@@ -218,3 +218,58 @@ def test_pg_external_id_owned_by_another_person_raises(adapter):
         adapter.create_person_identifier(
             person_b.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t"
         )
+
+
+def _seed_person(adapter, email="a@x.com", name="A"):
+    return adapter.create_person(PersonCreate(display_name=name, primary_email=email), actor="t")
+
+
+def test_pg_add_multiple_emails_to_one_person(adapter):
+    p = _seed_person(adapter, "p@x.com")
+    adapter.add_person_email(p.id, "one@x.com", actor="t")
+    adapter.add_person_email(p.id, "two@x.com", actor="t")
+    emails = [i.external_id for i in adapter.list_person_identifiers(p.id) if i.provider == "email"]
+    assert sorted(emails) == ["one@x.com", "two@x.com"]
+
+
+def test_pg_add_email_normalizes(adapter):
+    p = _seed_person(adapter, "p@x.com")
+    adapter.add_person_email(p.id, "  MixEd@Case.COM ", actor="t")
+    assert adapter.get_person_by_identifier("email", "mixed@case.com").id == p.id
+
+
+def test_pg_add_email_idempotent(adapter):
+    p = _seed_person(adapter, "p@x.com")
+    first = adapter.add_person_email(p.id, "e@x.com", actor="t")
+    again = adapter.add_person_email(p.id, "E@X.com", actor="t")
+    assert again.id == first.id
+    assert sum(i.provider == "email" for i in adapter.list_person_identifiers(p.id)) == 1
+
+
+def test_pg_add_email_rejects_another_persons_identifier(adapter):
+    a = _seed_person(adapter, "a@x.com", "A")
+    b = _seed_person(adapter, "b@x.com", "B")
+    adapter.add_person_email(a.id, "shared@x.com", actor="t")
+    with pytest.raises(ValueError, match="email_registered_to_another"):
+        adapter.add_person_email(b.id, "shared@x.com", actor="t")
+
+
+def test_pg_add_email_rejects_another_persons_primary(adapter):
+    _seed_person(adapter, "a@x.com", "A")
+    b = _seed_person(adapter, "b@x.com", "B")
+    with pytest.raises(ValueError, match="email_registered_to_another"):
+        adapter.add_person_email(b.id, "A@X.com", actor="t")  # a's primary
+
+
+def test_pg_generic_identifier_ops_reject_email_provider(adapter):
+    p = _seed_person(adapter, "p@x.com")
+    with pytest.raises(ValueError, match="email_not_addressable_by_provider"):
+        adapter.create_person_identifier(
+            p.id, PersonIdentifierCreate(provider="email", external_id="e@x.com"), actor="t"
+        )
+    with pytest.raises(ValueError, match="email_not_addressable_by_provider"):
+        adapter.update_person_identifier(
+            p.id, "email", PersonIdentifierUpdate(external_id="e@x.com"), actor="t"
+        )
+    with pytest.raises(ValueError, match="email_not_addressable_by_provider"):
+        adapter.delete_person_identifier(p.id, "email")

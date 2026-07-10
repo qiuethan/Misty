@@ -37,6 +37,10 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _norm_email(v: str) -> str:
+    return v.strip().lower()
+
+
 def _person_row_to_model(row) -> Person:
     return Person(
         id=row.id,
@@ -387,6 +391,8 @@ class PostgresStorageAdapter:
     def create_person_identifier(
         self, person_id: UUID, payload: PersonIdentifierCreate, *, actor: str
     ) -> PersonIdentifier:
+        if payload.provider == "email":
+            raise ValueError("email_not_addressable_by_provider")
         try:
             with self._engine.begin() as conn:
                 row = conn.execute(
@@ -420,6 +426,8 @@ class PostgresStorageAdapter:
     def update_person_identifier(
         self, person_id: UUID, provider: str, payload: PersonIdentifierUpdate, *, actor: str
     ) -> PersonIdentifier | None:
+        if provider == "email":
+            raise ValueError("email_not_addressable_by_provider")
         patch = payload.model_dump(exclude_unset=True)
         patch["updated_at"] = _now()
         patch["updated_by"] = actor
@@ -439,6 +447,8 @@ class PostgresStorageAdapter:
         return _identifier_row_to_model(row) if row else None
 
     def delete_person_identifier(self, person_id: UUID, provider: str) -> bool:
+        if provider == "email":
+            raise ValueError("email_not_addressable_by_provider")
         with self._engine.begin() as conn:
             result = conn.execute(
                 delete(person_identifiers).where(
@@ -449,6 +459,7 @@ class PostgresStorageAdapter:
         return result.rowcount > 0
 
     def get_person_by_identifier(self, provider: str, external_id: str) -> Person | None:
+        target = _norm_email(external_id) if provider == "email" else external_id
         with self._engine.connect() as conn:
             row = conn.execute(
                 select(people)
@@ -457,10 +468,42 @@ class PostgresStorageAdapter:
                 )
                 .where(
                     person_identifiers.c.provider == provider,
-                    person_identifiers.c.external_id == external_id,
+                    person_identifiers.c.external_id == target,
                 )
             ).one_or_none()
         return _person_row_to_model(row) if row else None
+
+    def add_person_email(self, person_id: UUID, email: str, *, actor: str) -> PersonIdentifier:
+        addr = _norm_email(email)
+        with self._engine.begin() as conn:
+            existing = conn.execute(
+                select(person_identifiers).where(
+                    person_identifiers.c.provider == "email",
+                    person_identifiers.c.external_id == addr,
+                )
+            ).one_or_none()
+            if existing is not None:
+                if existing.person_id == person_id:
+                    return _identifier_row_to_model(existing)
+                raise ValueError("email_registered_to_another")
+            primary_owner = conn.execute(
+                select(people.c.id).where(people.c.primary_email == addr)
+            ).scalar_one_or_none()
+            if primary_owner is not None and primary_owner != person_id:
+                raise ValueError("email_registered_to_another")
+            row = conn.execute(
+                insert(person_identifiers)
+                .values(
+                    person_id=person_id,
+                    provider="email",
+                    external_id=addr,
+                    handle=None,
+                    created_by=actor,
+                    updated_by=actor,
+                )
+                .returning(person_identifiers)
+            ).one()
+        return _identifier_row_to_model(row)
 
     # --- API keys ---
 
