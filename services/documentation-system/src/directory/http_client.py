@@ -39,3 +39,23 @@ class HttpDirectoryClient:
 
     def get_person_label(self, person_id: UUID) -> str | None:
         return self._get_label(f"/people/{person_id}", "display_name")
+
+    def get_active_team_ids(self, person_id: UUID) -> frozenset[UUID]:
+        client = self._client or httpx.Client(timeout=_TIMEOUT)
+        try:
+            resp = client.get(
+                f"{self._base_url}/memberships",
+                params={"person_id": str(person_id), "active_only": "true"},
+                headers={"X-API-Key": self._api_key},
+            )
+        except httpx.HTTPError as e:
+            raise DirectoryUnavailable(f"directory unreachable: {e}") from e
+        finally:
+            if self._client is None:
+                client.close()
+        if not (200 <= resp.status_code < 300):
+            raise DirectoryUnavailable(f"directory returned {resp.status_code}")
+        try:
+            return frozenset(UUID(m["team_id"]) for m in resp.json())
+        except (KeyError, ValueError, TypeError) as e:
+            raise DirectoryUnavailable(f"malformed memberships response: {e}") from e

@@ -15,3 +15,4 @@ _deps = build_auth(
 require_api_key = _deps.require_api_key
 require_scope = _deps.require_scope
 get_actor = _deps.get_actor
+get_on_behalf_actor = _deps.get_on_behalf_actor
