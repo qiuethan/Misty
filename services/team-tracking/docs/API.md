@@ -461,7 +461,9 @@ curl -sS "http://localhost:8000/role_kinds/lead" \
 
 ## Providers
 
-Providers are the controlled vocabulary of identity provider types. The four seed values are `discord`, `github`, `notion`, and `uoft_email`. They are read-only through the API (no create/update endpoints). Both endpoints require scope `providers:read`.
+Providers are the controlled vocabulary of identity provider types. The five seed values are `discord`, `github`, `notion`, `uoft_email`, and `email`. They are read-only through the API (no create/update endpoints). Both endpoints require scope `providers:read`.
+
+The `email` provider is special-cased: it is **multi-valued** (a person may have many `email` identifiers, unlike the "one link per provider" rule that governs every other provider) and is managed through its own dedicated endpoint, `POST /people/{id}/emails`, rather than the generic identifier `POST`/`PATCH`/`DELETE` endpoints below. See that section for details.
 
 ### GET /providers
 
@@ -524,7 +526,7 @@ curl -sS "http://localhost:8000/providers/discord" \
 
 ## Person identifiers
 
-A `PersonIdentifier` row records that a person holds an external account on a given provider (e.g., Discord account snowflake, GitHub username). Each person can have at most one link per provider. Identity mappings are current state, not history: unlinking hard-deletes the row via the DELETE endpoint (a deliberate exception to the "never hard-delete" convention for people/teams/memberships). Re-linking requires unlink-then-relink.
+A `PersonIdentifier` row records that a person holds an external account on a given provider (e.g., Discord account snowflake, GitHub username). Each person can have at most one link per provider — **except `email`**, which is multi-valued (see [`POST /people/{id}/emails`](#post-peoplepersonidemails) below) and is not addressable through the generic endpoints on this page. Identity mappings are current state, not history: unlinking hard-deletes the row via the DELETE endpoint (a deliberate exception to the "never hard-delete" convention for people/teams/memberships). Re-linking requires unlink-then-relink.
 
 Identity operations require scopes `identifiers:read` (for GET) and `identifiers:write` (for POST/PATCH/DELETE).
 
@@ -589,6 +591,45 @@ curl -sS "http://localhost:8000/people/550e8400-e29b-41d4-a716-446655440000/iden
 
 ---
 
+### POST /people/{person_id}/emails
+
+Add a **verified additional email** to a person, as an `email`-provider `PersonIdentifier`. Unlike every other provider, `email` is **multi-valued**: a person can have many `email` identifiers (e.g. an alumni address, a work address, a secondary school address), on top of their single `primary_email` on the `Person` record. This is the only endpoint that can create an `email` identifier — the generic `POST/PATCH/DELETE /people/{id}/identifiers/{provider}` endpoints below reject `provider="email"`.
+
+**Scope:** `identifiers:write`.
+
+**Path parameters:**
+
+| Param | Type | Notes |
+|-------|------|-------|
+| `person_id` | UUID | |
+
+**Request body:**
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `email` | string | yes | Normalized to lowercase before storage and comparison |
+
+**Response:** `PersonIdentifier` object (`provider: "email"`), HTTP 201.
+
+**Uniqueness — one person per email.** The submitted address is checked against **both** namespaces before it is accepted: every person's `primary_email`, and every existing `email` identifier (belonging to anyone). If the (normalized) address already belongs to a *different* person in either namespace, the request fails with `409 Conflict` (`email_registered_to_another`).
+
+**Idempotent.** If the address is already linked as an `email` identifier for the *same* person, the call succeeds and returns the existing identifier unchanged rather than erroring or creating a duplicate.
+
+**Errors:**
+- 404 if person not found
+- 409 if the email belongs to a different person (as `primary_email` or as another person's `email` identifier)
+- 422 if `email` is missing or malformed
+
+```bash
+curl -sS -X POST "http://localhost:8000/people/550e8400-e29b-41d4-a716-446655440000/emails" \
+  -H "X-API-Key: dev-api-key-change-me" \
+  -H "X-Actor: discord-bot" \
+  -H "Content-Type: application/json" \
+  -d '{"email": "alex.chen@alumni.utoronto.ca"}'
+```
+
+---
+
 ### POST /people/{person_id}/identifiers
 
 Link an external account to a person.
@@ -612,7 +653,7 @@ Link an external account to a person.
 **Errors:** 
 - 400 if `provider` does not exist or is inactive
 - 404 if person not found
-- 409 if person already has that provider linked, or if (provider, external_id) is linked to a different person
+- 409 if person already has that provider linked, if (provider, external_id) is linked to a different person, or if `provider="email"` (rejected — use [`POST /people/{id}/emails`](#post-peoplepersonidemails) instead)
 - 422 if required fields are missing or validation fails
 
 ```bash
@@ -651,7 +692,7 @@ Update an existing link (change `external_id` and/or `handle`).
 
 **Errors:**
 - 404 if person or identifier link not found
-- 409 if new `external_id` is already linked to a different person
+- 409 if new `external_id` is already linked to a different person, or if `provider="email"` (rejected — `email` identifiers are managed via [`POST /people/{id}/emails`](#post-peoplepersonidemails), not PATCH)
 - 422 if validation fails
 
 ```bash
@@ -679,7 +720,7 @@ Unlink an external account from a person.
 
 **Response:** HTTP 204 (No Content).
 
-**Errors:** 404 if person or identifier link not found.
+**Errors:** 404 if person or identifier link not found. 409 if `provider="email"` (rejected — the generic DELETE cannot remove an `email` identifier).
 
 ```bash
 curl -sS -X DELETE "http://localhost:8000/people/550e8400-e29b-41d4-a716-446655440000/identifiers/discord" \
