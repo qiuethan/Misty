@@ -147,7 +147,7 @@ def build_auth(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="X-On-Behalf-Of must be a UUID",
-            )
+            ) from None
         audit.info(json.dumps({
             "event": "on_behalf_of_asserted", "key_name": key.name, "actor": str(actor_id),
         }))
