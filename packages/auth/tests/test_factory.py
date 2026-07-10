@@ -131,3 +131,64 @@ def test_dev_spoof_reject_log_includes_injected_fields(caplog):
     assert parsed["scope"] == "dev:spoof"
     assert parsed["tt_env"] == "production"
     assert parsed["key_name"] == "playground"
+
+
+def _app_with_actor(store, **kw):
+    from platform_auth.factory import build_auth
+    deps = build_auth(lambda: store, envelope="tt_", get_env_key=lambda: "", **kw)
+    app = FastAPI()
+
+    @app.get("/actor")
+    def actor(a=Depends(deps.get_on_behalf_actor)):
+        return {"actor": str(a) if a is not None else None}
+
+    return app
+
+
+def test_on_behalf_actor_returned_with_act_as_user_scope():
+    store = _Store()
+    key = store.add("bot", ["act-as-user", "people:read"])
+    client = TestClient(_app_with_actor(store))
+    pid = "11111111-1111-1111-1111-111111111111"
+    r = client.get("/actor", headers={"X-API-Key": key, "X-On-Behalf-Of": pid})
+    assert r.status_code == 200
+    assert r.json() == {"actor": pid}
+
+
+def test_on_behalf_actor_absent_returns_none():
+    store = _Store()
+    key = store.add("bot", ["act-as-user"])
+    client = TestClient(_app_with_actor(store))
+    r = client.get("/actor", headers={"X-API-Key": key})
+    assert r.status_code == 200
+    assert r.json() == {"actor": None}
+
+
+def test_on_behalf_actor_without_scope_is_403():
+    store = _Store()
+    key = store.add("bot", ["people:read"])  # no act-as-user
+    client = TestClient(_app_with_actor(store))
+    r = client.get(
+        "/actor",
+        headers={"X-API-Key": key, "X-On-Behalf-Of": "11111111-1111-1111-1111-111111111111"},
+    )
+    assert r.status_code == 403
+
+
+def test_on_behalf_actor_admin_wildcard_does_not_grant_act_as_user():
+    store = _Store()
+    key = store.add("bot", ["admin"])  # wildcard must NOT bypass literal act-as-user
+    client = TestClient(_app_with_actor(store))
+    r = client.get(
+        "/actor",
+        headers={"X-API-Key": key, "X-On-Behalf-Of": "11111111-1111-1111-1111-111111111111"},
+    )
+    assert r.status_code == 403
+
+
+def test_on_behalf_actor_malformed_uuid_is_400():
+    store = _Store()
+    key = store.add("bot", ["act-as-user"])
+    client = TestClient(_app_with_actor(store))
+    r = client.get("/actor", headers={"X-API-Key": key, "X-On-Behalf-Of": "not-a-uuid"})
+    assert r.status_code == 400

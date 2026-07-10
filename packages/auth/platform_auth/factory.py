@@ -10,12 +10,14 @@ import logging
 import secrets
 from dataclasses import dataclass
 from typing import Callable
+from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException, status
 from starlette.requests import Request
 
 from platform_auth.hashing import parse_prefix, verify_key
 from platform_auth.models import (
+    ACT_AS_USER_SCOPE,
     ADMIN_SCOPE,
     DEV_SPOOF_SCOPE,
     ApiKeyStore,
@@ -30,6 +32,7 @@ class AuthDeps:
     require_api_key: Callable
     require_scope: Callable
     get_actor: Callable
+    get_on_behalf_actor: Callable
 
 
 def _unauthorized() -> HTTPException:
@@ -123,8 +126,29 @@ def build_auth(
             return x_actor
         return key.name
 
+    def get_on_behalf_actor(
+        x_on_behalf_of: str | None = Header(default=None, alias="X-On-Behalf-Of"),
+        key: AuthedKey = Depends(require_api_key),
+    ) -> UUID | None:
+        if x_on_behalf_of is None:
+            return None
+        # Literal check, not has_scope — an admin wildcard must NOT grant this.
+        if ACT_AS_USER_SCOPE not in key.scopes:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"missing scope: {ACT_AS_USER_SCOPE}",
+            )
+        try:
+            return UUID(x_on_behalf_of)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="X-On-Behalf-Of must be a UUID",
+            )
+
     return AuthDeps(
         require_api_key=require_api_key,
         require_scope=require_scope,
         get_actor=get_actor,
+        get_on_behalf_actor=get_on_behalf_actor,
     )
