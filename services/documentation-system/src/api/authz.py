@@ -34,6 +34,11 @@ def read_context(
     directory: DirectoryClient = Depends(get_directory),
 ) -> ActorContext:
     if actor_id is not None:
+        if not (key.has_scope(DOCS_READ) or key.has_scope(DOCS_READ_ALL)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"missing scope: {DOCS_READ}",
+            )
         return _actor(actor_id, directory)
     if key.has_scope(DOCS_READ_ALL):  # admin wildcard satisfies via has_scope
         return SEE_ALL

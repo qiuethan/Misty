@@ -64,6 +64,26 @@ def test_read_context_no_actor_no_read_scope_403():
     assert ei.value.status_code == 403
 
 
+def test_read_context_actor_without_read_scope_403():
+    from fastapi import HTTPException
+    from src.api.authz import read_context
+    with pytest.raises(HTTPException) as ei:
+        read_context(actor_id=UUID(int=1), key=_Key(["act-as-user"]), directory=_Dir())
+    assert ei.value.status_code == 403
+
+
+def test_read_context_actor_with_read_scope_ok():
+    from src.api.authz import read_context
+    ctx = read_context(actor_id=UUID(int=1), key=_Key(["docs:read"]), directory=_Dir())
+    assert isinstance(ctx, Actor)
+
+
+def test_read_context_actor_with_read_all_scope_ok():
+    from src.api.authz import read_context
+    ctx = read_context(actor_id=UUID(int=1), key=_Key(["docs:read:all"]), directory=_Dir())
+    assert isinstance(ctx, Actor)
+
+
 def test_write_context_no_actor_is_see_all():
     from src.api.authz import write_context
     assert write_context(actor_id=None, directory=_Dir()) is SEE_ALL
