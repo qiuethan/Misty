@@ -41,3 +41,12 @@ def test_docingest_only_url_required():
 def test_docingest_forbids_unknown_fields():
     with pytest.raises(ValidationError):
         DocIngest(url="https://x.com", bogus="nope")
+
+
+def test_doc_grants_table_shape():
+    from src.storage.schema import doc_grants
+    cols = set(doc_grants.c.keys())
+    assert cols == {"id", "doc_id", "grantee_type", "grantee_id", "created_at", "created_by"}
+    constraint_names = {c.name for c in doc_grants.constraints if c.name}
+    assert "ck_doc_grants_grantee_shape" in constraint_names
+    assert "uq_doc_grants_grantee" in constraint_names
