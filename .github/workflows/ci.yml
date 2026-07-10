@@ -71,6 +71,46 @@ jobs:
       - name: Ruff check
         run: uv run ruff check .
 
+  verification-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: verification
+          POSTGRES_PASSWORD: dev_password
+          POSTGRES_DB: verification
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U verification"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://verification:dev_password@localhost:5434/verification
+    defaults:
+      run:
+        working-directory: services/verification
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Run migrations
+        run: uv run alembic upgrade head
+      - name: Run tests
+        run: uv run pytest
+      - name: Ruff check
+        run: uv run ruff check .
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
   llm-test:
     runs-on: ubuntu-latest
     defaults:
@@ -126,3 +166,7 @@ jobs:
         run: docker build -t discord-bot:ci ./discord-bot
       - name: Smoke-test discord-bot image (source parses)
         run: docker run --rm discord-bot:ci node --check src/index.js
+      - name: Build verification image
+        run: docker build -f services/verification/Dockerfile -t verification:ci .
+      - name: Smoke-test verification image (imports incl. contracts/ resolve at boot)
+        run: docker run --rm verification:ci python -c "import src.api.app"
