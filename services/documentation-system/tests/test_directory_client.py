@@ -1,4 +1,4 @@
-from uuid import uuid4
+from uuid import uuid4, UUID
 
 import httpx
 import pytest
@@ -55,3 +55,45 @@ def test_403_raises_unavailable():
     dc = HttpDirectoryClient("http://dir", "k", client=_client(handler))
     with pytest.raises(DirectoryUnavailable):
         dc.get_team_label(uuid4())
+
+
+def test_get_active_team_ids_parses_team_ids():
+    pid = UUID("11111111-1111-1111-1111-111111111111")
+
+    def handler(request):
+        assert request.url.path == "/memberships"
+        assert request.url.params["person_id"] == str(pid)
+        assert request.url.params["active_only"] == "true"
+        return httpx.Response(200, json=[
+            {"team_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"},
+            {"team_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"},
+        ])
+
+    dc = HttpDirectoryClient("http://dir", "k", client=_client(handler))
+    ids = dc.get_active_team_ids(pid)
+    assert ids == frozenset({
+        UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+    })
+
+
+def test_get_active_team_ids_empty():
+    pid = UUID("11111111-1111-1111-1111-111111111111")
+
+    def handler(request):
+        return httpx.Response(200, json=[])
+
+    dc = HttpDirectoryClient("http://dir", "k", client=_client(handler))
+    ids = dc.get_active_team_ids(pid)
+    assert ids == frozenset()
+
+
+def test_get_active_team_ids_5xx_raises_unavailable():
+    pid = UUID("11111111-1111-1111-1111-111111111111")
+
+    def handler(request):
+        return httpx.Response(503)
+
+    dc = HttpDirectoryClient("http://dir", "k", client=_client(handler))
+    with pytest.raises(DirectoryUnavailable):
+        dc.get_active_team_ids(pid)

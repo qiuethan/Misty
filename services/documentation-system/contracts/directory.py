@@ -17,3 +17,8 @@ class DirectoryClient(Protocol):
         """Return the person's display name, or None if no such person.
         Raises DirectoryUnavailable if the directory cannot be reached."""
         ...
+
+    def get_active_team_ids(self, person_id: UUID) -> frozenset[UUID]:
+        """Return the set of team_ids the person is an active member of.
+        Raises DirectoryUnavailable if the directory cannot be reached."""
+        ...
