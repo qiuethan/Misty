@@ -111,3 +111,26 @@ test('removeDoc returns REMOVED with doc', async () => {
   assert.equal(res.outcome, 'REMOVED');
   assert.equal(res.doc.active, false);
 });
+
+test('listDocs threads onBehalfOf to the doc client', async () => {
+  let received;
+  const svc = createDocService({
+    directory: {},
+    docClient: { listDocs: async (args) => { received = args; return [{ id: 'd1' }]; } },
+  });
+  const res = await svc.listDocs({ onBehalfOf: 'p1' });
+  assert.equal(res.outcome, 'LISTED');
+  assert.equal(received.onBehalfOf, 'p1');
+});
+
+test('showDoc threads onBehalfOf to the doc client', async () => {
+  let received;
+  const svc = createDocService({
+    directory: {},
+    docClient: { getDoc: async (id, opts) => { received = { id, opts }; return { id }; } },
+  });
+  const res = await svc.showDoc({ id: 'd1', onBehalfOf: 'p1' });
+  assert.equal(res.outcome, 'SHOWN');
+  assert.equal(received.id, 'd1');
+  assert.equal(received.opts.onBehalfOf, 'p1');
+});
