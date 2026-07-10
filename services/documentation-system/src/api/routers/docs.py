@@ -6,7 +6,9 @@ from pydantic import BaseModel, ConfigDict
 from contracts.directory import DirectoryClient, DirectoryUnavailable
 from contracts.storage import StorageAdapter
 from contracts.types import Doc, DocIngest, DocUpdate, IngestResult
+from contracts.visibility import ActorContext
 from src.api.auth import AuthedKey, get_actor, require_scope
+from src.api.authz import read_context
 from src.api.deps import get_directory, get_fetchers, get_storage
 from src.fetch.registry import FetcherRegistry
 from src.ingest import BadReference, ingest_doc
@@ -47,12 +49,12 @@ def list_docs(
     tag: str | None = None,
     active_only: bool = True,
     storage: StorageAdapter = Depends(get_storage),
-    _: AuthedKey = Depends(require_scope("docs:read")),
+    ctx: ActorContext = Depends(read_context),
 ) -> list[Doc]:
     return storage.list_docs(
         owning_team_id=owning_team_id, owning_person_id=owning_person_id,
         source_id=source_id, tag=tag.strip().lower() if tag is not None else None,
-        active_only=active_only,
+        active_only=active_only, visibility=ctx,
     )
 
 
@@ -61,9 +63,9 @@ def get_doc(
     doc_id: UUID,
     storage: StorageAdapter = Depends(get_storage),
     directory: DirectoryClient = Depends(get_directory),
-    _: AuthedKey = Depends(require_scope("docs:read")),
+    ctx: ActorContext = Depends(read_context),
 ) -> Doc:
-    doc = storage.get_doc(doc_id)
+    doc = storage.get_doc(doc_id, visibility=ctx)
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="doc not found")
     return _backfill_labels(doc, storage, directory)

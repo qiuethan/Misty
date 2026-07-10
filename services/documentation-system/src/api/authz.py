@@ -14,7 +14,7 @@ from contracts.types import Doc
 from contracts.visibility import Actor, ActorContext, DENY, SEE_ALL
 from platform_auth import AuthedKey
 from src.api.auth import get_on_behalf_actor, require_api_key
-from src.api.deps import get_directory, get_storage
+from src.api.deps import get_directory
 
 DOCS_READ = "docs:read"
 DOCS_READ_ALL = "docs:read:all"
