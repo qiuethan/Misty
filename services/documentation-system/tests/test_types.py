@@ -50,3 +50,22 @@ def test_doc_grants_table_shape():
     constraint_names = {c.name for c in doc_grants.constraints if c.name}
     assert "ck_doc_grants_grantee_shape" in constraint_names
     assert "uq_doc_grants_grantee" in constraint_names
+
+
+def test_doc_grant_input_org_rejects_id():
+    from contracts.types import DocGrantInput
+    with pytest.raises(ValidationError):
+        DocGrantInput(grantee_type="org", grantee_id="11111111-1111-1111-1111-111111111111")
+
+
+def test_doc_grant_input_person_requires_id():
+    from contracts.types import DocGrantInput
+    with pytest.raises(ValidationError):
+        DocGrantInput(grantee_type="person", grantee_id=None)
+
+
+def test_doc_grant_input_valid_shapes():
+    from contracts.types import DocGrantInput
+    assert DocGrantInput(grantee_type="org").grantee_id is None
+    g = DocGrantInput(grantee_type="team", grantee_id="11111111-1111-1111-1111-111111111111")
+    assert str(g.grantee_id) == "11111111-1111-1111-1111-111111111111"
