@@ -346,7 +346,13 @@ def _person(a):
 
 def test_list_and_get_providers():
     a = _adapter()
-    assert {p.id for p in a.list_providers()} == {"discord", "github", "notion", "uoft_email"}
+    assert {p.id for p in a.list_providers()} == {
+        "discord",
+        "github",
+        "notion",
+        "uoft_email",
+        "email",
+    }
     assert a.get_provider("discord").label == "Discord"
     assert a.get_provider("nope") is None
 

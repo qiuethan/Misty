@@ -28,7 +28,13 @@ def client(monkeypatch):
 def test_list_providers(client):
     resp = client.get("/providers", headers=AUTH)
     assert resp.status_code == 200
-    assert {p["id"] for p in resp.json()} == {"discord", "github", "notion", "uoft_email"}
+    assert {p["id"] for p in resp.json()} == {
+        "discord",
+        "github",
+        "notion",
+        "uoft_email",
+        "email",
+    }
 
 
 def test_get_provider(client):

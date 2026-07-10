@@ -36,8 +36,19 @@ def test_person_identifiers_unique_constraints():
         for uc in person_identifiers.constraints
         if uc.__class__.__name__ == "UniqueConstraint"
     }
-    assert ("person_id", "provider") in constraint_cols
     assert ("external_id", "provider") in constraint_cols
+
+
+def test_person_provider_uniqueness_is_partial_excluding_email():
+    from src.storage.schema import person_identifiers
+
+    idx = next(
+        ix
+        for ix in person_identifiers.indexes
+        if ix.name == "uq_person_identifiers_person_provider"
+    )
+    assert idx.unique is True
+    assert "email" in str(idx.dialect_options["postgresql"]["where"])
 
 
 def test_people_has_access_level_column():
