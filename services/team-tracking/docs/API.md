@@ -618,7 +618,7 @@ Add a **verified additional email** to a person, as an `email`-provider `PersonI
 **Errors:**
 - 404 if person not found
 - 409 if the email belongs to a different person (as `primary_email` or as another person's `email` identifier)
-- 422 if `email` is missing or malformed
+- 422 if `email` is missing
 
 ```bash
 curl -sS -X POST "http://localhost:8000/people/550e8400-e29b-41d4-a716-446655440000/emails" \
