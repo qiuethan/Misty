@@ -140,7 +140,21 @@ class StorageAdapter(Protocol):
         """Link an external account to a person. Raises ValueError if the person
         already has this provider linked, or the (provider, external_id) already
         belongs to another person. Does not validate person/provider existence —
-        the router pre-checks those to map 404 vs 400."""
+        the router pre-checks those to map 404 vs 400.
+
+        Rejects provider='email' with ValueError('email_not_addressable_by_provider')
+        — email is multi-valued; use `add_person_email` instead."""
+        ...
+
+    def add_person_email(self, person_id: UUID, email: str, *, actor: str) -> PersonIdentifier:
+        """Attach a verified email (provider='email') to a person.
+
+        Normalizes the address; raises ValueError('email_registered_to_another')
+        if another person owns it (as primary_email or an email identifier);
+        idempotently returns the caller's existing email identifier if present.
+        The generic create/update/delete_person_identifier reject provider='email'
+        (multi-valued; use this method / the /emails endpoint instead).
+        """
         ...
 
     def update_person_identifier(
@@ -148,14 +162,21 @@ class StorageAdapter(Protocol):
     ) -> PersonIdentifier | None:
         """Update external_id/handle of the (person_id, provider) link. Returns
         None if no such link. Raises ValueError if a new external_id collides
-        with another person's link on the same provider."""
+        with another person's link on the same provider.
+
+        Rejects provider='email' with ValueError('email_not_addressable_by_provider')
+        — email is multi-valued; use `add_person_email` instead."""
         ...
 
     def delete_person_identifier(self, person_id: UUID, provider: str) -> bool:
         """Hard-delete the (person_id, provider) link. True if removed, False if
-        no such link. Identity mappings are current state, not history."""
+        no such link. Identity mappings are current state, not history.
+
+        Rejects provider='email' with ValueError('email_not_addressable_by_provider')
+        — email is multi-valued; deletion is not exposed for it here."""
         ...
 
     def get_person_by_identifier(self, provider: str, external_id: str) -> Person | None:
-        """Reverse lookup: resolve an external account to its Person, or None."""
+        """Reverse lookup: resolve an external account to its Person, or None.
+        For provider='email' the external_id is normalized before matching."""
         ...

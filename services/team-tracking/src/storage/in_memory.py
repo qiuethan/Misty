@@ -24,6 +24,10 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _norm_email(v: str) -> str:
+    return v.strip().lower()
+
+
 class InMemoryStorageAdapter:
     """In-process storage adapter used in tests and for quick prototyping.
 
@@ -342,6 +346,8 @@ class InMemoryStorageAdapter:
     def create_person_identifier(
         self, person_id: UUID, payload: PersonIdentifierCreate, *, actor: str
     ) -> PersonIdentifier:
+        if payload.provider == "email":
+            raise ValueError("email_not_addressable_by_provider")
         for i in self._identifiers.values():
             if i.person_id == person_id and i.provider == payload.provider:
                 raise ValueError(
@@ -370,6 +376,8 @@ class InMemoryStorageAdapter:
     def update_person_identifier(
         self, person_id: UUID, provider: str, payload: PersonIdentifierUpdate, *, actor: str
     ) -> PersonIdentifier | None:
+        if provider == "email":
+            raise ValueError("email_not_addressable_by_provider")
         existing = next(
             (
                 i
@@ -399,6 +407,8 @@ class InMemoryStorageAdapter:
         return updated
 
     def delete_person_identifier(self, person_id: UUID, provider: str) -> bool:
+        if provider == "email":
+            raise ValueError("email_not_addressable_by_provider")
         target = next(
             (
                 i
@@ -413,7 +423,35 @@ class InMemoryStorageAdapter:
         return True
 
     def get_person_by_identifier(self, provider: str, external_id: str) -> Person | None:
+        target = _norm_email(external_id) if provider == "email" else external_id
         for i in self._identifiers.values():
-            if i.provider == provider and i.external_id == external_id:
+            if i.provider == provider and i.external_id == target:
                 return self._people.get(i.person_id)
         return None
+
+    def add_person_email(self, person_id: UUID, email: str, *, actor: str) -> PersonIdentifier:
+        addr = _norm_email(email)
+        # already an email identifier somewhere?
+        for i in self._identifiers.values():
+            if i.provider == "email" and i.external_id == addr:
+                if i.person_id == person_id:
+                    return i  # idempotent
+                raise ValueError("email_registered_to_another")
+        # another person's primary_email?
+        owner = self.get_person_by_email(addr)
+        if owner is not None and owner.id != person_id:
+            raise ValueError("email_registered_to_another")
+        now = _now()
+        pi = PersonIdentifier(
+            id=uuid4(),
+            person_id=person_id,
+            provider="email",
+            external_id=addr,
+            handle=None,
+            created_at=now,
+            updated_at=now,
+            created_by=actor,
+            updated_by=actor,
+        )
+        self._identifiers[pi.id] = pi
+        return pi
