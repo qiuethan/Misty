@@ -644,8 +644,8 @@ Link an external account to a person.
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
-| `provider` | string | yes | Must be an active provider ID |
-| `external_id` | string | yes | The stable external identifier (e.g. snowflake, numeric id, email) |
+| `provider` | string | yes | Must be an active provider ID; **not** `email` (rejected — use [`POST /people/{id}/emails`](#post-peopleperson_idemails)) |
+| `external_id` | string | yes | The stable external identifier (e.g. snowflake, numeric id) |
 | `handle` | string | no | Optional human-readable handle or display name |
 
 **Response:** `PersonIdentifier` object, HTTP 201.
