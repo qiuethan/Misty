@@ -17,6 +17,8 @@ import {
   renderDocListResult,
   renderDocShowResult,
   renderDocRemoveResult,
+  renderAddEmailResult,
+  renderVerifyEmailResult,
 } from '../src/messages.js';
 
 test('authMessages.unavailable returns ReplyPayload', () => {
@@ -340,4 +342,15 @@ test('doc renderers map DOC_DOWN', () => {
   for (const fn of [renderDocAddResult, renderDocListResult, renderDocShowResult, renderDocRemoveResult]) {
     assert.match(fn({ outcome: 'DOC_DOWN' }).content, /unavailable/i);
   }
+});
+
+test('renderAddEmailResult CODE_SENT mentions the email', () => {
+  const r = renderAddEmailResult({ outcome: 'CODE_SENT', email: 'a@b.com' });
+  assert.match(r.content, /a@b.com/);
+  assert.equal(r.ephemeral, true);
+});
+
+test('renderVerifyEmailResult covers ADDED and EMAIL_TAKEN', () => {
+  assert.match(renderVerifyEmailResult({ outcome: 'ADDED', email: 'a@b.com' }).content, /a@b.com/);
+  assert.match(renderVerifyEmailResult({ outcome: 'EMAIL_TAKEN' }).content, /already/i);
 });
