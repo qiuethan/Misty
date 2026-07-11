@@ -8,7 +8,7 @@ test('add-email is linked-only and calls requestEmailCode', async () => {
   let seen;
   const ctx = { emailService: { requestEmailCode: async (a) => { seen = a; return { outcome: 'CODE_SENT', email: a.email }; } } };
   const res = await addEmail.handler({ options: { email: 'a@b.com' }, ctx, discordUserId: '1' });
-  assert.equal(seen.discordUserId, '1');
+  assert.deepEqual(seen, { discordUserId: '1', email: 'a@b.com' });
   assert.match(res.content, /a@b.com/);
   assert.equal(res.ephemeral, true);
 });
