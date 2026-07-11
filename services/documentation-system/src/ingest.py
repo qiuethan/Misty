@@ -20,6 +20,11 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _apply_grants(storage, doc_id, grants, *, actor: str):
+    for g in grants:
+        storage.add_grant(doc_id, grantee_type=g.grantee_type, grantee_id=g.grantee_id, actor=actor)
+
+
 def ingest_doc(
     payload: DocIngest,
     *,
@@ -32,10 +37,16 @@ def ingest_doc(
     url_normalized = normalize_url(payload.url)
 
     # 1. Dedup — idempotent re-ingest merges any new tags.
+    # NOTE: intentionally NOT visibility-gated. docs:write is the trust
+    # boundary for ingest, and on-behalf-of ingest isn't used in practice.
+    # An on-behalf-of ingest colliding with a doc the actor can't see is a
+    # known, accepted limitation (revisit if on-behalf-of ingest is ever
+    # introduced).
     existing = storage.get_doc_by_normalized_url(url_normalized)
     if existing is not None and existing.active:
         for tag in payload.tags:
             storage.add_tag(existing.id, tag)
+        _apply_grants(storage, existing.id, payload.grants, actor=actor)
         refreshed = storage.get_doc(existing.id)
         return IngestResult(
             doc=refreshed,
@@ -94,6 +105,8 @@ def ingest_doc(
         tags=payload.tags,
         actor=actor,
     )
+    _apply_grants(storage, doc.id, payload.grants, actor=actor)
+    doc = storage.get_doc(doc.id)  # re-hydrate with grants for the response
     return IngestResult(doc=doc, created=True, warnings=warnings)
 
 

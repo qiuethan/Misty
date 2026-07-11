@@ -1,7 +1,18 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+
+GranteeType = Literal["person", "team", "org"]
+
+
+def _validate_grantee_shape(grantee_type: str, grantee_id) -> None:
+    if grantee_type == "org" and grantee_id is not None:
+        raise ValueError("org grants must not carry a grantee_id")
+    if grantee_type in ("person", "team") and grantee_id is None:
+        raise ValueError(f"{grantee_type} grants require a grantee_id")
 
 
 class DirectoryBase(BaseModel):
@@ -40,9 +51,30 @@ class Doc(DirectoryBase):
     fetched_at: datetime | None = None
     active: bool = True
     tags: list[str] = []
+    grants: list["DocGrant"] = []
 
 
 # --- Input DTOs ---
+
+
+class DocGrant(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    grantee_type: GranteeType
+    grantee_id: UUID | None = None
+    grantee_label: str | None = None
+    created_at: datetime
+    created_by: str
+
+
+class DocGrantInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    grantee_type: GranteeType
+    grantee_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def _check_shape(self) -> "DocGrantInput":
+        _validate_grantee_shape(self.grantee_type, self.grantee_id)
+        return self
 
 
 class DocIngest(BaseModel):
@@ -54,6 +86,7 @@ class DocIngest(BaseModel):
     owning_team_id: UUID | None = None
     owning_person_id: UUID | None = None
     tags: list[str] = []
+    grants: list[DocGrantInput] = []
 
     @field_validator("tags")
     @classmethod

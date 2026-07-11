@@ -37,7 +37,7 @@ export function createDocService({ docClient, directory }) {
     }
   }
 
-  async function listDocs({ teamSlug, tag, source } = {}) {
+  async function listDocs({ teamSlug, tag, source, onBehalfOf } = {}) {
     try {
       const resolved = await resolveTeamId(teamSlug);
       if (resolved.notFound) return { outcome: 'TEAM_NOT_FOUND' };
@@ -46,6 +46,7 @@ export function createDocService({ docClient, directory }) {
         tag,
         sourceId: source,
         activeOnly: true,
+        onBehalfOf,
       });
       return { outcome: 'LISTED', docs };
     } catch (e) {
@@ -55,9 +56,9 @@ export function createDocService({ docClient, directory }) {
     }
   }
 
-  async function showDoc({ id }) {
+  async function showDoc({ id, onBehalfOf } = {}) {
     try {
-      const doc = await docClient.getDoc(id);
+      const doc = await docClient.getDoc(id, { onBehalfOf });
       if (!doc) return { outcome: 'NOT_FOUND' };
       return { outcome: 'SHOWN', doc };
     } catch (e) {

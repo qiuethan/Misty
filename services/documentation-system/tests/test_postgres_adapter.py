@@ -15,7 +15,7 @@ pytestmark = pytest.mark.skipif(
 def adapter():
     engine = create_engine(get_settings().database_url, future=True)
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE doc_tags, docs, api_keys RESTART IDENTITY CASCADE"))
+        conn.execute(text("TRUNCATE doc_grants, doc_tags, docs, api_keys RESTART IDENTITY CASCADE"))
     return PostgresStorageAdapter(engine)
 
 
@@ -71,3 +71,28 @@ def test_get_by_normalized_url_with_duplicates_returns_one(adapter):
     _mk(adapter, url="https://dup.com")  # same url_normalized, no unique constraint
     got = adapter.get_doc_by_normalized_url("https://dup.com")
     assert got is not None and got.id in (a.id,) or got is not None  # returns one, does not raise
+
+
+from uuid import UUID
+from contracts.visibility import Actor, DENY, SEE_ALL
+
+_P1 = UUID("11111111-1111-1111-1111-111111111111")
+_T1 = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+
+def test_grants_and_visibility_pg(adapter):
+    d = _mk(adapter, url="https://g.com")
+    assert adapter.add_grant(d.id, grantee_type="person", grantee_id=_P1, actor="t") is True
+    actor = Actor(person_id=_P1, team_ids=frozenset({_T1}))
+    assert adapter.get_doc(d.id, visibility=actor).id == d.id
+    other = Actor(person_id=UUID(int=9), team_ids=frozenset())
+    assert adapter.get_doc(d.id, visibility=other) is None
+    assert adapter.list_docs(visibility=DENY) == []
+    assert len(adapter.list_docs(visibility=SEE_ALL)) >= 1
+
+
+def test_org_grant_partial_unique_pg(adapter):
+    d = _mk(adapter, url="https://o.com")
+    assert adapter.add_grant(d.id, grantee_type="org", grantee_id=None, actor="t") is True
+    assert adapter.add_grant(d.id, grantee_type="org", grantee_id=None, actor="t") is True  # idempotent
+    assert len(adapter.list_grants(d.id)) == 1

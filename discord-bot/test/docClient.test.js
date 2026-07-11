@@ -105,3 +105,44 @@ test('deactivateDoc patches active:false and returns doc', async () => {
   const doc = await client.deactivateDoc('d1');
   assert.equal(doc.active, false);
 });
+
+test('listDocs sends X-On-Behalf-Of when onBehalfOf is provided', async () => {
+  let seen;
+  const client = createDocClient({
+    baseUrl: 'http://doc', apiKey: 'k',
+    fetchImpl: fakeFetch(async (url, options) => { seen = options.headers; return jsonResponse(200, []); }),
+  });
+  await client.listDocs({ onBehalfOf: 'person-1' });
+  assert.equal(seen['X-On-Behalf-Of'], 'person-1');
+  assert.equal(seen['X-API-Key'], 'k');
+});
+
+test('listDocs omits X-On-Behalf-Of when no actor is given', async () => {
+  let seen;
+  const client = createDocClient({
+    baseUrl: 'http://doc', apiKey: 'k',
+    fetchImpl: fakeFetch(async (url, options) => { seen = options.headers; return jsonResponse(200, []); }),
+  });
+  await client.listDocs({});
+  assert.equal('X-On-Behalf-Of' in seen, false);
+});
+
+test('getDoc sends X-On-Behalf-Of when onBehalfOf is provided', async () => {
+  let seen;
+  const client = createDocClient({
+    baseUrl: 'http://doc', apiKey: 'k',
+    fetchImpl: fakeFetch(async (url, options) => { seen = options.headers; return jsonResponse(200, { id: 'd1' }); }),
+  });
+  await client.getDoc('d1', { onBehalfOf: 'person-1' });
+  assert.equal(seen['X-On-Behalf-Of'], 'person-1');
+});
+
+test('getDoc omits X-On-Behalf-Of when no actor is given', async () => {
+  let seen;
+  const client = createDocClient({
+    baseUrl: 'http://doc', apiKey: 'k',
+    fetchImpl: fakeFetch(async (url, options) => { seen = options.headers; return jsonResponse(200, { id: 'd1' }); }),
+  });
+  await client.getDoc('d1', {});
+  assert.equal('X-On-Behalf-Of' in seen, false);
+});

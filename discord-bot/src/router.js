@@ -59,8 +59,12 @@ export async function dispatch(intent, { commands, appContext }) {
 // out. Any directory call left in flight resolves harmlessly.
 // NOTE: this timeout runs sequentially before command-specific autocomplete
 // budgets (e.g. doc.js's AUTOCOMPLETE_TIMEOUT_MS). Their sum must stay under
-// Discord's ~3s autocomplete window.
-export const PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS = 1000;
+// Discord's ~3s autocomplete window (doc-command.test.js enforces sum <= 2800).
+// Raised 1000 -> 2000 to absorb Neon compute cold-start (~1.0-1.4s on an idle
+// branch), which was pushing the principal lookup past 1000ms and resolving it
+// to an anonymous principal (empty /team suggestions). Stopgap: the durable fix
+// is keeping the directory DB warm (Neon autosuspend) or caching the lookup.
+export const PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS = 2000;
 
 // Resolve to `null` on timeout or rejection — never rejects.
 function resolveWithTimeout(promise, ms) {
