@@ -2,6 +2,7 @@ from datetime import date, datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import and_, delete, insert, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -475,6 +476,8 @@ class PostgresStorageAdapter:
 
     def add_person_email(self, person_id: UUID, email: str, *, actor: str) -> PersonIdentifier:
         addr = _norm_email(email)
+        if not addr:
+            raise ValueError("email_must_not_be_empty")
         with self._engine.begin() as conn:
             existing = conn.execute(
                 select(person_identifiers).where(
@@ -491,27 +494,33 @@ class PostgresStorageAdapter:
             ).scalar_one_or_none()
             if primary_owner is not None and primary_owner != person_id:
                 raise ValueError("email_registered_to_another")
-            try:
-                row = conn.execute(
-                    insert(person_identifiers)
-                    .values(
-                        person_id=person_id,
-                        provider="email",
-                        external_id=addr,
-                        handle=None,
-                        created_by=actor,
-                        updated_by=actor,
-                    )
-                    .returning(person_identifiers)
-                ).one()
-            except IntegrityError as e:
-                constraint = getattr(
-                    getattr(getattr(e, "orig", None), "diag", None), "constraint_name", None
+            row = conn.execute(
+                pg_insert(person_identifiers)
+                .values(
+                    person_id=person_id,
+                    provider="email",
+                    external_id=addr,
+                    handle=None,
+                    created_by=actor,
+                    updated_by=actor,
                 )
-                if constraint == "uq_person_identifiers_provider_external":
-                    raise ValueError("email_registered_to_another") from e
-                raise
-        return _identifier_row_to_model(row)
+                .on_conflict_do_nothing(constraint="uq_person_identifiers_provider_external")
+                .returning(person_identifiers)
+            ).one_or_none()
+            if row is not None:
+                return _identifier_row_to_model(row)
+            # Lost a concurrent insert race on our own (person_id, addr) pair, or
+            # someone else grabbed this address between our pre-check and insert.
+            # Re-read to disambiguate: same person -> idempotent; else -> conflict.
+            conflicting = conn.execute(
+                select(person_identifiers).where(
+                    person_identifiers.c.provider == "email",
+                    person_identifiers.c.external_id == addr,
+                )
+            ).one_or_none()
+            if conflicting is not None and conflicting.person_id == person_id:
+                return _identifier_row_to_model(conflicting)
+            raise ValueError("email_registered_to_another")
 
     # --- API keys ---
 

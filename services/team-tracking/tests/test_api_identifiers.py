@@ -247,3 +247,9 @@ def test_reverse_lookup_by_email_identifier(client):
     client.post(f"/people/{pid}/emails", headers=AUTH, json={"email": "look@x.com"})
     r = client.get("/people/by-identifier/email/look@x.com", headers=AUTH)
     assert r.status_code == 200 and r.json()["id"] == pid
+
+
+def test_add_email_blank_rejected_with_422(client):
+    pid = _make_person(client)["id"]
+    r = client.post(f"/people/{pid}/emails", headers=AUTH, json={"email": "   "})
+    assert r.status_code == 422

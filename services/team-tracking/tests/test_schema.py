@@ -48,7 +48,9 @@ def test_person_provider_uniqueness_is_partial_excluding_email():
         if ix.name == "uq_person_identifiers_person_provider"
     )
     assert idx.unique is True
-    assert "email" in str(idx.dialect_options["postgresql"]["where"])
+    where_clause = idx.dialect_options["postgresql"]["where"]
+    compiled = str(where_clause.compile(compile_kwargs={"literal_binds": True}))
+    assert "provider <> 'email'" in compiled
 
 
 def test_people_has_access_level_column():

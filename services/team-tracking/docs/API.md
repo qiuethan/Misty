@@ -526,7 +526,7 @@ curl -sS "http://localhost:8000/providers/discord" \
 
 ## Person identifiers
 
-A `PersonIdentifier` row records that a person holds an external account on a given provider (e.g., Discord account snowflake, GitHub username). Each person can have at most one link per provider — **except `email`**, which is multi-valued (see [`POST /people/{id}/emails`](#post-peoplepersonidemails) below) and is not addressable through the generic endpoints on this page. Identity mappings are current state, not history: unlinking hard-deletes the row via the DELETE endpoint (a deliberate exception to the "never hard-delete" convention for people/teams/memberships). Re-linking requires unlink-then-relink.
+A `PersonIdentifier` row records that a person holds an external account on a given provider (e.g., Discord account snowflake, GitHub username). Each person can have at most one link per provider — **except `email`**, which is multi-valued (see [`POST /people/{id}/emails`](#post-peopleperson_idemails) below) and is not addressable through the generic endpoints on this page. Identity mappings are current state, not history: unlinking hard-deletes the row via the DELETE endpoint (a deliberate exception to the "never hard-delete" convention for people/teams/memberships). Re-linking requires unlink-then-relink.
 
 Identity operations require scopes `identifiers:read` (for GET) and `identifiers:write` (for POST/PATCH/DELETE).
 
@@ -653,7 +653,7 @@ Link an external account to a person.
 **Errors:** 
 - 400 if `provider` does not exist or is inactive
 - 404 if person not found
-- 409 if person already has that provider linked, if (provider, external_id) is linked to a different person, or if `provider="email"` (rejected — use [`POST /people/{id}/emails`](#post-peoplepersonidemails) instead)
+- 409 if person already has that provider linked, if (provider, external_id) is linked to a different person, or if `provider="email"` (rejected — use [`POST /people/{id}/emails`](#post-peopleperson_idemails) instead)
 - 422 if required fields are missing or validation fails
 
 ```bash
@@ -692,7 +692,7 @@ Update an existing link (change `external_id` and/or `handle`).
 
 **Errors:**
 - 404 if person or identifier link not found
-- 409 if new `external_id` is already linked to a different person, or if `provider="email"` (rejected — `email` identifiers are managed via [`POST /people/{id}/emails`](#post-peoplepersonidemails), not PATCH)
+- 409 if new `external_id` is already linked to a different person, or if `provider="email"` (rejected — `email` identifiers are managed via [`POST /people/{id}/emails`](#post-peopleperson_idemails), not PATCH)
 - 422 if validation fails
 
 ```bash

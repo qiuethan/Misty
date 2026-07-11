@@ -275,6 +275,25 @@ def test_pg_add_email_own_primary_creates_identifier(adapter):
     assert len(email_idents) == 1
 
 
+def test_pg_add_person_email_uses_on_conflict_do_nothing_path(adapter):
+    """Exercises the new on_conflict_do_nothing + re-read code path directly
+    (item 1). A true concurrent same-person race isn't deterministically
+    reproducible in a unit test, but repeat calls through the same insert
+    statement must still return the same row idempotently."""
+    p = _seed_person(adapter, "race@x.com")
+    first = adapter.add_person_email(p.id, "shared-addr@x.com", actor="t")
+    again = adapter.add_person_email(p.id, "shared-addr@x.com", actor="t")
+    assert again.id == first.id
+    email_idents = [i for i in adapter.list_person_identifiers(p.id) if i.provider == "email"]
+    assert len(email_idents) == 1
+
+
+def test_pg_add_person_email_rejects_blank(adapter):
+    p = _seed_person(adapter, "p2@x.com")
+    with pytest.raises(ValueError, match="email_must_not_be_empty"):
+        adapter.add_person_email(p.id, "   ", actor="t")
+
+
 def test_pg_generic_identifier_ops_reject_email_provider(adapter):
     p = _seed_person(adapter, "p@x.com")
     with pytest.raises(ValueError, match="email_not_addressable_by_provider"):

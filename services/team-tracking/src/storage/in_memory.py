@@ -92,6 +92,8 @@ class InMemoryStorageAdapter:
             return None
         data = existing.model_dump()
         patch = payload.model_dump(exclude_unset=True)
+        if "primary_email" in patch:
+            patch["primary_email"] = _norm_email(patch["primary_email"])
         if "primary_email" in patch and patch["primary_email"] != existing.primary_email:
             new_email = patch["primary_email"]
             if any(
@@ -431,6 +433,8 @@ class InMemoryStorageAdapter:
 
     def add_person_email(self, person_id: UUID, email: str, *, actor: str) -> PersonIdentifier:
         addr = _norm_email(email)
+        if not addr:
+            raise ValueError("email_must_not_be_empty")
         # already an email identifier somewhere?
         for i in self._identifiers.values():
             if i.provider == "email" and i.external_id == addr:

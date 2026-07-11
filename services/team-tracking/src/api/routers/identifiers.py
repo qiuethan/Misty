@@ -1,7 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from contracts.storage import StorageAdapter
 from contracts.types import (
@@ -19,6 +19,14 @@ router = APIRouter(prefix="/people", tags=["identifiers"])
 class AddEmailIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     email: str
+
+    @field_validator("email")
+    @classmethod
+    def _email_not_blank(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("email must not be blank")
+        return v
 
 
 # Declared before the /{person_id}/... routes (literal-first convention).

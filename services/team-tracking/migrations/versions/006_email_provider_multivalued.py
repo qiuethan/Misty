@@ -4,9 +4,10 @@ Revision ID: 006
 Revises: 005
 Create Date: 2026-07-09
 
-Downgrade is LOSSY: it deletes all provider='email' identifiers before it can
-re-add the strict UNIQUE(person_id, provider) (that constraint cannot hold while
-any person has more than one email row).
+Downgrade FAILS LOUD if any provider='email' identifiers exist: restoring the
+strict UNIQUE(person_id, provider) cannot hold while a person has more than one
+email row, and this migration will not silently delete verified addresses to
+make room for it. Remove them via an explicit, audited step first.
 """
 
 from alembic import op
@@ -45,7 +46,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DELETE FROM person_identifiers WHERE provider = 'email'")
+    conn = op.get_bind()
+    count = conn.execute(
+        sa.text("SELECT count(*) FROM person_identifiers WHERE provider = 'email'")
+    ).scalar_one()
+    if count > 0:
+        raise RuntimeError(
+            f"Refusing to downgrade: {count} email identifiers exist. Remove them via "
+            "an explicit, audited step before restoring the strict unique constraint."
+        )
     op.drop_index("uq_person_identifiers_person_provider", table_name="person_identifiers")
     op.create_unique_constraint(
         "uq_person_identifiers_person_provider",

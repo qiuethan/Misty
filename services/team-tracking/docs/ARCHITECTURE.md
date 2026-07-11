@@ -157,6 +157,7 @@ Indexes: `(team_id, ended_at)`, `(person_id, ended_at)`, `(started_at, ended_at)
 The controlled vocabulary of external-identity types. Read-only through the API; the first four are seeded by migration 004, `email` by migration 006.
 
 ### `person_identifiers`
+
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | UUID PK | |
@@ -182,7 +183,7 @@ Alembic manages the Postgres schema; migrations are written by hand and kept in 
 - **`003_api_keys.py`** — creates the `api_keys` table (Level-2 auth).
 - **`004_person_identifiers.py`** — creates `providers` and `person_identifiers`; seeds the four providers (`discord`, `github`, `notion`, `uoft_email`).
 - **`005_person_access_level.py`** — adds `people.access_level` (`member`/`admin`/`superuser`, default `member`) with a check constraint.
-- **`006_email_provider_multivalued.py`** — seeds the `email` provider (five seed providers total) and swaps the table-wide `UNIQUE(person_id, provider)` constraint for a same-named partial unique index (`WHERE provider <> 'email'`), so every provider except `email` still gets "one link per person" while `email` becomes multi-valued. Downgrade is lossy: it deletes all `provider='email'` rows before the strict constraint can be restored.
+- **`006_email_provider_multivalued.py`** — seeds the `email` provider (five seed providers total) and swaps the table-wide `UNIQUE(person_id, provider)` constraint for a same-named partial unique index (`WHERE provider <> 'email'`), so every provider except `email` still gets "one link per person" while `email` becomes multi-valued. Downgrade fails loud (raises `RuntimeError`) when any `provider='email'` identifiers exist, rather than silently deleting verified addresses to make room for the strict constraint.
 
 Apply with `uv run alembic upgrade head`; roll back with `uv run alembic downgrade base`.
 
