@@ -53,6 +53,14 @@ export class PersonExists extends Error {
   }
 }
 
+export class EmailAlreadyRegistered extends Error {
+  constructor(detail) {
+    super(detail);
+    this.name = 'EmailAlreadyRegistered';
+    this.detail = detail;
+  }
+}
+
 export function createDirectoryClient({ baseUrl, apiKey, fetchImpl = fetch }) {
   const headers = { 'X-API-Key': apiKey, 'Content-Type': 'application/json' };
 
@@ -103,6 +111,19 @@ export function createDirectoryClient({ baseUrl, apiKey, fetchImpl = fetch }) {
       if (resp.status === 409) {
         const body = await resp.json().catch(() => ({}));
         throw new AlreadyLinked(body.detail ?? 'already linked');
+      }
+      throw new DirectoryUnavailable(`directory returned ${resp.status}`);
+    },
+
+    async addEmailIdentifier(personId, email) {
+      const resp = await send(`/people/${encodeURIComponent(personId)}/emails`, {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      });
+      if (resp.status === 201) return parseJson(resp);
+      if (resp.status === 409) {
+        const body = await resp.json().catch(() => ({}));
+        throw new EmailAlreadyRegistered(body.detail ?? 'email already registered');
       }
       throw new DirectoryUnavailable(`directory returned ${resp.status}`);
     },

@@ -8,6 +8,7 @@ import {
   TeamExists,
   TeamNotFound,
   MembershipInvalid,
+  EmailAlreadyRegistered,
 } from '../src/directoryClient.js';
 
 function fakeFetch(responses) {
@@ -377,4 +378,28 @@ test('directoryClient.listPeople returns the /people list', async () => {
   assert.equal(people[0].display_name, 'Alex');
   assert.match(fetchImpl.calls[0].url, /\/people$/);
   assert.equal(fetchImpl.calls[0].opts.headers['X-API-Key'], 'k');
+});
+
+test('addEmailIdentifier returns the identifier on 201', async () => {
+  const fetchImpl = fakeFetch([
+    { status: 201, body: { id: '1', provider: 'email', external_id: 'a@b.com' } },
+  ]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  const r = await client.addEmailIdentifier('p1', 'a@b.com');
+  assert.equal(r.external_id, 'a@b.com');
+  assert.match(fetchImpl.calls[0].url, /\/people\/p1\/emails$/);
+  assert.equal(fetchImpl.calls[0].opts.method, 'POST');
+  assert.deepEqual(JSON.parse(fetchImpl.calls[0].opts.body), { email: 'a@b.com' });
+});
+
+test('addEmailIdentifier throws EmailAlreadyRegistered on 409', async () => {
+  const fetchImpl = fakeFetch([{ status: 409, body: { detail: 'email_registered_to_another' } }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await assert.rejects(() => client.addEmailIdentifier('p1', 'a@b.com'), EmailAlreadyRegistered);
+});
+
+test('addEmailIdentifier throws DirectoryUnavailable on 500', async () => {
+  const fetchImpl = fakeFetch([{ status: 500, body: {} }]);
+  const client = createDirectoryClient({ baseUrl: BASE, apiKey: KEY, fetchImpl });
+  await assert.rejects(() => client.addEmailIdentifier('p1', 'a@b.com'), DirectoryUnavailable);
 });
