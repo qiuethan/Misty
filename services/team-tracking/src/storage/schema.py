@@ -130,9 +130,16 @@ person_identifiers = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
     Column("created_by", Text, nullable=False),
     Column("updated_by", Text, nullable=False),
-    # One account per provider per person; and one account maps to one person.
-    # The (provider, external_id) unique index also powers the reverse lookup,
-    # so no separate Index is needed.
-    UniqueConstraint("person_id", "provider", name="uq_person_identifiers_person_provider"),
+    # One account per provider per person (except email, which is multi-valued);
+    # and one account maps to one person. The (provider, external_id) unique
+    # index also powers the reverse lookup, so no separate Index is needed.
     UniqueConstraint("provider", "external_id", name="uq_person_identifiers_provider_external"),
+)
+
+Index(
+    "uq_person_identifiers_person_provider",
+    person_identifiers.c.person_id,
+    person_identifiers.c.provider,
+    unique=True,
+    postgresql_where=text("provider <> 'email'"),
 )

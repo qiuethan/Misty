@@ -21,6 +21,13 @@ def adapter() -> InMemoryStorageAdapter:
     return InMemoryStorageAdapter(seed_role_kinds=build_seed_role_kinds())
 
 
+@pytest.fixture
+def seeded_adapter():
+    return InMemoryStorageAdapter(
+        seed_role_kinds=build_seed_role_kinds(), seed_providers=build_seed_providers()
+    )
+
+
 def test_create_and_get_person(adapter):
     p = adapter.create_person(
         PersonCreate(display_name="Alex", primary_email="alex@utmist.ca"),
@@ -346,7 +353,13 @@ def _person(a):
 
 def test_list_and_get_providers():
     a = _adapter()
-    assert {p.id for p in a.list_providers()} == {"discord", "github", "notion", "uoft_email"}
+    assert {p.id for p in a.list_providers()} == {
+        "discord",
+        "github",
+        "notion",
+        "uoft_email",
+        "email",
+    }
     assert a.get_provider("discord").label == "Discord"
     assert a.get_provider("nope") is None
 
@@ -475,3 +488,106 @@ def test_update_person_changes_access_level(adapter):
     )
     updated = adapter.update_person(p.id, PersonUpdate(access_level="superuser"), actor="t")
     assert updated.access_level == "superuser"
+
+
+def _seed_person(adapter, email="a@b.com", name="A"):
+    from contracts.types import PersonCreate
+
+    return adapter.create_person(PersonCreate(display_name=name, primary_email=email), actor="t")
+
+
+def test_add_multiple_emails_to_one_person(seeded_adapter):
+    p = _seed_person(seeded_adapter, "p@x.com")
+    seeded_adapter.add_person_email(p.id, "one@x.com", actor="t")
+    seeded_adapter.add_person_email(p.id, "two@x.com", actor="t")
+    emails = [
+        i.external_id for i in seeded_adapter.list_person_identifiers(p.id) if i.provider == "email"
+    ]
+    assert sorted(emails) == ["one@x.com", "two@x.com"]
+
+
+def test_add_email_normalizes(seeded_adapter):
+    p = _seed_person(seeded_adapter, "p@x.com")
+    seeded_adapter.add_person_email(p.id, "  MixEd@Case.COM ", actor="t")
+    assert seeded_adapter.get_person_by_identifier("email", "mixed@case.com").id == p.id
+
+
+def test_add_email_idempotent(seeded_adapter):
+    p = _seed_person(seeded_adapter, "p@x.com")
+    first = seeded_adapter.add_person_email(p.id, "e@x.com", actor="t")
+    again = seeded_adapter.add_person_email(p.id, "E@X.com", actor="t")
+    assert again.id == first.id
+    assert sum(i.provider == "email" for i in seeded_adapter.list_person_identifiers(p.id)) == 1
+
+
+def test_add_email_rejects_another_persons_identifier(seeded_adapter):
+    import pytest
+
+    a = _seed_person(seeded_adapter, "a@x.com", "A")
+    b = _seed_person(seeded_adapter, "b@x.com", "B")
+    seeded_adapter.add_person_email(a.id, "shared@x.com", actor="t")
+    with pytest.raises(ValueError, match="email_registered_to_another"):
+        seeded_adapter.add_person_email(b.id, "shared@x.com", actor="t")
+
+
+def test_add_email_rejects_another_persons_primary(seeded_adapter):
+    import pytest
+
+    _seed_person(seeded_adapter, "a@x.com", "A")
+    b = _seed_person(seeded_adapter, "b@x.com", "B")
+    with pytest.raises(ValueError, match="email_registered_to_another"):
+        seeded_adapter.add_person_email(b.id, "A@X.com", actor="t")  # a's primary
+
+
+def test_add_email_own_primary_creates_identifier(seeded_adapter):
+    p = _seed_person(seeded_adapter, "me@x.com")
+    ident = seeded_adapter.add_person_email(p.id, "Me@X.com", actor="t")
+    assert ident.provider == "email"
+    assert ident.external_id == "me@x.com"
+    email_idents = [
+        i for i in seeded_adapter.list_person_identifiers(p.id) if i.provider == "email"
+    ]
+    assert len(email_idents) == 1
+
+    again = seeded_adapter.add_person_email(p.id, "Me@X.com", actor="t")
+    assert again.id == ident.id
+    email_idents = [
+        i for i in seeded_adapter.list_person_identifiers(p.id) if i.provider == "email"
+    ]
+    assert len(email_idents) == 1
+
+
+def test_update_person_primary_email_normalized(seeded_adapter):
+    """PATCHing primary_email to a mixed-case/whitespace address must normalize it,
+    so it can't evade add_person_email's ownership check for the lowercased form."""
+    a = _seed_person(seeded_adapter, "a@x.com", "A")
+    seeded_adapter.update_person(a.id, PersonUpdate(primary_email="Alice@X.com"), actor="t")
+    assert seeded_adapter.get_person(a.id).primary_email == "alice@x.com"
+
+    b = _seed_person(seeded_adapter, "b@x.com", "B")
+    with pytest.raises(ValueError, match="email_registered_to_another"):
+        seeded_adapter.add_person_email(b.id, "alice@x.com", actor="t")
+
+
+def test_add_person_email_rejects_blank(seeded_adapter):
+    p = _seed_person(seeded_adapter, "p@x.com")
+    with pytest.raises(ValueError, match="email_must_not_be_empty"):
+        seeded_adapter.add_person_email(p.id, "   ", actor="t")
+
+
+def test_generic_identifier_ops_reject_email_provider(seeded_adapter):
+    import pytest
+
+    from contracts.types import PersonIdentifierCreate, PersonIdentifierUpdate
+
+    p = _seed_person(seeded_adapter, "p@x.com")
+    with pytest.raises(ValueError, match="email_not_addressable_by_provider"):
+        seeded_adapter.create_person_identifier(
+            p.id, PersonIdentifierCreate(provider="email", external_id="e@x.com"), actor="t"
+        )
+    with pytest.raises(ValueError, match="email_not_addressable_by_provider"):
+        seeded_adapter.update_person_identifier(
+            p.id, "email", PersonIdentifierUpdate(external_id="e@x.com"), actor="t"
+        )
+    with pytest.raises(ValueError, match="email_not_addressable_by_provider"):
+        seeded_adapter.delete_person_identifier(p.id, "email")

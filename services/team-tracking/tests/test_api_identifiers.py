@@ -201,3 +201,55 @@ def test_identifier_write_denied_without_scope(client):
     )
     assert resp.status_code == 403
     assert "identifiers:write" in resp.json()["detail"]
+
+
+def test_add_email_endpoint_creates_and_is_idempotent(client):
+    pid = _make_person(client)["id"]
+    r1 = client.post(f"/people/{pid}/emails", headers=AUTH, json={"email": "New@X.com"})
+    assert r1.status_code == 201 and r1.json()["provider"] == "email"
+    assert r1.json()["external_id"] == "new@x.com"
+    r2 = client.post(f"/people/{pid}/emails", headers=AUTH, json={"email": "new@x.com"})
+    assert r2.status_code == 201 and r2.json()["id"] == r1.json()["id"]
+    ids = client.get(f"/people/{pid}/identifiers", headers=AUTH).json()
+    assert sum(i["provider"] == "email" for i in ids) == 1
+
+
+def test_add_email_own_primary_creates_and_is_idempotent(client):
+    p = _make_person(client, "me@x.com")
+    pid = p["id"]
+    r1 = client.post(f"/people/{pid}/emails", headers=AUTH, json={"email": p["primary_email"]})
+    assert r1.status_code == 201 and r1.json()["provider"] == "email"
+    assert r1.json()["external_id"] == p["primary_email"]
+    r2 = client.post(f"/people/{pid}/emails", headers=AUTH, json={"email": p["primary_email"]})
+    assert r2.status_code == 201 and r2.json()["id"] == r1.json()["id"]
+
+
+def test_add_email_rejects_another_persons(client):
+    a = _make_person(client, "a@x.com")["id"]
+    b = _make_person(client, "b@x.com")["id"]
+    client.post(f"/people/{a}/emails", headers=AUTH, json={"email": "s@x.com"})
+    r = client.post(f"/people/{b}/emails", headers=AUTH, json={"email": "s@x.com"})
+    assert r.status_code == 409 and r.json()["detail"] == "email_registered_to_another"
+
+
+def test_generic_identifier_endpoints_reject_email(client):
+    pid = _make_person(client)["id"]
+    r = client.post(
+        f"/people/{pid}/identifiers",
+        headers=AUTH,
+        json={"provider": "email", "external_id": "e@x.com"},
+    )
+    assert r.status_code == 409 and r.json()["detail"] == "email_not_addressable_by_provider"
+
+
+def test_reverse_lookup_by_email_identifier(client):
+    pid = _make_person(client, "p2@x.com")["id"]
+    client.post(f"/people/{pid}/emails", headers=AUTH, json={"email": "look@x.com"})
+    r = client.get("/people/by-identifier/email/look@x.com", headers=AUTH)
+    assert r.status_code == 200 and r.json()["id"] == pid
+
+
+def test_add_email_blank_rejected_with_422(client):
+    pid = _make_person(client)["id"]
+    r = client.post(f"/people/{pid}/emails", headers=AUTH, json={"email": "   "})
+    assert r.status_code == 422

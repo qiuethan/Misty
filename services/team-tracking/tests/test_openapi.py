@@ -63,6 +63,11 @@ def test_openapi_has_title_and_version(client):
     assert schema["info"]["version"] == "0.1.0"
 
 
+def test_openapi_has_add_email_route(client):
+    schema = client.get("/openapi.json").json()
+    assert "/people/{person_id}/emails" in schema["paths"]
+
+
 def test_openapi_tags_present(client):
     schema = client.get("/openapi.json").json()
     tags_used = {

@@ -10,7 +10,7 @@ from src.config import get_settings
 
 
 def build_seed_providers() -> list[Provider]:
-    """Standard providers seed for tests — matches migration 004."""
+    """Standard providers seed for tests — matches migrations 004 and 006."""
     now = datetime.now(timezone.utc)
     return [
         Provider(
@@ -28,6 +28,7 @@ def build_seed_providers() -> list[Provider]:
             ("github", "GitHub"),
             ("notion", "Notion"),
             ("uoft_email", "UofT Email"),
+            ("email", "Email"),
         ]
     ]
 

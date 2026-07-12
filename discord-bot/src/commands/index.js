@@ -1,5 +1,7 @@
 import link from './link.js';
 import verifyCode from './verify-code.js';
+import addEmail from './add-email.js';
+import verifyEmail from './verify-email.js';
 import whoami from './whoami.js';
 import seed from './seed.js';
 import team from './team.js';
@@ -12,6 +14,8 @@ import doc from './doc.js';
 export const commands = new Map([
   [link.name, link],
   [verifyCode.name, verifyCode],
+  [addEmail.name, addEmail],
+  [verifyEmail.name, verifyEmail],
   [whoami.name, whoami],
   [seed.name, seed],
   [team.name, team],
