@@ -28,6 +28,8 @@ export function interactionToIntent(interaction, command) {
     ? command.subcommands.find((s) => s.name === subcommand)?.options ?? []
     : command.options;
   return {
+    surface: 'discord',
+    discordGuildId: interaction.guildId ?? null,
     commandName: interaction.commandName,
     options: extractOptions(interaction, activeOptions),
     subcommand,

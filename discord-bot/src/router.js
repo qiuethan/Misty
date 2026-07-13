@@ -3,6 +3,16 @@ import { authorize } from './auth/policy.js';
 import { DirectoryUnavailable } from './directoryClient.js';
 import { authMessages } from './messages.js';
 
+function commandsAvailableToIntent(commands, intent, appContext) {
+  if (intent.surface !== 'discord') return commands;
+  const includeBeta = Boolean(
+    appContext.discordGuildId && intent.discordGuildId === appContext.discordGuildId,
+  );
+  return new Map(
+    [...commands].filter(([, candidate]) => !candidate.beta || includeBeta),
+  );
+}
+
 // The single Policy Enforcement Point: authenticate -> authorize -> dispatch.
 // Command handlers never re-implement any of this.
 //
@@ -44,11 +54,12 @@ export async function dispatch(intent, { commands, appContext }) {
 
   // --- Dispatch ---
   try {
+    const availableCommands = commandsAvailableToIntent(commands, intent, appContext);
     return await command.handler({
       options: intent.options ?? {},
       subcommand: intent.subcommand ?? null,
       principal,
-      ctx: { ...appContext, commands },
+      ctx: { ...appContext, commands: availableCommands },
       discordUserId: intent.discordUserId,
       discordHandle: intent.discordHandle,
     });

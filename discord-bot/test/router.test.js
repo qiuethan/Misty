@@ -55,6 +55,45 @@ test('dispatch: public command can identify its caller and receives the registry
   assert.equal(out.content, 'Alex:1');
 });
 
+test('dispatch: Discord handler context includes beta commands only in the testing guild', async () => {
+  const help = defineCommand({
+    name: 'help',
+    description: 'help',
+    auth: 'public',
+    handler: async ({ ctx }) => ({
+      content: [...ctx.commands.keys()].sort().join(','),
+      ephemeral: true,
+    }),
+  });
+  const doc = defineCommand({
+    name: 'doc',
+    description: 'doc',
+    auth: 'linked',
+    beta: true,
+    handler: async () => ({ content: 'doc', ephemeral: true }),
+  });
+  const commands = new Map([['help', help], ['doc', doc]]);
+  const appContext = { discordGuildId: 'testing' };
+
+  const production = await dispatch(
+    { surface: 'discord', discordGuildId: 'production', commandName: 'help' },
+    { commands, appContext },
+  );
+  assert.equal(production.content, 'help');
+
+  const testing = await dispatch(
+    { surface: 'discord', discordGuildId: 'testing', commandName: 'help' },
+    { commands, appContext },
+  );
+  assert.equal(testing.content, 'doc,help');
+
+  const web = await dispatch(
+    { surface: 'web', commandName: 'help' },
+    { commands, appContext },
+  );
+  assert.equal(web.content, 'doc,help');
+});
+
 test('dispatch: optional identification degrades to anonymous when directory is unavailable', async () => {
   const { DirectoryUnavailable } = await import('../src/directoryClient.js');
   const cmd = defineCommand({

@@ -34,5 +34,17 @@ export function createAppContext(config) {
     apiKey: config.llmApiKey,
   });
   const helperService = createHelperService({ llmClient, directory });
-  return { directory, docClient, verification, linkService, emailService, seedService, teamService, docService, llmClient, helperService };
+  return {
+    directory,
+    docClient,
+    verification,
+    linkService,
+    emailService,
+    seedService,
+    teamService,
+    docService,
+    llmClient,
+    helperService,
+    discordGuildId: config.discordGuildId ?? null,
+  };
 }

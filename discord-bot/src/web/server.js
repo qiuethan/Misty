@@ -87,6 +87,7 @@ export async function buildServer({ commands, appContext, onReset }) {
     }
 
     const intent = {
+      surface: 'web',
       commandName: command.name,
       options: coerced,
       subcommand,
