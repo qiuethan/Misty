@@ -19,6 +19,7 @@ export const authMessages = {
   }),
 };
 
+/** Reply payloads for help-command errors. */
 export const helpMessages = {
   unknownCommand: (name) => ({
     content: `I couldn't find a command named \`/${name}\` that you can use. Run \`/help\` to see available commands.`,
@@ -26,11 +27,23 @@ export const helpMessages = {
   }),
 };
 
+/**
+ * Format one neutral command option for a Discord embed field.
+ *
+ * @param {object} option Command option metadata.
+ * @returns {string} Human-readable option summary.
+ */
 function formatOption(option) {
   const required = option.required ? 'required' : 'optional';
   return `\`${option.name}\` (${required}) — ${option.description || 'No description'}`;
 }
 
+/**
+ * Build an ephemeral embed listing commands visible to the caller.
+ *
+ * @param {Iterable<object>} commands Visible command definitions.
+ * @returns {object} Surface-neutral reply payload.
+ */
 export function buildHelpEmbed(commands) {
   const sorted = [...commands].sort((a, b) => a.name.localeCompare(b.name));
   return {
@@ -45,6 +58,12 @@ export function buildHelpEmbed(commands) {
   };
 }
 
+/**
+ * Build an ephemeral detail embed for a permission-filtered command.
+ *
+ * @param {object} command Visible command metadata and subcommands.
+ * @returns {object} Surface-neutral reply payload.
+ */
 export function buildCommandDetailEmbed(command) {
   const fields = [];
   if (command.options.length > 0) {

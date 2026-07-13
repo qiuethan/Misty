@@ -1,6 +1,9 @@
 /**
- * Neutral command definition. Consumed by the Discord adapter and the web
- * adapter. No discord.js dependency here.
+ * Validate option combinations while preserving neutral option metadata.
+ *
+ * @param {string} cmdName Command name used in validation errors.
+ * @param {Array<object>|undefined} options Command option definitions.
+ * @returns {Array<object>} Validated option definitions.
  */
 function validateOptions(cmdName, options) {
   for (const o of options ?? []) {
@@ -13,6 +16,12 @@ function validateOptions(cmdName, options) {
   return options ?? [];
 }
 
+/**
+ * Normalize and validate a surface-neutral command definition.
+ *
+ * @param {object} definition Declarative command metadata and handler.
+ * @returns {object} Normalized command consumed by every adapter.
+ */
 export function defineCommand({ name, description, auth, beta, ephemeral, identifyCaller, options, handler, subcommands }) {
   if (!name || typeof name !== 'string') {
     throw new Error('defineCommand: `name` (string) is required');

@@ -2,6 +2,13 @@ import { defineCommand } from '../defineCommand.js';
 import { authorize } from '../auth/policy.js';
 import { buildCommandDetailEmbed, buildHelpEmbed, helpMessages } from '../messages.js';
 
+/**
+ * Reduce a command's declarative authorization rule to a policy that can be
+ * evaluated without an invocation intent.
+ *
+ * @param {object} command Neutral command or subcommand metadata.
+ * @returns {'public'|'linked'|'admin'|'superuser'} Policy used for help visibility.
+ */
 function visiblePolicy(command) {
   // Dynamic policies depend on request options. Treat them as linked for menu
   // visibility, matching the command registry's fail-secure convention.
@@ -22,6 +29,12 @@ export default defineCommand({
       description: 'Command name to show details for',
     },
   ],
+  /**
+   * Render the command list or details for one command, filtered to the caller.
+   *
+   * @param {object} invocation Surface-neutral command invocation.
+   * @returns {Promise<object>} Ephemeral reply payload.
+   */
   async handler({ options, principal, ctx }) {
     const visible = [...ctx.commands.values()]
       .filter((command) => command.name !== 'help')

@@ -9,8 +9,12 @@ import { createDocService } from './docService.js';
 import { createLlmClient } from './llmClient.js';
 import { createHelperService } from './helperService.js';
 
-// Wire the application services once. The router spreads this into every
-// command's ctx (alongside the request-scoped principal).
+/**
+ * Wire application services and deployment metadata once at startup.
+ *
+ * @param {object} config Validated bot configuration.
+ * @returns {object} Shared application context passed through the router.
+ */
 export function createAppContext(config) {
   const directory = createDirectoryClient({
     baseUrl: config.directoryBaseUrl,

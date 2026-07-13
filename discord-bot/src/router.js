@@ -3,6 +3,14 @@ import { authorize } from './auth/policy.js';
 import { DirectoryUnavailable } from './directoryClient.js';
 import { authMessages } from './messages.js';
 
+/**
+ * Select the commands registered on the surface where an intent originated.
+ *
+ * @param {Map<string, object>} commands Full application command registry.
+ * @param {object} intent Surface-neutral invocation intent.
+ * @param {object} appContext Application services and deployment metadata.
+ * @returns {Map<string, object>} Registry available to the current invocation.
+ */
 function commandsAvailableToIntent(commands, intent, appContext) {
   if (intent.surface !== 'discord') return commands;
   const includeBeta = Boolean(
@@ -16,10 +24,13 @@ function commandsAvailableToIntent(commands, intent, appContext) {
 // The single Policy Enforcement Point: authenticate -> authorize -> dispatch.
 // Command handlers never re-implement any of this.
 //
-// Surface-agnostic: takes a plain `intent` object (not a discord.js
-// interaction) and returns a `ReplyPayload | null`. The caller (a Discord
-// adapter, a web adapter, etc.) is responsible for turning the payload into
-// whatever the surface needs, and for handling `null` (unknown command).
+/**
+ * Authenticate, authorize, and dispatch a surface-neutral command intent.
+ *
+ * @param {object} intent Command invocation metadata.
+ * @param {object} dependencies Command registry and shared application context.
+ * @returns {Promise<object|null>} Reply payload, or null for an unknown command.
+ */
 export async function dispatch(intent, { commands, appContext }) {
   const command = commands.get(intent.commandName);
   if (!command) return null;
