@@ -151,3 +151,15 @@ test('show handler omits onBehalfOf when the caller is not linked (fail-closed)'
   assert.equal(received.id, 'd1');
   assert.equal(received.onBehalfOf, undefined);
 });
+
+test('add handler owns the doc as the caller (owningPersonId)', async () => {
+  let received;
+  const ctx = {
+    docService: { addDoc: async (args) => { received = args; return { outcome: 'ADDED', doc: { title: 'X', url: 'https://x.com', id: 'd1' }, warnings: [] }; } },
+  };
+  await findSub('add').handler({
+    options: { url: 'https://x.com', title: null, team: null, tags: null },
+    principal: { person: { id: 'p1' } }, ctx,
+  });
+  assert.equal(received.owningPersonId, 'p1');
+});

@@ -15,13 +15,14 @@ export function createDocService({ docClient, directory }) {
     return { teamId: team.id };
   }
 
-  async function addDoc({ url, title, teamSlug, tags }) {
+  async function addDoc({ url, title, teamSlug, tags, owningPersonId }) {
     try {
       const resolved = await resolveTeamId(teamSlug);
       if (resolved.notFound) return { outcome: 'TEAM_NOT_FOUND' };
       const payload = { url };
       if (title !== undefined && title !== null) payload.title = title;
       if (resolved.teamId !== undefined) payload.owningTeamId = resolved.teamId;
+      if (owningPersonId) payload.owningPersonId = owningPersonId;
       if (tags !== undefined && tags !== null && tags.length > 0) payload.tags = tags;
       const result = await docClient.ingestDoc(payload);
       return {
