@@ -23,12 +23,18 @@ export async function dispatch(intent, { commands, appContext }) {
 
   // --- Authentication ---
   let principal = null;
-  if (policy !== 'public') {
+  if (policy !== 'public' || command.identifyCaller) {
     try {
       principal = await resolvePrincipal(appContext.directory, intent.discordUserId);
     } catch (e) {
-      if (e instanceof DirectoryUnavailable) return authMessages.unavailable(); // fail closed
-      throw e;
+      if (e instanceof DirectoryUnavailable) {
+        // Optional identification must not turn a public command into an
+        // unavailable one. It simply falls back to anonymous visibility.
+        if (policy === 'public') principal = null;
+        else return authMessages.unavailable(); // fail closed
+      } else {
+        throw e;
+      }
     }
   }
 
@@ -42,7 +48,7 @@ export async function dispatch(intent, { commands, appContext }) {
       options: intent.options ?? {},
       subcommand: intent.subcommand ?? null,
       principal,
-      ctx: appContext,
+      ctx: { ...appContext, commands },
       discordUserId: intent.discordUserId,
       discordHandle: intent.discordHandle,
     });
