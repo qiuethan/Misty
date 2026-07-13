@@ -134,3 +134,14 @@ test('showDoc threads onBehalfOf to the doc client', async () => {
   assert.equal(received.id, 'd1');
   assert.equal(received.opts.onBehalfOf, 'p1');
 });
+
+test('addDoc sets owningPersonId from the caller (visible to the adder)', async () => {
+  let payload;
+  const svc = createDocService({
+    directory: {},
+    docClient: { ingestDoc: async (p) => { payload = p; return { doc: { id: 'd1' }, created: true, warnings: [] }; } },
+  });
+  const res = await svc.addDoc({ url: 'https://x.com', owningPersonId: 'p1' });
+  assert.equal(res.outcome, 'ADDED');
+  assert.equal(payload.owningPersonId, 'p1');
+});

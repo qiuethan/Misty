@@ -36,11 +36,14 @@ export default defineCommand({
         { name: 'team', type: 'string', required: false, description: 'Owning team (slug)', autocomplete: teamAutocomplete },
         { name: 'tags', type: 'string', required: false, description: 'Comma-separated tags' },
       ],
-      async handler({ options, ctx }) {
+      async handler({ options, ctx, principal }) {
         const args = { url: options.url };
         if (options.title !== null && options.title !== undefined) args.title = options.title;
         if (options.team !== null && options.team !== undefined) args.teamSlug = options.team;
         args.tags = parseTags(options.tags);
+        // The caller owns what they catalog, so it's always visible to them
+        // (in addition to the owning team, if one was picked).
+        args.owningPersonId = principal?.person?.id;
         const result = await ctx.docService.addDoc(args);
         return renderDocAddResult(result);
       },
