@@ -74,6 +74,37 @@ test('/help command detail shows options and accepts a leading slash', async () 
   assert.match(payload.embeds[0].fields[0].value, /query.*required.*Search query/);
 });
 
+test('/help command detail filters subcommands by caller access level', async () => {
+  const parent = defineCommand({
+    name: 'team',
+    description: 'Manage teams',
+    auth: 'linked',
+    subcommands: [
+      {
+        name: 'list',
+        description: 'List teams',
+        auth: 'linked',
+        handler: async () => ({ content: 'ok' }),
+      },
+      {
+        name: 'create',
+        description: 'Create a team',
+        auth: 'admin',
+        handler: async () => ({ content: 'ok' }),
+      },
+    ],
+    handler: async () => ({ content: 'ok' }),
+  });
+  const payload = await help.handler({
+    options: { command: 'team' },
+    principal: { person: { access_level: 'member' } },
+    ctx: { commands: new Map([['help', help], ['team', parent]]) },
+  });
+  const subcommands = payload.embeds[0].fields[0].value;
+  assert.match(subcommands, /list/);
+  assert.doesNotMatch(subcommands, /create/);
+});
+
 test('/help reports unknown and unauthorized command names without leaking them', async () => {
   for (const requested of ['nope', 'seed']) {
     const payload = await help.handler({

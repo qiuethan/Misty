@@ -31,6 +31,13 @@ export default defineCommand({
 
     const requested = options.command.trim().replace(/^\//, '').toLowerCase();
     const command = visible.find((candidate) => candidate.name === requested);
-    return command ? buildCommandDetailEmbed(command) : helpMessages.unknownCommand(requested);
+    if (!command) return helpMessages.unknownCommand(requested);
+
+    return buildCommandDetailEmbed({
+      ...command,
+      subcommands: command.subcommands.filter(
+        (subcommand) => authorize(visiblePolicy(subcommand), principal).ok,
+      ),
+    });
   },
 });
