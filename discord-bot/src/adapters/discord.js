@@ -20,6 +20,13 @@ function extractOptions(interaction, activeOptions) {
   return options;
 }
 
+/**
+ * Convert a Discord chat-input interaction into a surface-neutral intent.
+ *
+ * @param {object} interaction Discord interaction.
+ * @param {object} command Neutral command definition.
+ * @returns {object} Intent consumed by the application router.
+ */
 export function interactionToIntent(interaction, command) {
   const subcommand = command.subcommands.length
     ? interaction.options.getSubcommand(false)
@@ -28,6 +35,8 @@ export function interactionToIntent(interaction, command) {
     ? command.subcommands.find((s) => s.name === subcommand)?.options ?? []
     : command.options;
   return {
+    surface: 'discord',
+    discordGuildId: interaction.guildId ?? null,
     commandName: interaction.commandName,
     options: extractOptions(interaction, activeOptions),
     subcommand,

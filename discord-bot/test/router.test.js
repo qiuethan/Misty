@@ -33,6 +33,86 @@ test('dispatch: public command runs without a principal', async () => {
   assert.equal(out.content, 'pong');
 });
 
+test('dispatch: public command can identify its caller and receives the registry in ctx', async () => {
+  const cmd = defineCommand({
+    name: 'help',
+    description: 'help',
+    auth: 'public',
+    identifyCaller: true,
+    handler: async ({ principal, ctx }) => ({
+      content: `${principal.person.display_name}:${ctx.commands.size}`,
+      ephemeral: true,
+    }),
+  });
+  const commands = new Map([['help', cmd]]);
+  const directory = {
+    async getPersonByDiscordId() { return { id: 'p1', display_name: 'Alex' }; },
+  };
+  const out = await dispatch(
+    { commandName: 'help', options: {}, discordUserId: '1' },
+    { commands, appContext: { directory } },
+  );
+  assert.equal(out.content, 'Alex:1');
+});
+
+test('dispatch: Discord handler context includes beta commands only in the testing guild', async () => {
+  const help = defineCommand({
+    name: 'help',
+    description: 'help',
+    auth: 'public',
+    handler: async ({ ctx }) => ({
+      content: [...ctx.commands.keys()].sort().join(','),
+      ephemeral: true,
+    }),
+  });
+  const doc = defineCommand({
+    name: 'doc',
+    description: 'doc',
+    auth: 'linked',
+    beta: true,
+    handler: async () => ({ content: 'doc', ephemeral: true }),
+  });
+  const commands = new Map([['help', help], ['doc', doc]]);
+  const appContext = { discordGuildId: 'testing' };
+
+  const production = await dispatch(
+    { surface: 'discord', discordGuildId: 'production', commandName: 'help' },
+    { commands, appContext },
+  );
+  assert.equal(production.content, 'help');
+
+  const testing = await dispatch(
+    { surface: 'discord', discordGuildId: 'testing', commandName: 'help' },
+    { commands, appContext },
+  );
+  assert.equal(testing.content, 'doc,help');
+
+  const web = await dispatch(
+    { surface: 'web', commandName: 'help' },
+    { commands, appContext },
+  );
+  assert.equal(web.content, 'doc,help');
+});
+
+test('dispatch: optional identification degrades to anonymous when directory is unavailable', async () => {
+  const { DirectoryUnavailable } = await import('../src/directoryClient.js');
+  const cmd = defineCommand({
+    name: 'help',
+    description: 'help',
+    auth: 'public',
+    identifyCaller: true,
+    handler: async ({ principal }) => ({ content: principal ? 'linked' : 'anonymous', ephemeral: true }),
+  });
+  const directory = {
+    async getPersonByDiscordId() { throw new DirectoryUnavailable('down'); },
+  };
+  const out = await dispatch(
+    { commandName: 'help', options: {}, discordUserId: '1' },
+    { commands: new Map([['help', cmd]]), appContext: { directory } },
+  );
+  assert.equal(out.content, 'anonymous');
+});
+
 test('dispatch: unlinked user hitting a linked command → denied payload', async () => {
   const directory = {
     async getPersonByDiscordId() { return null; },
