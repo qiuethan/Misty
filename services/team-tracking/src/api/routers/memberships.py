@@ -86,7 +86,10 @@ def end_membership(
     actor: str = Depends(get_actor),
     _: AuthedKey = Depends(require_scope("memberships:write")),
 ) -> TeamMembership:
-    ended = storage.end_membership(membership_id, payload.ended_at, actor=actor)
+    try:
+        ended = storage.end_membership(membership_id, payload.ended_at, actor=actor)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     if ended is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="membership not found")
     return ended

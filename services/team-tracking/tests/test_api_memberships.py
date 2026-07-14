@@ -258,6 +258,102 @@ def test_create_membership_same_day_readd_allowed(client):
     assert readd.status_code == 201
 
 
+def test_update_membership_into_overlap_returns_400(client):
+    """PATCH that extends ended_at into another active membership's range for the
+    same (person, team) is rejected with 400 (adapter parity with the PG
+    EXCLUDE constraint)."""
+    p, t = _create_person_and_team(client)
+    a = client.post(
+        "/memberships",
+        json={
+            "person_id": p["id"],
+            "team_id": t["id"],
+            "started_at": "2026-01-01",
+            "ended_at": "2026-03-01",
+        },
+        headers=AUTH,
+    ).json()
+    # B starts exactly when A ends -> allowed (exclusive upper bound).
+    client.post(
+        "/memberships",
+        json={"person_id": p["id"], "team_id": t["id"], "started_at": "2026-03-01"},
+        headers=AUTH,
+    )
+    # Extending A past B's start creates an overlap.
+    resp = client.patch(
+        f"/memberships/{a['id']}",
+        json={"ended_at": "2026-04-01"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 400
+    assert "overlap" in resp.json()["detail"]
+
+
+def test_update_membership_own_dates_no_overlap_still_200(client):
+    """A PATCH that changes a membership's own dates without creating an overlap
+    (and a pure non-date update) still succeeds."""
+    p, t = _create_person_and_team(client)
+    a = client.post(
+        "/memberships",
+        json={
+            "person_id": p["id"],
+            "team_id": t["id"],
+            "started_at": "2026-01-01",
+            "ended_at": "2026-03-01",
+        },
+        headers=AUTH,
+    ).json()
+    client.post(
+        "/memberships",
+        json={"person_id": p["id"], "team_id": t["id"], "started_at": "2026-03-01"},
+        headers=AUTH,
+    )
+    # Shrink A's range (still before B's start) -> fine.
+    shrink = client.patch(
+        f"/memberships/{a['id']}",
+        json={"ended_at": "2026-02-15"},
+        headers=AUTH,
+    )
+    assert shrink.status_code == 200
+    assert shrink.json()["ended_at"] == "2026-02-15"
+    # Pure non-date update -> fine.
+    flag = client.patch(
+        f"/memberships/{a['id']}",
+        json={"is_team_admin": True},
+        headers=AUTH,
+    )
+    assert flag.status_code == 200
+    assert flag.json()["is_team_admin"] is True
+
+
+def test_end_membership_into_overlap_returns_400(client):
+    """POST /memberships/{id}/end must return 400 (not 500) when the resulting
+    ended_at re-introduces an overlap with another active membership."""
+    p, t = _create_person_and_team(client)
+    a = client.post(
+        "/memberships",
+        json={
+            "person_id": p["id"],
+            "team_id": t["id"],
+            "started_at": "2026-01-01",
+            "ended_at": "2026-03-01",
+        },
+        headers=AUTH,
+    ).json()
+    client.post(
+        "/memberships",
+        json={"person_id": p["id"], "team_id": t["id"], "started_at": "2026-03-01"},
+        headers=AUTH,
+    )
+    resp = client.post(
+        f"/memberships/{a['id']}/end",
+        json={"ended_at": "2026-04-01"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 400
+    assert "overlap" in resp.json()["detail"]
+
+
 def test_end_nonexistent_membership_returns_404(client):
     resp = client.post(
         "/memberships/00000000-0000-0000-0000-000000000000/end",

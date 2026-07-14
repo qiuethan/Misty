@@ -267,6 +267,21 @@ class InMemoryStorageAdapter:
         data["updated_at"] = _now()
         data["updated_by"] = actor
         updated = TeamMembership(**data)
+        # Mirror the Postgres EXCLUDE constraint: the updated range must not
+        # overlap any OTHER active membership for the same (person, team). A
+        # PATCH that re-opens/extends ended_at can re-introduce an overlap, so
+        # re-check here, excluding the row being updated from the comparison.
+        for other in self._memberships.values():
+            if other.id == membership_id:
+                continue
+            if other.person_id != updated.person_id or other.team_id != updated.team_id:
+                continue
+            if _ranges_overlap(
+                updated.started_at, updated.ended_at, other.started_at, other.ended_at
+            ):
+                raise ValueError(
+                    "membership overlaps an existing active membership for this person and team"
+                )
         self._memberships[membership_id] = updated
         return updated
 

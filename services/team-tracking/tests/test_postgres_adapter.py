@@ -160,6 +160,29 @@ def test_pg_membership_update_bad_role_kind_raises_valueerror(adapter):
         adapter.update_membership(m.id, TeamMembershipUpdate(role_kind_id="nope"), actor="t")
 
 
+def test_pg_membership_update_into_overlap_raises_valueerror(adapter):
+    """Extending ended_at via update into another active membership's range for
+    the same (person, team) hits the EXCLUDE constraint -> ValueError (400),
+    not a 500. Mirrors the in-memory update-side overlap check."""
+    p = adapter.create_person(
+        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
+    )
+    team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    a = adapter.create_membership(
+        TeamMembershipCreate(
+            person_id=p.id, team_id=team.id, started_at=date(2026, 1, 1), ended_at=date(2026, 3, 1)
+        ),
+        actor="t",
+    )
+    # B starts exactly when A ends -> allowed.
+    adapter.create_membership(
+        TeamMembershipCreate(person_id=p.id, team_id=team.id, started_at=date(2026, 3, 1)),
+        actor="t",
+    )
+    with pytest.raises(ValueError, match="overlap"):
+        adapter.update_membership(a.id, TeamMembershipUpdate(ended_at=date(2026, 4, 1)), actor="t")
+
+
 def test_pg_membership_overlap_exclusion_raises_valueerror(adapter):
     """The temporal-overlap EXCLUDE constraint surfaces as a ValueError -> 400."""
     p = adapter.create_person(
