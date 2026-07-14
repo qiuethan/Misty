@@ -1,10 +1,12 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import and_, delete, false, insert, or_, select, update
+from sqlalchemy import and_, delete, false, insert, or_, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
+from contracts.storage import DuplicateActiveUrl
 from contracts.types import ApiKey, Doc, DocGrant, Source
 from contracts.visibility import Actor, ActorContext, DENY, SEE_ALL
 from src.storage.schema import api_keys, doc_grants, doc_tags, docs, sources
@@ -110,15 +112,28 @@ class PostgresStorageAdapter:
         content_snapshot, fetched_at, tags, actor,
     ) -> Doc:
         with self._engine.begin() as conn:
+            # New docs are always active, so they fall under the partial unique
+            # index on url_normalized WHERE active. A concurrent ingest that
+            # already inserted an active row for this URL makes this a no-op:
+            # on_conflict_do_nothing suppresses the IntegrityError (which would
+            # otherwise poison the transaction) and RETURNING yields no row.
+            # Signal that to the caller so ingest can fall back to dedup/merge.
             row = conn.execute(
-                insert(docs).values(
+                pg_insert(docs).values(
                     url=url, url_normalized=url_normalized, source_id=source_id, title=title,
                     description=description, owning_team_id=owning_team_id,
                     owning_team_label=owning_team_label, owning_person_id=owning_person_id,
                     owning_person_label=owning_person_label, content_snapshot=content_snapshot,
                     fetched_at=fetched_at, created_by=actor, updated_by=actor,
-                ).returning(docs)
-            ).one()
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[docs.c.url_normalized],
+                    index_where=text("active"),
+                )
+                .returning(docs)
+            ).one_or_none()
+            if row is None:
+                raise DuplicateActiveUrl(url_normalized)
             for tag in set(tags):
                 conn.execute(insert(doc_tags).values(doc_id=row.id, tag=tag))
             return self._row_to_doc(conn, row)
@@ -137,10 +152,19 @@ class PostgresStorageAdapter:
 
     def get_doc_by_normalized_url(self, url_normalized: str) -> Doc | None:
         with self._engine.connect() as conn:
+            # Canonical dedup rule: among rows sharing a url_normalized, prefer
+            # the active row, then break ties by earliest created_at (id as a
+            # final deterministic tiebreak). This keeps a single stable "live"
+            # row for a URL even when older rows have been soft-removed
+            # (active=False, row retained). Without the `active` preference,
+            # once the earliest row is soft-removed every re-ingest rediscovers
+            # that dead row, skips the merge, and inserts another active
+            # duplicate (bug #5). The in-memory adapter and the partial unique
+            # index (url_normalized WHERE active) enforce this same rule.
             row = conn.execute(
                 select(docs)
                 .where(docs.c.url_normalized == url_normalized)
-                .order_by(docs.c.created_at)
+                .order_by(docs.c.active.desc(), docs.c.created_at, docs.c.id)
                 .limit(1)
             ).first()
             return self._row_to_doc(conn, row) if row else None

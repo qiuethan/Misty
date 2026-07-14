@@ -3,7 +3,10 @@ import os
 import pytest
 from sqlalchemy import create_engine, text
 
+from contracts.storage import DuplicateActiveUrl
+from contracts.types import DocIngest
 from src.config import get_settings
+from src.ingest import ingest_doc
 from src.storage.postgres import PostgresStorageAdapter
 
 pytestmark = pytest.mark.skipif(
@@ -66,11 +69,73 @@ def test_add_tag_idempotent(adapter):
     assert set(adapter.get_doc(d.id).tags) == {"x", "y"}
 
 
-def test_get_by_normalized_url_with_duplicates_returns_one(adapter):
-    a = _mk(adapter, url="https://dup.com")
-    _mk(adapter, url="https://dup.com")  # same url_normalized, no unique constraint
+def test_second_active_dup_insert_is_rejected(adapter):
+    # Bug #11: the partial unique index (url_normalized WHERE active) forbids a
+    # second active row for the same URL. create_doc surfaces this as
+    # DuplicateActiveUrl (on_conflict_do_nothing -> no RETURNING row).
+    _mk(adapter, url="https://dup.com")
+    with pytest.raises(DuplicateActiveUrl):
+        _mk(adapter, url="https://dup.com")
+
+
+def test_get_by_normalized_url_prefers_active_over_inactive(adapter):
+    # Bug #5: a soft-removed row must not shadow the live active row.
+    first = _mk(adapter, url="https://dup.com")
+    adapter.update_doc(first.id, {"active": False}, actor="t")  # soft-remove
+    live = _mk(adapter, url="https://dup.com")  # now allowed again (index is partial)
     got = adapter.get_doc_by_normalized_url("https://dup.com")
-    assert got is not None and got.id in (a.id,) or got is not None  # returns one, does not raise
+    assert got is not None and got.id == live.id
+
+
+def test_reingest_allowed_after_soft_remove(adapter):
+    # The partial index exempts inactive rows, so a URL can be re-catalogued.
+    first = _mk(adapter, url="https://re.com")
+    adapter.update_doc(first.id, {"active": False}, actor="t")
+    second = _mk(adapter, url="https://re.com")  # must not raise
+    assert second.id != first.id
+
+
+def test_ingest_race_fallback_merges_into_existing(adapter):
+    # Simulate the read-then-insert race deterministically: the dedup read in
+    # ingest step 1 sees nothing (row not yet visible), but create_doc in step 5
+    # hits the unique index. create_doc raises DuplicateActiveUrl and ingest
+    # falls back to merging into the now-existing active row (created=False).
+    from test_ingest import FakeDirectory, FakeFetchers
+    from contracts.fetcher import FetchResult
+
+    winner = _mk(adapter, url="https://race.com", tags=["existing"])
+
+    class _RaceAdapter:
+        """Delegates to the real adapter but hides the existing active row from
+        the FIRST dedup lookup, forcing ingest down the create/conflict path."""
+
+        def __init__(self, real):
+            self._real = real
+            self._hidden = True
+
+        def get_doc_by_normalized_url(self, url_normalized):
+            if self._hidden:
+                self._hidden = False  # only the initial dedup read is blinded
+                return None
+            return self._real.get_doc_by_normalized_url(url_normalized)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    race = _RaceAdapter(adapter)
+    result = ingest_doc(
+        DocIngest(url="https://race.com", tags=["new"]),
+        storage=race,
+        fetchers=FakeFetchers(result=FetchResult(title="R")),
+        directory=FakeDirectory(),
+        actor="bot",
+    )
+    assert result.created is False
+    assert result.doc.id == winner.id
+    assert set(result.doc.tags) == {"existing", "new"}  # merged, not duplicated
+    # Still exactly one active row for the URL.
+    active = [d for d in adapter.list_docs(active_only=True) if d.url_normalized == "https://race.com"]
+    assert len(active) == 1
 
 
 from uuid import UUID

@@ -5,6 +5,14 @@ from contracts.types import ApiKey, Doc, DocGrant, Source
 from contracts.visibility import ActorContext, SEE_ALL
 
 
+class DuplicateActiveUrl(Exception):
+    """Raised by create_doc when a concurrent insert already created an active
+    doc for the same url_normalized and the DB partial-unique index
+    (url_normalized WHERE active) rejected this write. Ingest catches it and
+    falls back to the idempotent dedup/merge path. The in-memory adapter has no
+    such constraint and is single-threaded, so it never raises this."""
+
+
 class StorageAdapter(Protocol):
     """Stable contract between the service and persistence. Concrete adapters
     (Postgres, in-memory) implement these with identical semantics."""

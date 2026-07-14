@@ -43,6 +43,14 @@ docs = Table(
     Column("created_by", Text, nullable=False),
     Column("updated_by", Text, nullable=False),
     Index("ix_docs_url_normalized", "url_normalized"),
+    # At most one active doc per normalized URL. Enforces the dedup invariant at
+    # the DB level so a concurrent read-then-insert can't create two active
+    # rows for the same URL (bug #11). Inactive (soft-removed) rows are exempt,
+    # so a URL can be re-catalogued after removal. Mirrors migration 004.
+    Index(
+        "uq_docs_url_normalized_active", "url_normalized",
+        unique=True, postgresql_where=text("active"),
+    ),
     Index("ix_docs_owning_team", "owning_team_id"),
     Index("ix_docs_owning_person", "owning_person_id"),
     Index("ix_docs_source", "source_id"),
