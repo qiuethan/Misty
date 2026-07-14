@@ -48,7 +48,8 @@ test('answer resolves team labels with ONE listTeams call, not N getTeam calls',
     listMemberships: async () => [{ team_id: 't1' }, { team_id: 't2' }, { team_id: 't3' }],
     listTeams: async ({ activeOnly }) => {
       calls.listTeams += 1;
-      assert.equal(activeOnly, true);
+      // Must fetch ALL teams (not active-only) to match getTeam's semantics.
+      assert.equal(activeOnly, false);
       return [
         { id: 't1', label: 'Events' },
         { id: 't2', label: 'Web' },
@@ -65,19 +66,21 @@ test('answer resolves team labels with ONE listTeams call, not N getTeam calls',
   assert.match(capture.args.system, /on Events, Web, ML/);
 });
 
-test('answer drops team_ids absent from the active team list (getTeam-404 parity)', async () => {
+test('answer keeps the label for an active membership on an inactive team (getTeam parity)', async () => {
   const capture = {};
   const directory = {
-    listMemberships: async () => [{ team_id: 't1' }, { team_id: 'gone' }, { team_id: 't2' }],
-    // 'gone' is not in the active list — mirrors getTeam returning null on 404.
+    listMemberships: async () => [{ team_id: 't1' }, { team_id: 'inactive' }, { team_id: 'gone' }],
+    // listTeams(activeOnly:false) returns ALL teams, active or not — 'inactive'
+    // exists so its label survives (old getTeam was active-agnostic); 'gone'
+    // genuinely doesn't exist so it drops (getTeam-404 parity).
     listTeams: async () => [
       { id: 't1', label: 'Events' },
-      { id: 't2', label: 'Web' },
+      { id: 'inactive', label: 'Archive Crew' },
     ],
   };
   const svc = createHelperService({ llmClient: fakeLlm(capture), directory });
   await svc.answer({ messages: MESSAGES, principal: PRINCIPAL });
-  assert.match(capture.args.system, /on Events, Web\./);
+  assert.match(capture.args.system, /on Events, Archive Crew\./);
   assert.doesNotMatch(capture.args.system, /gone/);
 });
 
