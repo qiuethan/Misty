@@ -89,6 +89,36 @@ def test_confirm_replay_correct_code_after_consumed(client, store):
     assert r.json() == {"verified": True, "subject": "discord:1", "email": "a@b.com"}
 
 
+def test_confirm_replay_wrong_code_eventually_locks_out(client, store):
+    # Consumed + unexpired: repeated wrong-code replays must trip the same
+    # attempt limiting as the normal path (no unlimited brute force).
+    store.create_code(_code(consumed=True))
+    for _ in range(5):
+        r = client.post(
+            "/verification/confirm-code",
+            headers=AUTH,
+            json={"subject": "discord:1", "code": "999999"},
+        )
+        assert r.status_code in (400, 429)
+    # After exhausting MAX_ATTEMPTS, further guesses are locked out.
+    r = client.post(
+        "/verification/confirm-code", headers=AUTH, json={"subject": "discord:1", "code": "999999"}
+    )
+    assert r.status_code == 429
+    assert r.json()["detail"] == "too_many_attempts"
+    assert "a@b.com" not in r.text
+
+
+def test_confirm_replay_correct_code_before_lockout(client, store):
+    # A correct-code replay still returns idempotent success while under the cap.
+    store.create_code(_code(consumed=True, attempts=4))
+    r = client.post(
+        "/verification/confirm-code", headers=AUTH, json={"subject": "discord:1", "code": "123456"}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"verified": True, "subject": "discord:1", "email": "a@b.com"}
+
+
 def test_confirm_replay_expired_consumed_unchanged(client, store):
     # Consumed but expired: 404 no_pending_code regardless of submitted code.
     store.create_code(_code(consumed=True, ttl_min=-1))

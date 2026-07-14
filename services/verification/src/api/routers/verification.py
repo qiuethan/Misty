@@ -82,10 +82,20 @@ def confirm_code(
             # Only re-issue the idempotent success (and the verified email) when
             # the submitted code actually matches. Otherwise any holder of the
             # verification:write scope could replay an arbitrary subject and
-            # harvest its verified email without ever knowing the code. Reuse the
-            # same constant-time HMAC comparison as the normal path.
+            # harvest its verified email without ever knowing the code. Mirror the
+            # normal path's attempt limiting so wrong-code replays can't be
+            # brute-forced against a consumed record.
+            if code.attempts >= MAX_ATTEMPTS:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="too_many_attempts"
+                )
             if verify_code(payload.code, code.code_hash, get_settings().code_hmac_secret):
                 return ConfirmCodeOut(verified=True, subject=code.subject, email=code.email)
+            attempts = storage.increment_attempts(payload.subject)
+            if attempts >= MAX_ATTEMPTS:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="too_many_attempts"
+                )
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_code")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no_pending_code")
 
