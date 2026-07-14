@@ -178,8 +178,9 @@ and skips them.
 - `/team remove user:<@mention> team:<slug>` (admin) — soft-end a membership as of today.
 - `/team roster team:<slug> [as_of:<YYYY-MM-DD>]` (linked) — show a team's current roster.
 - `/my-teams` (linked) — list your active memberships.
+- `/doc <add|list|show|remove>` (linked; `remove` is admin) — catalog and look up UTMIST documents and links.
 
-`/team` and `/my-teams` are currently on the **beta** channel (test guild only) — promote by setting `beta = false` in the command modules and re-running `npm run register`.
+All commands are currently on the **stable** channel (`beta = false`), so they register globally in every server the bot is in. There are no beta commands right now.
 
 ## Auth layer
 
