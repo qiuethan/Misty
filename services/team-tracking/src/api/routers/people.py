@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from contracts.storage import StorageAdapter
 from contracts.types import Person, PersonCreate, PersonUpdate
 from src.api.auth import AuthedKey, get_actor, require_scope
+from src.api.authz import require_access_level_change
 from src.api.deps import get_storage
 
 router = APIRouter(prefix="/people", tags=["people"])
@@ -15,8 +16,12 @@ def create_person(
     payload: PersonCreate,
     storage: StorageAdapter = Depends(get_storage),
     actor: str = Depends(get_actor),
-    _: AuthedKey = Depends(require_scope("people:write")),
+    key: AuthedKey = Depends(require_scope("people:write")),
 ) -> Person:
+    # Creating a person at a privileged access_level is an escalation vector;
+    # ordinary (member) creation needs only people:write.
+    if payload.access_level != "member":
+        require_access_level_change(key)
     try:
         return storage.create_person(payload, actor=actor)
     except ValueError as e:
@@ -64,8 +69,12 @@ def update_person(
     payload: PersonUpdate,
     storage: StorageAdapter = Depends(get_storage),
     actor: str = Depends(get_actor),
-    _: AuthedKey = Depends(require_scope("people:write")),
+    key: AuthedKey = Depends(require_scope("people:write")),
 ) -> Person:
+    # Changing access_level (up or down) is a privilege grant, not an ordinary
+    # edit; gate it behind the elevated scope rather than silently dropping it.
+    if payload.access_level is not None:
+        require_access_level_change(key)
     try:
         updated = storage.update_person(person_id, payload, actor=actor)
     except ValueError as e:
