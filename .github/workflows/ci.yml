@@ -129,6 +129,51 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
+  documentation-system-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: docs
+          POSTGRES_PASSWORD: dev_password
+          POSTGRES_DB: docs
+        ports:
+          - 5435:5432
+        options: >-
+          --health-cmd "pg_isready -U docs"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://docs:dev_password@localhost:5435/docs
+      # Runs the Postgres-adapter suite (test_postgres_adapter.py), which is
+      # otherwise skipped. See tests/test_postgres_adapter.py.
+      RUN_PG_TESTS: "1"
+    defaults:
+      run:
+        working-directory: services/documentation-system
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Run migrations
+        run: uv run alembic upgrade head
+      - name: Run tests
+        run: uv run pytest
+      # NOTE: `ruff check`/`ruff format --check` are intentionally NOT gated here
+      # yet — documentation-system currently has pre-existing lint findings and
+      # ~26 files the formatter would rewrite. Enforcing them now would fail on
+      # unrelated code and collide with in-flight PRs. Tracked as a follow-up
+      # cleanup (fix lint + format, then add the two ruff steps to mirror the
+      # other services). See docs/SECURITY-REVIEW-2026-07-13.md.
+
   node-test:
     runs-on: ubuntu-latest
     defaults:
