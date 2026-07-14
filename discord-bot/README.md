@@ -55,11 +55,15 @@ Also issue an API key for the Discord bot (only if you'll use Discord mode):
 
 ```bash
 cd services/team-tracking
-uv run team-tracking-keys issue --name discord-bot \
-  --scopes people:read people:write identifiers:read identifiers:write \
+uv --project . run team-tracking-keys issue --name discord-bot \
+  --scopes people:read people:write people:elevate identifiers:read identifiers:write \
            teams:read teams:write memberships:read memberships:write role_kinds:read
 # Copy the tt_... key into discord-bot/.env as DIRECTORY_API_KEY.
 # IMPORTANT: this key must be issued against MAIN (port 8000), not scratch.
+# Verify the token starts with tt_ — a doc_-prefixed key means the shared venv
+# resolved documentation-system's CLI instead, and team-tracking will reject it.
+# scripts/provision-directory-key.sh is the source of truth for the bot's scopes
+# (people:elevate is what lets /seed promote people to admin/superuser).
 ```
 
 ### Daily startup
@@ -208,9 +212,14 @@ parallel to team-tracking's scoped-key auth.
    - `DIRECTORY_API_KEY` — issue one from team-tracking:
      ```bash
      cd ../services/team-tracking
-     uv run team-tracking-keys issue --name discord-bot \
-       --scopes people:read people:write identifiers:read identifiers:write \
+     uv --project . run team-tracking-keys issue --name discord-bot \
+       --scopes people:read people:write people:elevate identifiers:read identifiers:write \
                 teams:read teams:write memberships:read memberships:write role_kinds:read
+     # The token must start with tt_ (a doc_-prefixed key means the shared venv
+     # resolved documentation-system's CLI). scripts/provision-directory-key.sh
+     # is the source of truth for these scopes — people:elevate is required so
+     # /seed can promote people to admin/superuser (without it, /seed to a
+     # privileged level returns 403).
      ```
      **Important:** the CLI writes to whichever DB `.env`'s `DATABASE_URL` points
      at, which is your main `team_tracking` DB by default. Do NOT issue this key
