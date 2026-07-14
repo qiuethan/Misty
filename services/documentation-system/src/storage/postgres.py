@@ -92,14 +92,16 @@ class PostgresStorageAdapter:
         ).all()
         return [r.tag for r in rows]
 
-    def _row_to_doc(self, conn, row) -> Doc:
+    def _row_to_doc(self, conn, row, tags: list[str] | None = None) -> Doc:
+        # tags may be supplied by a batched caller (list_docs) to avoid an N+1
+        # per-doc SELECT; when None, hydrate this doc's tags on its own.
         return Doc(
             id=row.id, url=row.url, url_normalized=row.url_normalized, title=row.title,
             source_id=row.source_id, description=row.description,
             owning_team_id=row.owning_team_id, owning_team_label=row.owning_team_label,
             owning_person_id=row.owning_person_id, owning_person_label=row.owning_person_label,
             content_snapshot=row.content_snapshot, fetched_at=row.fetched_at, active=row.active,
-            tags=self._tags_for(conn, row.id),
+            tags=self._tags_for(conn, row.id) if tags is None else tags,
             created_at=row.created_at, updated_at=row.updated_at,
             created_by=row.created_by, updated_by=row.updated_by,
         )
@@ -195,9 +197,21 @@ class PostgresStorageAdapter:
         stmt = stmt.order_by(docs.c.created_at)
         with self._engine.connect() as conn:
             rows = conn.execute(stmt).all()
+            # Hydrate all tags in one batched query (grouped in memory) instead
+            # of a per-doc SELECT — same precedent as the batched grant lookup.
             # grants are intentionally omitted here (left as []) to avoid an
             # N+1 grant lookup per doc; only get_doc hydrates grants.
-            return [self._row_to_doc(conn, r) for r in rows]
+            ids = [r.id for r in rows]
+            tags_by_doc: dict[UUID, list[str]] = {}
+            if ids:
+                tag_rows = conn.execute(
+                    select(doc_tags.c.doc_id, doc_tags.c.tag)
+                    .where(doc_tags.c.doc_id.in_(ids))
+                    .order_by(doc_tags.c.tag)
+                ).all()
+                for tr in tag_rows:
+                    tags_by_doc.setdefault(tr.doc_id, []).append(tr.tag)
+            return [self._row_to_doc(conn, r, tags_by_doc.get(r.id, [])) for r in rows]
 
     def update_doc(self, doc_id: UUID, values: dict, *, actor: str) -> Doc | None:
         patch = dict(values)

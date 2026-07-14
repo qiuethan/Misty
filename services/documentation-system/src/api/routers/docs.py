@@ -123,10 +123,9 @@ def remove_tag(
     wctx: ActorContext = Depends(write_context),
     _: AuthedKey = Depends(require_scope("docs:write")),
 ) -> Doc:
+    # get_visible_doc_or_404 already 404s if the doc is missing/invisible, so
+    # the extra existence-check fetch it used to do here is redundant.
     get_visible_doc_or_404(doc_id, wctx, storage)
-    doc = storage.get_doc(doc_id)
-    if doc is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="doc not found")
     storage.remove_tag(doc_id, tag.strip().lower())
     return storage.get_doc(doc_id)
 
