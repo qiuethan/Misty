@@ -11,7 +11,9 @@ The documentation-system service is that canonical index. It exposes a REST API 
 - **Docs** — a URL plus metadata: title, description, owning team/person, tags, an optional best-effort content snapshot, and an active flag (soft delete).
 - **Sources** — a registry of URL "kinds" (`web`, `github`, `gdrive`, `gdocs`, `gsheets`, `gslides`, `notion`, `youtube`) that says whether a source requires auth to fetch, has an API, and whether content fetching is even enabled for it.
 
-Ingesting a URL is idempotent: re-submitting a known URL merges new tags onto the existing doc rather than creating a duplicate. Ownership (`owning_team_id` / `owning_person_id`) is validated against UTMIST's team-tracking service when reachable, and degrades gracefully (id stored, label resolved later) when it isn't — the catalog never blocks on a downstream directory outage.
+Content fetching is **egress-guarded (SSRF protection).** Ingesting a URL only ever fetches public, allowlisted hosts: the fetcher enforces an http/https scheme allowlist, resolves the target host, and refuses any private/loopback/link-local/reserved/carrier-grade-NAT or cloud-metadata (`169.254.169.254`) address — before the request and again on every redirect hop. The connection is pinned to the validated IP (Host header + TLS SNI preserved) so DNS-rebinding can't slip an internal target past the check. A blocked or malformed URL is surfaced as an ordinary fetch failure (the doc is still catalogued with the URL as its title), never a 500.
+
+Ingesting a URL is idempotent: re-submitting a known URL merges new tags onto the existing doc rather than creating a duplicate. De-duplication is enforced at the database level — a partial unique index on `url_normalized WHERE active` (migration 004) guarantees at most one active row per normalized URL, so concurrent adds of the same URL converge on a single canonical doc instead of racing to create duplicates, and re-adding a URL that was previously soft-removed reuses/re-catalogues it rather than piling up duplicate active entries. Ownership (`owning_team_id` / `owning_person_id`) is validated against UTMIST's team-tracking service when reachable, and degrades gracefully (id stored, label resolved later) when it isn't — the catalog never blocks on a downstream directory outage.
 
 ## Dependency on the team-tracking directory
 
@@ -100,7 +102,7 @@ documentation-system/
 │   │   └── postgres.py       PostgresStorageAdapter — used in production
 │   │
 │   ├── fetch/                 Concrete Fetcher implementations + registry
-│   │   ├── web.py             Generic web page fetcher
+│   │   ├── web.py             Generic web page fetcher (SSRF egress guard: scheme allowlist, private/metadata-IP block, IP pinning)
 │   │   ├── github.py          GitHub-aware fetcher
 │   │   └── registry.py        FetcherRegistry: source_id -> Fetcher
 │   │
@@ -116,7 +118,9 @@ documentation-system/
 │   ├── env.py
 │   └── versions/
 │       ├── 001_initial_schema.py   Creates docs, doc_tags, sources, api_keys tables
-│       └── 002_seed_sources.py     Seeds the 8 built-in sources
+│       ├── 002_seed_sources.py     Seeds the 8 built-in sources
+│       ├── 003_doc_grants.py       Adds the doc_grants table (visibility / on-behalf-of)
+│       └── 004_docs_url_unique_active.py   Partial unique index on url_normalized WHERE active (DB-level dedup)
 │
 ├── tests/                      Test suite (59 fast + 7 Postgres, gated)
 │   ├── conftest.py              build_seed_sources() — shared seed matching migration 002
@@ -149,7 +153,7 @@ documentation-system/
 The service is built around three swappable Protocols, so no concrete dependency (a specific database, a specific fetch strategy, a specific directory service) leaks into the ingest/API layers:
 
 - **`StorageAdapter`** (`contracts/storage.py`) — persistence for docs, sources, and API keys. Two implementations: `InMemoryStorageAdapter` (tests) and `PostgresStorageAdapter` (production). Swapping to Postgres in Task 15 required zero changes to `src/ingest.py` or the routers.
-- **`Fetcher`** (`contracts/fetcher.py`) — `fetch(url) -> FetchResult`. `FetcherRegistry` maps a `source_id` to a concrete fetcher (`web.py`, `github.py`); unknown or auth-required sources simply skip fetching. Fetch failures raise `FetchError`, which `ingest_doc` catches and turns into a warning — a doc is still created with the URL as its title.
+- **`Fetcher`** (`contracts/fetcher.py`) — `fetch(url) -> FetchResult`. `FetcherRegistry` maps a `source_id` to a concrete fetcher (`web.py`, `github.py`); unknown or auth-required sources simply skip fetching. The web fetcher applies SSRF egress protection (public-host allowlist, private/metadata-IP block, per-hop IP pinning) and rejects a blocked or malformed URL as a `BlockedURLError` (a `FetchError` subclass). Fetch failures raise `FetchError`, which `ingest_doc` catches and turns into a warning — a doc is still created with the URL as its title.
 - **`DirectoryClient`** (`contracts/directory.py`) — `get_team_label` / `get_person_label`, backed by `HttpDirectoryClient` calling UTMIST's team-tracking service. When team-tracking is unreachable, `DirectoryUnavailable` is caught and ingest degrades: the id is stored, the label is left null with a warning, and a later read/update backfills the label once the directory is reachable again (see `_backfill_labels` in `src/api/routers/docs.py`).
 
 ## Auth model
@@ -223,7 +227,7 @@ uv run ruff check .
 
 ## Status
 
-v1 covers: the docs + sources registry, idempotent ingest with dedup, best-effort content fetching with graceful degradation, team-tracking-backed ownership with label backfill, tag management, soft delete (`active` flag), Level 2 scoped API keys with an attested-actor audit trail, and both storage adapters — 59 passing fast tests (plus 7 Postgres integration tests behind `RUN_PG_TESTS`).
+v1 covers: the docs + sources registry, idempotent ingest with DB-enforced dedup (partial unique index on active URLs), best-effort content fetching with SSRF egress protection and graceful degradation, team-tracking-backed ownership with label backfill, tag management, soft delete (`active` flag), Level 2 scoped API keys with an attested-actor audit trail, and both storage adapters — 59 passing fast tests (plus 7 Postgres integration tests behind `RUN_PG_TESTS`).
 
 **Deferred (per design §3/§11 non-goals):**
 
