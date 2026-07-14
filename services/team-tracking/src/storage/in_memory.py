@@ -18,6 +18,7 @@ from contracts.types import (
     TeamMembershipUpdate,
     TeamUpdate,
 )
+from src.storage.errors import UnknownParentTeamError
 
 
 def _now() -> datetime:
@@ -112,6 +113,8 @@ class InMemoryStorageAdapter:
     def create_team(self, payload: TeamCreate, *, actor: str) -> Team:
         if any(t.slug == payload.slug for t in self._teams.values()):
             raise ValueError(f"slug already exists: {payload.slug}")
+        if payload.parent_id is not None and payload.parent_id not in self._teams:
+            raise UnknownParentTeamError(payload.parent_id)
         now = _now()
         t = Team(
             id=uuid4(),

@@ -12,6 +12,7 @@ from contracts.types import (
     TeamMembershipCreate,
     TeamMembershipUpdate,
 )
+from src.storage.errors import UnknownParentTeamError
 from src.storage.postgres import PostgresStorageAdapter
 
 
@@ -60,6 +61,28 @@ def test_team_hierarchy(adapter):
         actor="t",
     )
     assert child.parent_id == parent.id
+
+
+def test_create_team_nonexistent_parent_raises_unknown_parent(adapter):
+    """FK violation on parent_id must surface as UnknownParentTeamError, not a slug conflict."""
+    from uuid import uuid4
+
+    bogus = uuid4()
+    with pytest.raises(UnknownParentTeamError) as exc:
+        adapter.create_team(
+            TeamCreate(slug="orphan", label="Orphan", parent_id=bogus),
+            actor="t",
+        )
+    assert exc.value.parent_id == bogus
+
+
+def test_create_team_duplicate_slug_still_raises_value_error(adapter):
+    """Unique-violation on slug stays a plain ValueError (router -> 409)."""
+    adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    with pytest.raises(ValueError) as exc:
+        adapter.create_team(TeamCreate(slug="ops", label="Other"), actor="t")
+    assert not isinstance(exc.value, UnknownParentTeamError)
+    assert "slug already exists" in str(exc.value)
 
 
 def test_role_kinds_seeded(adapter):

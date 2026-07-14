@@ -6,6 +6,7 @@ from contracts.storage import StorageAdapter
 from contracts.types import Team, TeamCreate, TeamUpdate
 from src.api.auth import AuthedKey, get_actor, require_scope
 from src.api.deps import get_storage
+from src.storage.errors import UnknownParentTeamError
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
@@ -19,6 +20,8 @@ def create_team(
 ) -> Team:
     try:
         return storage.create_team(payload, actor=actor)
+    except UnknownParentTeamError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
