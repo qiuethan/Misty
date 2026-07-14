@@ -29,6 +29,22 @@ def _norm_email(v: str) -> str:
     return v.strip().lower()
 
 
+def _ranges_overlap(start1: date, end1: date | None, start2: date, end2: date | None) -> bool:
+    """Half-open [start, end) overlap; end=None means +infinity.
+
+    Mirrors the Postgres EXCLUDE constraint on
+    daterange(started_at, COALESCE(ended_at, 'infinity')) with && (overlap).
+    Empty ranges (start >= end) overlap nothing, matching daterange semantics.
+    """
+    if end1 is not None and start1 >= end1:
+        return False
+    if end2 is not None and start2 >= end2:
+        return False
+    lo1_before_hi2 = end2 is None or start1 < end2
+    lo2_before_hi1 = end1 is None or start2 < end1
+    return lo1_before_hi2 and lo2_before_hi1
+
+
 class InMemoryStorageAdapter:
     """In-process storage adapter used in tests and for quick prototyping.
 
@@ -182,6 +198,15 @@ class InMemoryStorageAdapter:
             raise ValueError(f"team_id not found: {payload.team_id}")
         if payload.role_kind_id not in self._role_kinds:
             raise ValueError(f"role_kind_id not found: {payload.role_kind_id}")
+        new_start = payload.started_at or date.today()
+        new_end = payload.ended_at
+        for existing in self._memberships.values():
+            if existing.person_id != payload.person_id or existing.team_id != payload.team_id:
+                continue
+            if _ranges_overlap(new_start, new_end, existing.started_at, existing.ended_at):
+                raise ValueError(
+                    "membership overlaps an existing active membership for this person and team"
+                )
         now = _now()
         m = TeamMembership(
             id=uuid4(),
@@ -217,7 +242,10 @@ class InMemoryStorageAdapter:
         if person_id is not None:
             results = [m for m in results if m.person_id == person_id]
         if active_only:
-            results = [m for m in results if m.ended_at is None]
+            # "Currently active" = open-ended OR ends strictly after today, so a
+            # future-dated ended_at still counts as active now.
+            today = date.today()
+            results = [m for m in results if m.ended_at is None or m.ended_at > today]
         if as_of is not None:
             results = [
                 m
@@ -242,6 +270,21 @@ class InMemoryStorageAdapter:
         data["updated_at"] = _now()
         data["updated_by"] = actor
         updated = TeamMembership(**data)
+        # Mirror the Postgres EXCLUDE constraint: the updated range must not
+        # overlap any OTHER active membership for the same (person, team). A
+        # PATCH that re-opens/extends ended_at can re-introduce an overlap, so
+        # re-check here, excluding the row being updated from the comparison.
+        for other in self._memberships.values():
+            if other.id == membership_id:
+                continue
+            if other.person_id != updated.person_id or other.team_id != updated.team_id:
+                continue
+            if _ranges_overlap(
+                updated.started_at, updated.ended_at, other.started_at, other.ended_at
+            ):
+                raise ValueError(
+                    "membership overlaps an existing active membership for this person and team"
+                )
         self._memberships[membership_id] = updated
         return updated
 

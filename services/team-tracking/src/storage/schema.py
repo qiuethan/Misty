@@ -18,6 +18,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, UUID
+from sqlalchemy.dialects.postgresql import ExcludeConstraint
 
 metadata = MetaData()
 
@@ -86,6 +87,19 @@ team_memberships = Table(
     Index("ix_team_memberships_team_ended", "team_id", "ended_at"),
     Index("ix_team_memberships_person_ended", "person_id", "ended_at"),
     Index("ix_team_memberships_dates", "started_at", "ended_at"),
+    # Temporal non-overlap: a person cannot have two memberships in the same team
+    # whose active date ranges overlap. Enforced with a gist EXCLUDE constraint
+    # backed by btree_gist. daterange upper bound is exclusive, so ending someone
+    # and re-adding them on the same day is allowed. Created in migration 007;
+    # the extension + backfill live there (declaring it here keeps the model in
+    # sync but does NOT create the btree_gist extension by itself).
+    ExcludeConstraint(
+        ("person_id", "="),
+        ("team_id", "="),
+        (text("daterange(started_at, COALESCE(ended_at, 'infinity'::date))"), "&&"),
+        name="team_memberships_no_overlap",
+        using="gist",
+    ),
 )
 
 api_keys = Table(

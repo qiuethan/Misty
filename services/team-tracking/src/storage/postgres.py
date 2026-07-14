@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import and_, delete, insert, or_, select, update
+from sqlalchemy import and_, delete, func, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
@@ -37,6 +37,30 @@ from src.storage.schema import (
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _constraint_name(e: IntegrityError) -> str | None:
+    return getattr(getattr(getattr(e, "orig", None), "diag", None), "constraint_name", None)
+
+
+def _translate_membership_integrity_error(e: IntegrityError, payload=None) -> ValueError:
+    """Map a membership IntegrityError to a ValueError so the router returns 400.
+
+    Covers FK violations (bad person_id / team_id / role_kind_id) and the
+    temporal-overlap EXCLUDE constraint (team_memberships_no_overlap).
+    """
+    constraint = _constraint_name(e)
+    if constraint == "team_memberships_no_overlap":
+        return ValueError(
+            "membership overlaps an existing active membership for this person and team"
+        )
+    if payload is not None:
+        return ValueError(
+            "invalid membership reference: check person_id, team_id, and role_kind_id "
+            f"(person_id={payload.person_id}, team_id={payload.team_id}, "
+            f"role_kind_id={payload.role_kind_id})"
+        )
+    return ValueError("invalid membership reference: check role_kind_id")
 
 
 def _norm_email(v: str) -> str:
@@ -301,10 +325,13 @@ class PostgresStorageAdapter:
         }
         if payload.started_at is not None:
             values["started_at"] = payload.started_at
-        with self._engine.begin() as conn:
-            row = conn.execute(
-                insert(team_memberships).values(**values).returning(team_memberships)
-            ).one()
+        try:
+            with self._engine.begin() as conn:
+                row = conn.execute(
+                    insert(team_memberships).values(**values).returning(team_memberships)
+                ).one()
+        except IntegrityError as e:
+            raise _translate_membership_integrity_error(e, payload) from e
         return _membership_row_to_model(row)
 
     def get_membership(self, membership_id: UUID) -> TeamMembership | None:
@@ -330,7 +357,15 @@ class PostgresStorageAdapter:
         if person_id is not None:
             conditions.append(team_memberships.c.person_id == person_id)
         if active_only:
-            conditions.append(team_memberships.c.ended_at.is_(None))
+            # "Currently active" = open-ended OR ends strictly after today. A
+            # future-dated ended_at means the membership is still active now, so
+            # a bare `ended_at IS NULL` would wrongly drop future-dated rows.
+            conditions.append(
+                or_(
+                    team_memberships.c.ended_at.is_(None),
+                    team_memberships.c.ended_at > func.current_date(),
+                )
+            )
         if as_of is not None:
             conditions.append(team_memberships.c.started_at <= as_of)
             conditions.append(
@@ -355,13 +390,18 @@ class PostgresStorageAdapter:
             return self.get_membership(membership_id)
         patch["updated_at"] = _now()
         patch["updated_by"] = actor
-        with self._engine.begin() as conn:
-            row = conn.execute(
-                update(team_memberships)
-                .where(team_memberships.c.id == membership_id)
-                .values(**patch)
-                .returning(team_memberships)
-            ).one_or_none()
+        try:
+            with self._engine.begin() as conn:
+                row = conn.execute(
+                    update(team_memberships)
+                    .where(team_memberships.c.id == membership_id)
+                    .values(**patch)
+                    .returning(team_memberships)
+                ).one_or_none()
+        except IntegrityError as e:
+            # A bad role_kind_id FK, or re-opening a membership (moving ended_at
+            # into the future) that now overlaps another active one.
+            raise _translate_membership_integrity_error(e) from e
         return _membership_row_to_model(row) if row else None
 
     def end_membership(
