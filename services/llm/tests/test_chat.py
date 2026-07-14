@@ -100,13 +100,16 @@ def test_chat_key_without_chat_scope_forbidden(env_key):
     # not allowed to spend provider budget.
     store = InMemoryKeyStore()
     plaintext = _consumer_key(store, scopes=[])
-    client, _ = _client(env_key, _FakeProvider(result=_ok_result()), store=store)
+    provider = _FakeProvider(result=_ok_result())
+    client, _ = _client(env_key, provider, store=store)
     resp = client.post(
         "/chat",
         headers={"X-API-Key": plaintext},
         json={"messages": [{"role": "user", "content": "hi"}]},
     )
     assert resp.status_code == 403
+    # A forbidden request must never reach the provider (no budget spent).
+    assert provider.last_request is None
 
 
 def test_chat_key_with_chat_scope_allowed(env_key):
