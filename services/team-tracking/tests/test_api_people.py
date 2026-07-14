@@ -211,3 +211,156 @@ def test_create_person_rejects_unknown_access_level(client):
         headers=AUTH,
     )
     assert resp.status_code == 422
+
+
+# --- access_level escalation guard (privilege-escalation fix) ---
+
+
+def _issue_key(client, scopes):
+    """Issue a DB-backed API key with the given scopes; return the plaintext."""
+    from src.api.hashing import generate_key
+
+    adapter = client.app.dependency_overrides[get_storage]()
+    plaintext, prefix, key_hash = generate_key()
+    adapter.create_api_key(
+        name="k",
+        prefix=prefix,
+        key_hash=key_hash,
+        scopes=scopes,
+        actor="admin",
+    )
+    return plaintext
+
+
+def test_patch_access_level_denied_for_write_only_key(client):
+    """A people:write-only key cannot change access_level (403), and the value
+    is not silently applied."""
+    created = client.post(
+        "/people",
+        json={"display_name": "C", "primary_email": "c@utmist.ca"},
+        headers=AUTH,
+    ).json()
+    key = _issue_key(client, ["people:read", "people:write"])
+    resp = client.patch(
+        f"/people/{created['id']}",
+        json={"access_level": "superuser"},
+        headers={"X-API-Key": key},
+    )
+    assert resp.status_code == 403
+    assert "people:elevate" in resp.json()["detail"]
+    # Not silently applied: value stays "member".
+    after = client.get(f"/people/{created['id']}", headers=AUTH).json()
+    assert after["access_level"] == "member"
+
+
+def test_patch_access_level_self_escalation_denied(client):
+    """A write-only key cannot escalate its own linked record to superuser."""
+    me = client.post(
+        "/people",
+        json={"display_name": "Me", "primary_email": "me@utmist.ca"},
+        headers=AUTH,
+    ).json()
+    key = _issue_key(client, ["people:read", "people:write"])
+    resp = client.patch(
+        f"/people/{me['id']}",
+        json={"access_level": "superuser"},
+        headers={"X-API-Key": key},
+    )
+    assert resp.status_code == 403
+    after = client.get(f"/people/{me['id']}", headers=AUTH).json()
+    assert after["access_level"] == "member"
+
+
+def test_patch_access_level_allowed_with_elevate_scope(client):
+    """A key holding people:elevate may change access_level."""
+    created = client.post(
+        "/people",
+        json={"display_name": "C", "primary_email": "c@utmist.ca"},
+        headers=AUTH,
+    ).json()
+    key = _issue_key(client, ["people:write", "people:elevate"])
+    resp = client.patch(
+        f"/people/{created['id']}",
+        json={"access_level": "admin"},
+        headers={"X-API-Key": key},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["access_level"] == "admin"
+
+
+def test_patch_access_level_allowed_with_admin_key(client):
+    """The admin/bootstrap key (wildcard scope) may still promote (seed flow)."""
+    created = client.post(
+        "/people",
+        json={"display_name": "C", "primary_email": "c@utmist.ca"},
+        headers=AUTH,
+    ).json()
+    resp = client.patch(
+        f"/people/{created['id']}",
+        json={"access_level": "superuser"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["access_level"] == "superuser"
+
+
+def test_patch_non_access_level_still_works_with_write_scope(client):
+    """A plain people:write key can still edit display_name/email."""
+    created = client.post(
+        "/people",
+        json={"display_name": "C", "primary_email": "c@utmist.ca"},
+        headers=AUTH,
+    ).json()
+    key = _issue_key(client, ["people:write"])
+    resp = client.patch(
+        f"/people/{created['id']}",
+        json={"display_name": "Cassandra", "primary_email": "cass@utmist.ca"},
+        headers={"X-API-Key": key},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["display_name"] == "Cassandra"
+    assert resp.json()["primary_email"] == "cass@utmist.ca"
+
+
+def test_create_privileged_person_denied_for_write_only_key(client):
+    """Creating a person with a privileged access_level requires people:elevate."""
+    key = _issue_key(client, ["people:write"])
+    resp = client.post(
+        "/people",
+        json={
+            "display_name": "E",
+            "primary_email": "e@utmist.ca",
+            "access_level": "superuser",
+        },
+        headers={"X-API-Key": key},
+    )
+    assert resp.status_code == 403
+    assert "people:elevate" in resp.json()["detail"]
+
+
+def test_create_member_person_allowed_for_write_only_key(client):
+    """Creating an ordinary (member) person needs only people:write."""
+    key = _issue_key(client, ["people:write"])
+    resp = client.post(
+        "/people",
+        json={"display_name": "F", "primary_email": "f@utmist.ca"},
+        headers={"X-API-Key": key},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["access_level"] == "member"
+
+
+def test_create_privileged_person_allowed_with_elevate_scope(client):
+    """people:elevate permits creating a privileged person (seed flow)."""
+    key = _issue_key(client, ["people:write", "people:elevate"])
+    resp = client.post(
+        "/people",
+        json={
+            "display_name": "G",
+            "primary_email": "g@utmist.ca",
+            "access_level": "superuser",
+        },
+        headers={"X-API-Key": key},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["access_level"] == "superuser"
