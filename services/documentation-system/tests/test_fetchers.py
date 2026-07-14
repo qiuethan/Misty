@@ -27,17 +27,20 @@ def test_parse_github_title_from_path():
 def test_web_fetcher_uses_injected_client():
     def handler(request):
         return httpx.Response(200, html="<title>Injected</title>")
+
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    result = WebFetcher(client=client).fetch("https://x.com")
+    # Literal public IP: the SSRF guard validates it without any DNS lookup.
+    result = WebFetcher(client=client).fetch("https://93.184.216.34")
     assert result.title == "Injected"
 
 
 def test_web_fetcher_raises_fetcherror_on_http_error():
     def handler(request):
         return httpx.Response(500)
+
     client = httpx.Client(transport=httpx.MockTransport(handler))
     with pytest.raises(FetchError):
-        WebFetcher(client=client).fetch("https://x.com")
+        WebFetcher(client=client).fetch("https://93.184.216.34")
 
 
 def test_registry_routes_by_source_and_rejects_unknown():
