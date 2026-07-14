@@ -79,7 +79,14 @@ def confirm_code(
     # Idempotent replay: already verified and still within the TTL window.
     if code.consumed_at is not None:
         if now < code.expires_at:
-            return ConfirmCodeOut(verified=True, subject=code.subject, email=code.email)
+            # Only re-issue the idempotent success (and the verified email) when
+            # the submitted code actually matches. Otherwise any holder of the
+            # verification:write scope could replay an arbitrary subject and
+            # harvest its verified email without ever knowing the code. Reuse the
+            # same constant-time HMAC comparison as the normal path.
+            if verify_code(payload.code, code.code_hash, get_settings().code_hmac_secret):
+                return ConfirmCodeOut(verified=True, subject=code.subject, email=code.email)
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_code")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no_pending_code")
 
     if now >= code.expires_at:

@@ -56,12 +56,47 @@ def test_confirm_single_use_then_idempotent_replay(client, store):
         "/verification/confirm-code", headers=AUTH, json={"subject": "discord:1", "code": "123456"}
     )
     assert first.status_code == 200
-    # Replay within TTL returns success again even with a bogus code.
+    # Replay within TTL with the CORRECT code returns idempotent success.
     again = client.post(
-        "/verification/confirm-code", headers=AUTH, json={"subject": "discord:1", "code": "999999"}
+        "/verification/confirm-code", headers=AUTH, json={"subject": "discord:1", "code": "123456"}
     )
     assert again.status_code == 200
-    assert again.json()["verified"] is True
+    assert again.json() == {"verified": True, "subject": "discord:1", "email": "a@b.com"}
+
+
+def test_confirm_replay_wrong_code_refused_and_no_email_leak(client, store):
+    # A subject that has already been verified (consumed) and is still within TTL.
+    store.create_code(_code(consumed=True))
+    r = client.post(
+        "/verification/confirm-code",
+        headers=AUTH,
+        json={"subject": "discord:1", "code": "999999"},  # wrong code
+    )
+    # Must refuse like the normal wrong-code path and must NOT echo the email.
+    assert r.status_code == 400
+    assert r.json()["detail"] == "invalid_code"
+    assert "email" not in r.text
+    assert "a@b.com" not in r.text
+
+
+def test_confirm_replay_correct_code_after_consumed(client, store):
+    # Consumed + unexpired + correct code still returns idempotent success (+ email).
+    store.create_code(_code(consumed=True))
+    r = client.post(
+        "/verification/confirm-code", headers=AUTH, json={"subject": "discord:1", "code": "123456"}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"verified": True, "subject": "discord:1", "email": "a@b.com"}
+
+
+def test_confirm_replay_expired_consumed_unchanged(client, store):
+    # Consumed but expired: 404 no_pending_code regardless of submitted code.
+    store.create_code(_code(consumed=True, ttl_min=-1))
+    r = client.post(
+        "/verification/confirm-code", headers=AUTH, json={"subject": "discord:1", "code": "123456"}
+    )
+    assert r.status_code == 404
+    assert r.json()["detail"] == "no_pending_code"
 
 
 def test_confirm_lockout_after_five(client, store):
