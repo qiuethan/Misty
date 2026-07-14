@@ -105,7 +105,11 @@ TT_DATABASE_URL="<team-tracking Neon branch DATABASE_URL for this env>" \
 ```
 
 This issues scoped `team-tracking-keys` for discord-bot + documentation-system
-and sets each service's `DIRECTORY_API_KEY`. Re-running issues a fresh key and
+and sets each service's `DIRECTORY_API_KEY`. The discord-bot key's scopes
+include `people:elevate` (alongside its `people:*`/`teams:*`/`memberships:*`
+scopes) so its `/seed` can promote people to `admin`/`superuser` — plain
+`people:write` cannot set a non-`member` `access_level`. The
+documentation-system key stays read-only (`people:read teams:read`). Re-running issues a fresh key and
 repoints the consumer; the previous key stays active until you revoke it
 manually (`team-tracking-keys revoke <id>`).
 

@@ -113,7 +113,11 @@ describes how it applies them concretely.
   Protocol in exactly one place per service (`src/api/deps.py`).
 - **Scoped API-key auth.** Every request carries `X-API-Key`. Keys are Argon2-hashed
   in the database and carry a set of per-resource scopes (e.g. `people:read`,
-  `docs:write`, with `admin` as a wildcard). A shared bootstrap env key exists for
+  `docs:write`, with `admin` as a wildcard). Specific privileged operations are
+  gated behind their own dedicated scopes rather than a broad write scope — e.g.
+  setting a non-`member` `access_level` on a person requires `people:elevate`
+  (plain `people:write` cannot escalate), and the `llm` service's `POST /chat`
+  requires the `chat` scope; `admin` still satisfies these. A shared bootstrap env key exists for
   local dev; production uses per-consumer keys issued via each service's CLI
   (`team-tracking-keys`, `doc-keys`). The auth machinery itself (key hashing, the
   scope model, the `build_auth(...)` FastAPI deps, and the audit-log middleware)

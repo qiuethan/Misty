@@ -54,13 +54,14 @@ The bot and docs-system authenticate to team-tracking with their **own** scoped 
 Keys are minted by `scripts/provision-directory-key.sh <env>`, which runs `team-tracking-keys issue` against that environment's Neon branch and writes each key onto its Railway consumer with `railway variables --set`. One command per environment.
 
 Scopes:
-- **discord-bot:** `people:read people:write identifiers:read identifiers:write teams:read teams:write memberships:read memberships:write role_kinds:read` (needs identity + membership management)
+- **discord-bot:** `people:read people:write people:elevate identifiers:read identifiers:write teams:read teams:write memberships:read memberships:write role_kinds:read` (needs identity + membership management; `people:elevate` lets `/seed` promote people to `admin`/`superuser`)
 - **documentation-system:** `people:read teams:read` (only needs to look up an owner's label)
 
 ### CI on every PR to `staging` or `main`
 
 `.github/workflows/ci.yml` runs:
 - **`python-test`** — Postgres 16 service container, applies migrations, runs the full pytest suite
+- **`documentation-system-test`** — Postgres 16 service container, runs `alembic upgrade head`, then `pytest` with `RUN_PG_TESTS=1` (does not yet run ruff — deferred)
 - **`python-lint`** — ruff check + format
 - **`node-test`** — the bot's `node --test` suite
 - **`docker-build`** — builds *and boot-smoke-tests* all three images (`python -c "import src.api.app"` for the APIs, `node --check src/index.js` for the bot)
@@ -100,6 +101,39 @@ Set `PORT=8000` (or whatever you like) as an **explicit** Railway variable on an
 `staging` and `main` are both branch-protected with `required_approving_review_count: 1`. Auto-merging your own PR isn't possible; use the standard review flow or an admin merge for genuinely trivial changes (e.g. docs-only). Removing this requirement would speed things up but weaken the safety net — don't do it without a real reason.
 
 ---
+
+## Release log
+
+### 2026-07-14 — security-review remediation (staging)
+
+The remediation from the 2026-07-13 security review merged to `staging`. In one release:
+
+- **team-tracking:** an SSRF egress guard on outbound fetches; a `PATCH /people`
+  privilege-escalation fix backed by a new **`people:elevate`** scope (required to
+  set a non-`member` `access_level` on `POST`/`PATCH /people`; plain `people:write`
+  can no longer escalate, `admin` still satisfies it); a membership temporal
+  no-overlap constraint, `400`s on bad foreign-key references, and `active_only`
+  filtering.
+- **documentation-system:** URL dedup hardened via a partial unique index on
+  `url_normalized WHERE active`.
+- **verification:** `confirm-code` replay hardening — an idempotent replay on a
+  consumed-but-unexpired code now re-checks the submitted code (no email leak on a
+  wrong code) and enforces the same attempt limit (`429`).
+- **llm:** `POST /chat` now requires the dedicated **`chat`** scope (was: any valid key).
+
+**Migrations applied on staging** — team-tracking **007** (membership no-overlap via a
+`btree_gist` exclusion constraint; the migration creates the `btree_gist` extension) and
+documentation-system **004** (the partial unique index above). Both run automatically as
+Railway's `preDeployCommand` (`alembic upgrade head`).
+
+**CI:** added the **`documentation-system-test`** job (Postgres 16 service +
+`alembic upgrade head` + `pytest` with `RUN_PG_TESTS=1`; ruff deferred).
+
+**Keys:** the discord-bot directory key was rotated to add `people:elevate`
+(`scripts/provision-directory-key.sh` updated) so its `/seed` can promote people to
+`admin`/`superuser`.
+
+**Discord:** `/doc` was promoted from beta to stable and now registers globally.
 
 ## Current state
 
