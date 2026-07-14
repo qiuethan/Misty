@@ -220,6 +220,17 @@ is the workflow around them.
   A `401` means reissue it against **main** (port 8000) and update `.env`.
 - **`/docs` 404s on the catalog.** Its Swagger UI is at `/swagger`; `/docs` is a
   real docs-resource router on that service.
+- **Minted a directory key with a `doc_` prefix (team-tracking rejects it).**
+  Both `services/team-tracking` and `services/documentation-system` declare a
+  top-level `src` package, each with a console script at `src.cli:main`
+  (`team-tracking-keys` and `doc-keys`). In the shared workspace venv these
+  collide, so a bare `team-tracking-keys …` can resolve documentation-system's
+  CLI and mint a `doc_`-envelope key — which team-tracking's auth rejects
+  (`parse_prefix` in [`packages/auth/platform_auth/hashing.py`](../packages/auth/platform_auth/hashing.py)
+  requires the `tt_` envelope). Always pin the project:
+  `uv --project services/team-tracking run team-tracking-keys …` (as
+  `scripts/provision-directory-key.sh` does), and verify the token's prefix is
+  `tt_`, not `doc_`, before using it as `DIRECTORY_API_KEY`.
 - **`uv: command not found` / `docker: command not found`.** Revisit
   [Prerequisites](#prerequisites-new-to-this-stack).
 

@@ -43,7 +43,7 @@ Three services, each existing once at the Railway project level and exposed in *
 
 - **`staging` is the default branch.** Feature PRs auto-target it. Merges auto-deploy to the Railway staging environment.
 - **`main` is the release branch.** Only PRs from `staging` can merge — enforced by the `main-source-guard` workflow. Merges auto-deploy to production.
-- Both branches require the 4 CI checks; main additionally requires the source-guard.
+- Both branches require the 4 required CI status checks (`python-test`, `python-lint`, `node-test`, `docker-build`); main additionally requires the source-guard. (CI runs 8 jobs in total — the other four aren't yet required to merge.)
 
 This gives you the loop of `push to feature → PR → staging → real staging deploy → validate → promote to main → production deploy`, with no branch or environment able to skip validation.
 
@@ -59,14 +59,21 @@ Scopes:
 
 ### CI on every PR to `staging` or `main`
 
-`.github/workflows/ci.yml` runs:
-- **`python-test`** — Postgres 16 service container, applies migrations, runs the full pytest suite
+`.github/workflows/ci.yml` runs **8 jobs**:
+- **`python-test`** — team-tracking, Postgres 16 service container, applies migrations, runs the full pytest suite
+- **`python-lint`** — team-tracking ruff check + format
+- **`auth-lib-test`** — the shared `packages/auth` (`platform_auth`) pytest suite + ruff check
+- **`verification-test`** — services/verification, Postgres 16 service container, `alembic upgrade head`, then `pytest` + ruff check/format
+- **`llm-test`** — services/llm pytest suite + ruff check/format
 - **`documentation-system-test`** — Postgres 16 service container, runs `alembic upgrade head`, then `pytest` with `RUN_PG_TESTS=1` (does not yet run ruff — deferred)
-- **`python-lint`** — ruff check + format
 - **`node-test`** — the bot's `node --test` suite
-- **`docker-build`** — builds *and boot-smoke-tests* all three images (`python -c "import src.api.app"` for the APIs, `node --check src/index.js` for the bot)
+- **`docker-build`** — builds *and boot-smoke-tests* the service images (`python -c "import src.api.app"` for the APIs, `node --check src/index.js` for the bot)
 
-Plus `main-source-guard` on PRs to `main`. All required — nothing red merges.
+Only **four** of these are **required status checks** in branch protection —
+`python-test`, `python-lint`, `node-test`, `docker-build`. The other four
+(`auth-lib-test`, `verification-test`, `llm-test`, `documentation-system-test`)
+run on every PR but aren't yet gating merges. Plus `main-source-guard` on PRs to
+`main`.
 
 ---
 
@@ -139,7 +146,7 @@ Railway's `preDeployCommand` (`alembic upgrade head`).
 
 - Both environments fully deployed and healthy.
 - APIs are **private-only** on Railway (no public domains). Only in-project services (the bot, docs-system) reach them, over Railway's internal network. Add a public domain later if an external caller ever needs one — both APIs already have API-key auth.
-- **Discord commands.** Stable commands (`/link`, `/whoami`, `/seed`) are registered globally on the production bot. Beta commands (`/team`, `/my-teams`) are still guild-scoped to the test guild — flip `beta: false` in each module + re-run `registerCommands` to promote them to production when confident.
+- **Discord commands.** All stable commands (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`, `/doc`, plus the email-verification set `/add-email`, `/verify-email`, `/verify-code`, and `/help`) are registered globally on the production bot; **0 beta commands** remain guild-scoped (every command in `discord-bot/src/commands/index.js` is `beta: false`). To ship a future beta command, add it with `beta: true`, validate it in the staging test guild, then flip `beta: false` in its module + re-run `registerCommands` to promote it globally.
 - **Migrations run automatically** as Railway's `preDeployCommand` on the two API services — `alembic upgrade head` against the environment's Neon branch before every deploy. Idempotent.
 
 ---

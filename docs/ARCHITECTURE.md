@@ -12,6 +12,24 @@ see each service's own `docs/ARCHITECTURE.md`:
   playground), and its own "Consumer" section below sketches how it sits atop the
   directory.
 
+## The services
+
+The platform is **four backend services**, each a source of truth for one domain,
+plus the Discord bot as a consumer:
+
+| Service | Domain | Key surface |
+|---------|--------|-------------|
+| [`team-tracking`](../services/team-tracking) | The directory — people, teams, roles, memberships | the org model everything else references |
+| [`documentation-system`](../services/documentation-system) | The docs catalog — the org's index of URLs | validates owner ids against team-tracking |
+| [`services/llm`](../services/llm) | Stateless LLM proxy | `POST /chat` over Amazon Bedrock; requires the `chat` scope; holds no DB/state |
+| [`services/verification`](../services/verification) | Email ownership verification | request/confirm an email code; `verification:write` scope |
+
+The rest of this document details the team-tracking ↔ documentation-system
+ownership relationship (the one cross-service data flow today); `llm` and
+`verification` are independent services that share the same conventions below
+(scoped API-key auth, `contracts/` Protocol boundary, Alembic migrations where
+they own state — `llm` is stateless).
+
 ## The core principle: a source of truth is API-only
 
 Each service is a **source of truth** for one domain — the directory owns the org
