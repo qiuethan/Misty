@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from conftest import AUTH
 from contracts.types import VerificationCode
 from src.codes import hash_code
+from src.policy import MAX_ATTEMPTS
 
 SECRET = "test-hmac-secret"
 
@@ -91,32 +92,46 @@ def test_confirm_replay_correct_code_after_consumed(client, store):
 
 def test_confirm_replay_wrong_code_eventually_locks_out(client, store):
     # Consumed + unexpired: repeated wrong-code replays must trip the same
-    # attempt limiting as the normal path (no unlimited brute force).
-    store.create_code(_code(consumed=True))
-    for _ in range(5):
+    # attempt limiting as the normal path (no unlimited brute force, and no
+    # early lockout before the cap).
+    start_attempts = 0
+    store.create_code(_code(consumed=True, attempts=start_attempts))
+    # Wrong-code replays return 400 invalid_code until the increment that reaches
+    # the cap, which returns 429 too_many_attempts.
+    expected_400s = MAX_ATTEMPTS - start_attempts - 1
+    for i in range(expected_400s):
         r = client.post(
             "/verification/confirm-code",
             headers=AUTH,
             json={"subject": "discord:1", "code": "999999"},
         )
-        assert r.status_code in (400, 429)
-    # After exhausting MAX_ATTEMPTS, further guesses are locked out.
+        assert r.status_code == 400, f"guess {i} should be 400, got {r.status_code}"
+        assert r.json()["detail"] == "invalid_code"
+    # The next wrong guess crosses the cap and locks out.
     r = client.post(
         "/verification/confirm-code", headers=AUTH, json={"subject": "discord:1", "code": "999999"}
     )
     assert r.status_code == 429
     assert r.json()["detail"] == "too_many_attempts"
     assert "a@b.com" not in r.text
+    # And it stays locked out.
+    r = client.post(
+        "/verification/confirm-code", headers=AUTH, json={"subject": "discord:1", "code": "999999"}
+    )
+    assert r.status_code == 429
+    assert r.json()["detail"] == "too_many_attempts"
 
 
 def test_confirm_replay_correct_code_before_lockout(client, store):
-    # A correct-code replay still returns idempotent success while under the cap.
+    # A correct-code replay still returns idempotent success while under the cap,
+    # and must NOT increment the stored attempt count.
     store.create_code(_code(consumed=True, attempts=4))
     r = client.post(
         "/verification/confirm-code", headers=AUTH, json={"subject": "discord:1", "code": "123456"}
     )
     assert r.status_code == 200
     assert r.json() == {"verified": True, "subject": "discord:1", "email": "a@b.com"}
+    assert store.get_code("discord:1").attempts == 4  # unchanged by a correct replay
 
 
 def test_confirm_replay_expired_consumed_unchanged(client, store):
