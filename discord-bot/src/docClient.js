@@ -1,3 +1,5 @@
+import { createHttpClient } from './httpClient.js';
+
 export class DocUnavailable extends Error {
   constructor(message) {
     super(message);
@@ -13,14 +15,6 @@ export class DocBadReference extends Error {
   }
 }
 
-async function parseJson(resp) {
-  try {
-    return await resp.json();
-  } catch {
-    throw new DocUnavailable('malformed doc-service response');
-  }
-}
-
 // Assert an actor for a read so the doc service filters visibility as that user
 // (on-behalf-of, gated by the key's act-as-user scope). Omit the header entirely
 // when there's no actor — the service then applies its no-actor policy.
@@ -30,18 +24,13 @@ function oboHeader(onBehalfOf) {
 
 export function createDocClient({ baseUrl, apiKey, fetchImpl = fetch }) {
   const headers = { 'X-API-Key': apiKey, 'Content-Type': 'application/json' };
-
-  async function send(path, options = {}) {
-    const { headers: perCall, ...rest } = options;
-    try {
-      return await fetchImpl(`${baseUrl}${path}`, {
-        ...rest,
-        headers: perCall ? { ...headers, ...perCall } : headers,
-      });
-    } catch {
-      throw new DocUnavailable('network error reaching doc service');
-    }
-  }
+  const { send, parseJson } = createHttpClient({
+    baseUrl,
+    headers,
+    fetchImpl,
+    networkError: () => new DocUnavailable('network error reaching doc service'),
+    parseError: () => new DocUnavailable('malformed doc-service response'),
+  });
 
   function unavailable(status, context) {
     // Surface unexpected statuses (notably 401/403 from a bad or mis-scoped
