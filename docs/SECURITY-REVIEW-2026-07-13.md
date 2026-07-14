@@ -11,7 +11,7 @@ Every finding was then re-checked by the engine that did **not** originate it (C
 workflow's findings; adversarial subagents verified Codex's findings). Verdicts below reflect that
 cross-verification.
 
-**Headline:** 2 Critical, 5 High, 5 Medium, 7 Low. The dominant systemic cause is **storage-adapter
+**Headline:** 2 Critical, 5 High, 4 Medium, 8 Low (19 total). The dominant systemic cause is **storage-adapter
 drift** — the Postgres and in-memory adapters have diverged and the test suite only exercises
 in-memory, so multiple real Postgres/prod bugs pass CI green.
 
@@ -60,12 +60,19 @@ head`), Ruff lint+format, and `npm test` for the bot — every PR must pass thes
   echo email on mismatch. Zone: verification.
 
 ### Wave 2 — Data integrity & adapter parity
-- **`fix/membership-integrity`** (#3, #4, #6, #7) — FK→ValueError mapping; partial-unique index on
-  `(person_id, team_id) WHERE ended_at IS NULL` (new migration, mirror `person_identifiers`); roster dedup +
-  end-all-active on remove; `active_only` = `ended_at IS NULL OR ended_at > CURRENT_DATE`. Zone: team-tracking.
+- **`fix/membership-integrity`** (#3, #4, #6, #7) — FK→ValueError mapping; roster dedup + end-all-active on
+  remove; `active_only` = `ended_at IS NULL OR ended_at > CURRENT_DATE`. For uniqueness, enforce the **full
+  active predicate**, not just `ended_at IS NULL`: a partial unique index cannot use `CURRENT_DATE` (not
+  IMMUTABLE), so use a **temporal exclusion constraint** — `EXCLUDE USING gist (person_id WITH =, team_id
+  WITH =, daterange(started_at, COALESCE(ended_at, 'infinity'::date)) WITH &&)` (needs the `btree_gist`
+  extension) — so no two current-or-future memberships for the same person+team can overlap. Migration must
+  **backfill first**: close/dedup existing overlapping active rows before adding the constraint or it fails
+  on live data. Zone: team-tracking.
 - **`fix/docs-url-dedup`** (#5, #11) — prefer active row in `get_doc_by_normalized_url`; partial-unique
   index on `url_normalized WHERE active` (new migration); race-safe ingest (SAVEPOINT/on-conflict, mirror
-  `add_grant`). Zone: documentation-system.
+  `add_grant`). Migration must **backfill first**: canonicalize/soft-delete the existing duplicate active
+  rows (#5 says they already exist) — keeping the row `get_doc_by_normalized_url` now prefers — before
+  creating the partial unique index, or `CREATE UNIQUE INDEX` fails on live data. Zone: documentation-system.
 - **`fix/team-parent-id-validation`** (#9) — branch on `constraint_name` to split parent-FK (400) from slug
   conflict (409); validate `parent_id` in-memory. Zone: team-tracking.
 
@@ -81,5 +88,6 @@ head`), Ruff lint+format, and `npm test` for the bot — every PR must pass thes
 - **#8** email-lookup whitespace, **#19** attempts atomicity — trivial parity nits; fold in opportunistically.
 
 ### Cross-cutting recommendation
-Add a **Postgres-backed run of the storage contract tests** so adapter drift (#3, #4, #7, #8, #9, #11)
-surfaces in CI instead of hiding behind the in-memory suite.
+Add a **Postgres-backed run of the storage contract tests** so adapter drift (#3, #4, #5, #7, #8, #9, #11)
+surfaces in CI instead of hiding behind the in-memory suite. Include a case asserting that
+`get_doc_by_normalized_url` prefers the **active** row during dedup (#5).
