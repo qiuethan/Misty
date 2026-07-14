@@ -125,8 +125,10 @@ def test_end_membership_sets_ended_at(adapter):
     ended = adapter.end_membership(m.id, end_date, actor="t")
     assert ended is not None
     assert ended.ended_at == end_date
+    # A FUTURE-dated ended_at means the membership is still currently active
+    # (regression guard for the #7 active_only bug: it must NOT drop future rows).
     active = adapter.list_memberships(team_id=team.id, active_only=True)
-    assert len(active) == 0
+    assert len(active) == 1
 
 
 def test_as_of_date_filter(adapter):
@@ -183,6 +185,73 @@ def test_fk_checks_on_membership_create(adapter):
             TeamMembershipCreate(person_id=uuid4(), team_id=uuid4()),
             actor="t",
         )
+
+
+def test_create_membership_rejects_overlap(adapter):
+    """A second active membership overlapping an existing one for the same
+    (person, team) is rejected (mirrors the Postgres EXCLUDE constraint)."""
+    p = adapter.create_person(
+        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
+    )
+    team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    adapter.create_membership(TeamMembershipCreate(person_id=p.id, team_id=team.id), actor="t")
+    with pytest.raises(ValueError, match="overlap"):
+        adapter.create_membership(TeamMembershipCreate(person_id=p.id, team_id=team.id), actor="t")
+
+
+def test_create_membership_same_day_readd_allowed_in_memory(adapter):
+    """Ending then re-adding on the same day does not overlap (exclusive upper)."""
+    p = adapter.create_person(
+        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
+    )
+    team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    m = adapter.create_membership(
+        TeamMembershipCreate(person_id=p.id, team_id=team.id, started_at=date(2026, 1, 1)),
+        actor="t",
+    )
+    adapter.end_membership(m.id, date(2026, 3, 1), actor="t")
+    # Re-add starting the same day the previous one ended -> allowed.
+    again = adapter.create_membership(
+        TeamMembershipCreate(person_id=p.id, team_id=team.id, started_at=date(2026, 3, 1)),
+        actor="t",
+    )
+    assert again.id != m.id
+
+
+def test_create_membership_non_overlapping_history_allowed(adapter):
+    """Two disjoint historical memberships for the same person+team are fine."""
+    p = adapter.create_person(
+        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
+    )
+    team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    adapter.create_membership(
+        TeamMembershipCreate(
+            person_id=p.id, team_id=team.id, started_at=date(2020, 9, 1), ended_at=date(2021, 5, 1)
+        ),
+        actor="t",
+    )
+    adapter.create_membership(
+        TeamMembershipCreate(
+            person_id=p.id, team_id=team.id, started_at=date(2023, 9, 1), ended_at=date(2024, 5, 1)
+        ),
+        actor="t",
+    )
+    assert len(adapter.list_memberships(person_id=p.id)) == 2
+
+
+def test_active_only_includes_future_dated_in_memory(adapter):
+    """active_only must include a membership whose ended_at is in the future."""
+    p = adapter.create_person(
+        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
+    )
+    team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    adapter.create_membership(
+        TeamMembershipCreate(
+            person_id=p.id, team_id=team.id, ended_at=date.today() + timedelta(days=30)
+        ),
+        actor="t",
+    )
+    assert len(adapter.list_memberships(active_only=True)) == 1
 
 
 def test_update_membership_role_kind_validation(adapter):

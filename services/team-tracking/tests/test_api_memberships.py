@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -186,6 +186,76 @@ def test_create_membership_fk_missing_returns_400(client):
         headers=AUTH,
     )
     assert resp.status_code == 400
+
+
+def test_update_membership_bad_role_kind_returns_400(client):
+    """Bad role_kind_id FK on update yields 400, not 500."""
+    p, t = _create_person_and_team(client)
+    m = client.post(
+        "/memberships",
+        json={"person_id": p["id"], "team_id": t["id"]},
+        headers=AUTH,
+    ).json()
+    resp = client.patch(
+        f"/memberships/{m['id']}",
+        json={"role_kind_id": "does-not-exist"},
+        headers=AUTH,
+    )
+    assert resp.status_code == 400
+
+
+def test_active_only_includes_future_dated_membership(client):
+    """A membership whose ended_at is in the future is still currently active."""
+    p, t = _create_person_and_team(client)
+    future = str(date.today() + timedelta(days=90))
+    client.post(
+        "/memberships",
+        json={"person_id": p["id"], "team_id": t["id"], "ended_at": future},
+        headers=AUTH,
+    )
+    active = client.get("/memberships?active_only=true", headers=AUTH).json()
+    assert len(active) == 1
+    assert active[0]["ended_at"] == future
+
+
+def test_create_membership_overlap_returns_400(client):
+    """A second overlapping active membership for the same person+team is 400."""
+    p, t = _create_person_and_team(client)
+    first = client.post(
+        "/memberships",
+        json={"person_id": p["id"], "team_id": t["id"]},
+        headers=AUTH,
+    )
+    assert first.status_code == 201
+    dup = client.post(
+        "/memberships",
+        json={"person_id": p["id"], "team_id": t["id"]},
+        headers=AUTH,
+    )
+    assert dup.status_code == 400
+    assert "overlap" in dup.json()["detail"]
+
+
+def test_create_membership_same_day_readd_allowed(client):
+    """Ending a membership then re-adding on the same day is allowed (upper
+    bound of the active range is exclusive)."""
+    p, t = _create_person_and_team(client)
+    m = client.post(
+        "/memberships",
+        json={"person_id": p["id"], "team_id": t["id"], "started_at": "2026-01-01"},
+        headers=AUTH,
+    ).json()
+    client.post(
+        f"/memberships/{m['id']}/end",
+        json={"ended_at": "2026-03-01"},
+        headers=AUTH,
+    )
+    readd = client.post(
+        "/memberships",
+        json={"person_id": p["id"], "team_id": t["id"], "started_at": "2026-03-01"},
+        headers=AUTH,
+    )
+    assert readd.status_code == 201
 
 
 def test_end_nonexistent_membership_returns_404(client):
