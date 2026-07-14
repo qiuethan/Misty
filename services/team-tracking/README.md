@@ -92,6 +92,7 @@ uv run team-tracking-keys revoke <api_key_id>
 Scopes recognized today:
 
 - `people:read`, `people:write`
+- `people:elevate` — required to set a non-`member` `access_level` when creating (`POST /people`) or to change `access_level` at all when updating (`PATCH /people/{id}`); a plain `people:write` key gets **403** if the payload would set/change `access_level`. The `admin` wildcard still satisfies it.
 - `memberships:read`, `memberships:write`
 - `identifiers:read`, `identifiers:write`
 - `providers:read`, `providers:write`
@@ -160,10 +161,10 @@ Every endpoint requires an `X-API-Key`. The actor stamped into `created_by`/`upd
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
-| POST | `/people` | `people:write` | Create a person |
+| POST | `/people` | `people:write` (+`people:elevate` for non-`member` `access_level`) | Create a person |
 | GET | `/people` | `people:read` | List people (`?active_only=`) |
 | GET | `/people/{id}` | `people:read` | Get one person |
-| PATCH | `/people/{id}` | `people:write` | Update a person |
+| PATCH | `/people/{id}` | `people:write` (+`people:elevate` to change `access_level`) | Update a person |
 | GET | `/people/by-identifier/{provider}/{external_id}` | `identifiers:read` | Reverse lookup → Person |
 | GET | `/people/{id}/identifiers` | `identifiers:read` | List a person's linked accounts |
 | POST | `/people/{id}/identifiers` | `identifiers:write` | Link an external account |
@@ -185,6 +186,18 @@ Every endpoint requires an `X-API-Key`. The actor stamped into `created_by`/`upd
 | POST | `/memberships/{id}/end` | `memberships:write` | End a membership (set `ended_at`) |
 
 See [docs/API.md](docs/API.md) for full request/response shapes, query parameters, error codes, and curl examples.
+
+### Behavior notes
+
+**Access-level changes (`people:elevate`).** Setting a non-`member` `access_level` on `POST /people`, or changing `access_level` on `PATCH /people/{id}`, requires the `people:elevate` scope (the `admin` wildcard satisfies it). A plain `people:write` key is rejected with **403** rather than having the field silently dropped — `access_level` is a privilege grant that downstream consumers trust for authorization.
+
+**Membership temporal integrity.**
+
+- Creating (`POST /memberships`) or updating (`PATCH /memberships/{id}`) a membership whose active date range **temporally overlaps** an existing membership for the same `(person_id, team_id)` is rejected with **400**. This is enforced at the database by a `btree_gist` `EXCLUDE` constraint (migration 007). "Active/overlap" uses the half-open range `[started_at, ended_at)`, with an open-ended (`NULL`) `ended_at` treated as infinity; because the upper bound is exclusive, ending a membership and re-adding the person on the **same day** does not overlap and is allowed.
+- Foreign-key violations on membership create/update (unknown `person_id`, `team_id`, or `role_kind_id`) now return **400** (previously surfaced as a 500).
+- `GET /memberships?active_only=true` means **currently active** = `ended_at IS NULL OR ended_at > current_date`. A membership with a *future* `ended_at` still counts as active (previously a future end date excluded it immediately).
+
+**Unknown parent team.** `POST /teams` with a nonexistent `parent_id` returns **400** ("unknown parent team"), not a misleading `409 slug already exists`.
 
 ## Testing
 
