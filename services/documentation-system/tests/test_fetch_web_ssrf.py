@@ -162,6 +162,37 @@ def test_malformed_hostname_becomes_fetch_error(monkeypatch):
     assert transport.requests == []
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://[::1",  # invalid IPv6 literal -> urlsplit raises ValueError
+        "http://example.com:99999/",  # out-of-range port -> parts.port raises ValueError
+        "http://",  # no host
+        "http:///path/only",  # no host, path only
+    ],
+)
+def test_malformed_url_becomes_fetch_error_not_500(url):
+    """URL parsing (urlsplit/.hostname/.port) is inside the guarded region, so a
+    malformed URL is a handled FetchError (-> 502), never a raw ValueError/500,
+    and no connection is attempted."""
+    fetcher, transport = _make(_boom)
+    with pytest.raises(FetchError):
+        fetcher.fetch(url)
+    assert transport.requests == []
+
+
+def test_malformed_redirect_location_becomes_fetch_error(public_dns):
+    """A redirect whose Location is an unparseable URL surfaces as a handled
+    FetchError, not a raw 500, when re-parsed for the next hop."""
+
+    def handler(request):
+        return httpx.Response(302, headers={"location": "http://[::1"})
+
+    fetcher, transport = _make(handler)
+    with pytest.raises(FetchError):
+        fetcher.fetch("http://public.example.com/redirector")
+
+
 def test_blocks_redirect_to_internal_ip(public_dns):
     def handler(request):
         # The original hostname rides in the Host header (URL host is the pinned IP).

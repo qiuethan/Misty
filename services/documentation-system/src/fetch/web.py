@@ -85,16 +85,25 @@ def _resolve_ips(host: str) -> list[_IpAddress]:
     return ips
 
 
-def _validate_and_resolve(url: str) -> tuple[SplitResult, str, list[_IpAddress]]:
+def _validate_and_resolve(url: str) -> tuple[str, str, list[_IpAddress]]:
     """Reject `url` unless it uses http(s) and EVERY address it resolves to is a
-    public destination; otherwise raise BlockedURLError. Returns the parsed URL,
-    its hostname, and the validated IPs so the caller can pin the connection to a
-    validated IP. Called for the initial URL and again for each redirect hop."""
-    parts = urlsplit(url)
-    scheme = parts.scheme.lower()
+    public destination; otherwise raise BlockedURLError. Returns the hostname, the
+    reconstructed Host-header authority, and the validated IPs so the caller can
+    pin the connection to a validated IP. Called for the initial URL and again for
+    each redirect hop.
+
+    All URL parsing happens inside the guarded region: a malformed URL (invalid
+    IPv6 literal → urlsplit raises; out-of-range port → parts.port raises) becomes
+    a handled BlockedURLError, never a raw ValueError/500."""
+    try:
+        parts = urlsplit(url)
+        scheme = (parts.scheme or "").lower()
+        host = parts.hostname
+        host_header = _host_header(parts)  # accesses parts.port, may raise ValueError
+    except ValueError as e:
+        raise BlockedURLError(f"malformed URL {url!r}: {e}") from e
     if scheme not in _ALLOWED_SCHEMES:
         raise BlockedURLError(f"blocked URL scheme: {scheme or '(none)'!r}")
-    host = parts.hostname
     if not host:
         raise BlockedURLError(f"blocked URL with no host: {url!r}")
     try:
@@ -108,7 +117,7 @@ def _validate_and_resolve(url: str) -> tuple[SplitResult, str, list[_IpAddress]]
     for ip in ips:
         if _is_blocked_ip(ip):
             raise BlockedURLError(f"blocked internal address for host {host!r}: {ip}")
-    return parts, host, ips
+    return host, host_header, ips
 
 
 def _host_header(parts: SplitResult) -> str:
@@ -142,11 +151,12 @@ class WebFetcher:
         try:
             current = url
             for _ in range(_MAX_REDIRECTS + 1):
-                parts, host, ips = _validate_and_resolve(current)  # raises before connecting
+                # Parses + validates + resolves; raises BlockedURLError before connecting.
+                host, host_header, ips = _validate_and_resolve(current)
                 pinned = httpx.URL(current).copy_with(host=str(ips[0]))
                 resp = client.get(
                     pinned,
-                    headers={"Host": _host_header(parts)},
+                    headers={"Host": host_header},
                     extensions={"sni_hostname": host},
                 )
                 if resp.is_redirect:
@@ -162,7 +172,10 @@ class WebFetcher:
                     content_snapshot=extract_text(resp.text),
                 )
             raise FetchError(f"web fetch failed: too many redirects (>{_MAX_REDIRECTS})")
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError) as e:
+            # httpx.InvalidURL/ValueError: a malformed URL or redirect Location that
+            # httpx.URL(...)/join(...) rejects — surface as a handled fetch failure,
+            # never a raw 500. (BlockedURLError is a FetchError and propagates as-is.)
             raise FetchError(f"web fetch failed: {e}") from e
         finally:
             if self._client is None:
