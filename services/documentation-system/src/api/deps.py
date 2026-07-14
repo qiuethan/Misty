@@ -28,6 +28,14 @@ def get_fetchers() -> FetcherRegistry:
     return default_registry()
 
 
+@lru_cache(maxsize=None)
+def _directory_client(base_url: str, api_key: str) -> HttpDirectoryClient:
+    # Cached per (base_url, api_key) so the underlying httpx.Client (and its
+    # connection pool) is built once and reused across requests, instead of a
+    # fresh client+connection per call.
+    return HttpDirectoryClient(base_url, api_key)
+
+
 def get_directory() -> DirectoryClient:
     s = get_settings()
-    return HttpDirectoryClient(s.directory_base_url, s.directory_api_key)
+    return _directory_client(s.directory_base_url, s.directory_api_key)

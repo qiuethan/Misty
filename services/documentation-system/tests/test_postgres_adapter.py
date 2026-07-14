@@ -96,3 +96,18 @@ def test_org_grant_partial_unique_pg(adapter):
     assert adapter.add_grant(d.id, grantee_type="org", grantee_id=None, actor="t") is True
     assert adapter.add_grant(d.id, grantee_type="org", grantee_id=None, actor="t") is True  # idempotent
     assert len(adapter.list_grants(d.id)) == 1
+
+
+def test_list_docs_batched_tag_hydration_matches_per_doc(adapter):
+    """list_docs hydrates tags via a single batched query; the tags attached to
+    each doc must be identical (same values, same tag-sorted order) to what
+    get_doc returns per-doc, across a multi-doc, multi-tag catalog — including
+    docs with no tags."""
+    d1 = _mk(adapter, url="https://one.com", tags=["gamma", "alpha", "beta"])
+    d2 = _mk(adapter, url="https://two.com", tags=["zeta"])
+    d3 = _mk(adapter, url="https://three.com", tags=[])
+    listed = {d.id: d for d in adapter.list_docs(active_only=True)}
+    for doc_id in (d1.id, d2.id, d3.id):
+        assert listed[doc_id].tags == adapter.get_doc(doc_id).tags
+    assert listed[d1.id].tags == ["alpha", "beta", "gamma"]  # tag-sorted
+    assert listed[d3.id].tags == []
