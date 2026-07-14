@@ -166,10 +166,12 @@ and skips them.
 
 ## Commands
 
-- `/link email:<your UTMIST email>` (public) — links your Discord account to your
-  directory record. Your email must already be in the directory (execs seed
-  members). No email verification yet — see the `// TODO: verification` in
-  `src/linkService.js`.
+- `/link email:<your UTMIST email>` (public) — starts linking your Discord account
+  to your directory record. Your email must already be in the directory (execs seed
+  members). It emails a one-time code to that address; run `/verify-code` with the
+  code to finish linking. Backed by the verification service via `src/linkService.js`.
+- `/verify-code code:<6-digit>` (public) — confirms the code emailed by `/link` and
+  completes the link.
 - `/whoami` (linked) — shows which directory record you're linked to. Requires you
   to be linked; the auth layer handles the "not linked" case.
 - `/seed email:<> name:<> [level:member|admin|superuser]` (admin) — add a member to
@@ -369,7 +371,7 @@ local `.env`.
 | `src/config.js` | Load + validate env. |
 | `src/context.js` | Wire application services once. |
 | `src/directoryClient.js` | The only module that knows the team-tracking HTTP shape. |
-| `src/linkService.js` | Orchestrates the `/link` action. Holds the verification TODO. |
+| `src/linkService.js` | Orchestrates `/link` + `/verify-code` — email one-time-code verification via the verification service. |
 | `src/auth/principal.js` | Authentication: Discord id → Principal. |
 | `src/auth/policy.js` | Authorization: policy + principal → allow/deny. |
 | `src/router.js` | Policy Enforcement Point: authN → authZ → dispatch. |
@@ -399,7 +401,7 @@ tested against a mocked directory client. discord.js handlers are kept thin.
 
 ## Deferred
 
-Email verification code (still a `TODO: verification` in `src/linkService.js`),
-Discord role sync, `/unlink`, and any bot-side persistence.
+Discord role sync, `/unlink`, and any bot-side persistence. (Email verification is
+now implemented — `/link` + `/verify-code` via the verification service.)
 
 Team archive/unarchive, `/team info`, editing role/team-admin on existing memberships, team-admin delegation authority, dynamic role_kinds fetch for slash choices, LLM adapter.
