@@ -24,7 +24,10 @@ test('answer builds a system prompt with name + teams and passes messages throug
       assert.equal(activeOnly, true);
       return [{ team_id: 't1' }, { team_id: 't2' }];
     },
-    getTeam: async (id) => ({ t1: { label: 'Events' }, t2: { label: 'Web' } })[id],
+    listTeams: async () => [
+      { id: 't1', label: 'Events' },
+      { id: 't2', label: 'Web' },
+    ],
   };
   const svc = createHelperService({ llmClient: fakeLlm(capture), directory });
   const res = await svc.answer({ messages: MESSAGES, principal: PRINCIPAL });
@@ -38,9 +41,49 @@ test('answer builds a system prompt with name + teams and passes messages throug
   assert.match(capture.args.system, /Web/);
 });
 
+test('answer resolves team labels with ONE listTeams call, not N getTeam calls', async () => {
+  const capture = {};
+  const calls = { listTeams: 0, getTeam: 0 };
+  const directory = {
+    listMemberships: async () => [{ team_id: 't1' }, { team_id: 't2' }, { team_id: 't3' }],
+    listTeams: async ({ activeOnly }) => {
+      calls.listTeams += 1;
+      assert.equal(activeOnly, true);
+      return [
+        { id: 't1', label: 'Events' },
+        { id: 't2', label: 'Web' },
+        { id: 't3', label: 'ML' },
+      ];
+    },
+    getTeam: async () => { calls.getTeam += 1; return null; },
+  };
+  const svc = createHelperService({ llmClient: fakeLlm(capture), directory });
+  await svc.answer({ messages: MESSAGES, principal: PRINCIPAL });
+  assert.equal(calls.listTeams, 1, 'exactly one listTeams round-trip');
+  assert.equal(calls.getTeam, 0, 'no per-membership getTeam round-trips');
+  // Labels preserve membership order.
+  assert.match(capture.args.system, /on Events, Web, ML/);
+});
+
+test('answer drops team_ids absent from the active team list (getTeam-404 parity)', async () => {
+  const capture = {};
+  const directory = {
+    listMemberships: async () => [{ team_id: 't1' }, { team_id: 'gone' }, { team_id: 't2' }],
+    // 'gone' is not in the active list — mirrors getTeam returning null on 404.
+    listTeams: async () => [
+      { id: 't1', label: 'Events' },
+      { id: 't2', label: 'Web' },
+    ],
+  };
+  const svc = createHelperService({ llmClient: fakeLlm(capture), directory });
+  await svc.answer({ messages: MESSAGES, principal: PRINCIPAL });
+  assert.match(capture.args.system, /on Events, Web\./);
+  assert.doesNotMatch(capture.args.system, /gone/);
+});
+
 test('answer omits the team clause when there are no memberships', async () => {
   const capture = {};
-  const directory = { listMemberships: async () => [], getTeam: async () => null };
+  const directory = { listMemberships: async () => [], listTeams: async () => [] };
   const svc = createHelperService({ llmClient: fakeLlm(capture), directory });
   await svc.answer({ messages: MESSAGES, principal: PRINCIPAL });
   assert.match(capture.args.system, /Alex/);
@@ -49,7 +92,7 @@ test('answer omits the team clause when there are no memberships', async () => {
 
 test('answer falls back to name-only when the directory throws', async () => {
   const capture = {};
-  const directory = { listMemberships: async () => { throw new Error('dir down'); }, getTeam: async () => null };
+  const directory = { listMemberships: async () => { throw new Error('dir down'); }, listTeams: async () => [] };
   const svc = createHelperService({ llmClient: fakeLlm(capture), directory });
   const res = await svc.answer({ messages: MESSAGES, principal: PRINCIPAL });
   assert.deepEqual(res, { content: 'answer' });
@@ -59,7 +102,7 @@ test('answer falls back to name-only when the directory throws', async () => {
 
 test('answer propagates LlmUnavailable from the client', async () => {
   const capture = {};
-  const directory = { listMemberships: async () => [], getTeam: async () => null };
+  const directory = { listMemberships: async () => [], listTeams: async () => [] };
   const svc = createHelperService({ llmClient: fakeLlm(capture, { throws: true }), directory });
   await assert.rejects(() => svc.answer({ messages: MESSAGES, principal: PRINCIPAL }), LlmUnavailable);
 });

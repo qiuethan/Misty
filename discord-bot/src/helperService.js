@@ -5,8 +5,17 @@ const HELPER_MAX_TOKENS = 1024;
 async function resolveTeamLabels(directory, personId) {
   try {
     const memberships = await directory.listMemberships({ personId, activeOnly: true });
-    const teams = await Promise.all(memberships.map((m) => directory.getTeam(m.team_id)));
-    return teams.filter(Boolean).map((t) => t.label).filter(Boolean);
+    // One listTeams round-trip instead of one getTeam per membership (N+1).
+    // Match membership order and the old getTeam fallback: a team_id absent from
+    // the active list resolves to undefined and is dropped, exactly as a 404 from
+    // getTeam returned null and was filtered out.
+    const teams = await directory.listTeams({ activeOnly: true });
+    const byId = new Map(teams.map((t) => [t.id, t]));
+    return memberships
+      .map((m) => byId.get(m.team_id))
+      .filter(Boolean)
+      .map((t) => t.label)
+      .filter(Boolean);
   } catch {
     return [];
   }

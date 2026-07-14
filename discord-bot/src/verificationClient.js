@@ -1,3 +1,5 @@
+import { createHttpClient } from './httpClient.js';
+
 export class VerificationUnavailable extends Error {
   constructor(message) {
     super(message);
@@ -40,14 +42,6 @@ export class NoPendingCode extends Error {
   }
 }
 
-async function parseJson(resp) {
-  try {
-    return await resp.json();
-  } catch {
-    throw new VerificationUnavailable('malformed verification response');
-  }
-}
-
 // confirm-code failure statuses → [error class, fallback detail slug].
 const CONFIRM_ERRORS = {
   404: [NoPendingCode, 'no_pending_code'],
@@ -68,20 +62,17 @@ async function drain(resp) {
 
 export function createVerificationClient({ baseUrl, apiKey, fetchImpl = fetch, timeoutMs = 15000 }) {
   const headers = { 'X-API-Key': apiKey, 'Content-Type': 'application/json' };
-
-  async function send(path, options = {}) {
-    // Bound the request so /link and /verify-code can't block indefinitely on a
-    // hung verification service (mirrors llmClient.js).
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      return await fetchImpl(`${baseUrl}${path}`, { ...options, headers, signal: controller.signal });
-    } catch {
-      throw new VerificationUnavailable('network error reaching verification service');
-    } finally {
-      clearTimeout(timer);
-    }
-  }
+  // Bound each request so /link and /verify-code can't block indefinitely on a
+  // hung verification service (mirrors llmClient.js) — the shared helper arms an
+  // AbortController when timeoutMs is set.
+  const { send, parseJson } = createHttpClient({
+    baseUrl,
+    headers,
+    fetchImpl,
+    timeoutMs,
+    networkError: () => new VerificationUnavailable('network error reaching verification service'),
+    parseError: () => new VerificationUnavailable('malformed verification response'),
+  });
 
   return {
     async requestCode({ subject, email }) {

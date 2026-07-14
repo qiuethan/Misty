@@ -1,15 +1,9 @@
+import { createHttpClient } from './httpClient.js';
+
 export class DirectoryUnavailable extends Error {
   constructor(message) {
     super(message);
     this.name = 'DirectoryUnavailable';
-  }
-}
-
-async function parseJson(resp) {
-  try {
-    return await resp.json();
-  } catch {
-    throw new DirectoryUnavailable('malformed directory response');
   }
 }
 
@@ -63,14 +57,13 @@ export class EmailAlreadyRegistered extends Error {
 
 export function createDirectoryClient({ baseUrl, apiKey, fetchImpl = fetch }) {
   const headers = { 'X-API-Key': apiKey, 'Content-Type': 'application/json' };
-
-  async function send(path, options = {}) {
-    try {
-      return await fetchImpl(`${baseUrl}${path}`, { ...options, headers });
-    } catch {
-      throw new DirectoryUnavailable('network error reaching directory');
-    }
-  }
+  const { send, parseJson } = createHttpClient({
+    baseUrl,
+    headers,
+    fetchImpl,
+    networkError: () => new DirectoryUnavailable('network error reaching directory'),
+    parseError: () => new DirectoryUnavailable('malformed directory response'),
+  });
 
   async function getByPath(path) {
     const resp = await send(path);
