@@ -23,7 +23,7 @@ export default defineCommand({
   name: 'doc',
   description: 'Catalog and look up UTMIST documents and links',
   auth: 'linked',
-  beta: true,
+  beta: false, // stable → registered globally (all prod servers)
   options: [],
   subcommands: [
     {
