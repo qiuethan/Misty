@@ -135,7 +135,10 @@ team-tracking/
 │       ├── 001_initial_schema.py     people, teams, role_kinds, team_memberships + indexes
 │       ├── 002_seed_role_kinds.py    seeds executive / director / lead / member
 │       ├── 003_api_keys.py           api_keys table (Level-2 auth)
-│       └── 004_person_identifiers.py providers + person_identifiers; seeds 4 providers
+│       ├── 004_person_identifiers.py providers + person_identifiers; seeds 4 providers
+│       ├── 005_person_access_level.py    people.access_level column
+│       ├── 006_email_provider_multivalued.py  multi-valued email identifiers
+│       └── 007_membership_no_overlap.py membership temporal-overlap EXCLUDE constraint
 │
 ├── tests/                  Two-mode test suite (see Testing below)
 │
@@ -151,7 +154,7 @@ team-tracking/
 ```
 
 **Seven tables:** `people`, `teams`, `role_kinds`, `team_memberships`, `api_keys`, `providers`, `person_identifiers`.
-**Six routers, 23 endpoints.** **Four migrations (001–004).**
+**Six routers, 23 endpoints.** **Seven migrations (001–007);** the latest, 007, adds the membership temporal-overlap constraint.
 
 **Dependency direction:** `contracts/` imports nothing from `src/`. The API layer imports only from `contracts/` and `src/config`. The storage layer imports `contracts/` for types and defines its own schema. Nothing imports from `src/storage/` except `src/api/deps.py` (the single wiring point). This is the **Protocol boundary** — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -240,7 +243,7 @@ Machine-readable OpenAPI schema: `GET /openapi.json`. Interactive Swagger UI: `G
 
 ## Status
 
-Seven tables (`people`, `teams`, `role_kinds`, `team_memberships`, `api_keys`, `providers`, `person_identifiers`), 23 endpoints across 6 routers, two storage adapters, migrations 001–004. Level-2 auth (DB-issued scoped argon2 keys + attested actor + audit log) is merged, as is the `person_identifiers`/providers identity-mapping feature.
+Seven tables (`people`, `teams`, `role_kinds`, `team_memberships`, `api_keys`, `providers`, `person_identifiers`), 23 endpoints across 6 routers, two storage adapters, migrations 001–007 (latest: 007, membership temporal-overlap constraint). Level-2 auth (DB-issued scoped argon2 keys + attested actor + audit log) is merged, as is the `person_identifiers`/providers identity-mapping feature.
 
 **Not implemented (by design):**
 
