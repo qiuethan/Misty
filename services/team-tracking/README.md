@@ -92,6 +92,7 @@ uv run team-tracking-keys revoke <api_key_id>
 Scopes recognized today:
 
 - `people:read`, `people:write`
+- `people:elevate` — required to set a non-`member` `access_level` when creating (`POST /people`) or to change `access_level` at all when updating (`PATCH /people/{id}`); a plain `people:write` key gets **403** if the payload would set/change `access_level`. The `admin` wildcard still satisfies it.
 - `memberships:read`, `memberships:write`
 - `identifiers:read`, `identifiers:write`
 - `providers:read`, `providers:write`
@@ -134,7 +135,10 @@ team-tracking/
 │       ├── 001_initial_schema.py     people, teams, role_kinds, team_memberships + indexes
 │       ├── 002_seed_role_kinds.py    seeds executive / director / lead / member
 │       ├── 003_api_keys.py           api_keys table (Level-2 auth)
-│       └── 004_person_identifiers.py providers + person_identifiers; seeds 4 providers
+│       ├── 004_person_identifiers.py providers + person_identifiers; seeds 4 providers
+│       ├── 005_person_access_level.py    people.access_level column
+│       ├── 006_email_provider_multivalued.py  multi-valued email identifiers
+│       └── 007_membership_no_overlap.py membership temporal-overlap EXCLUDE constraint
 │
 ├── tests/                  Two-mode test suite (see Testing below)
 │
@@ -150,7 +154,7 @@ team-tracking/
 ```
 
 **Seven tables:** `people`, `teams`, `role_kinds`, `team_memberships`, `api_keys`, `providers`, `person_identifiers`.
-**Six routers, 23 endpoints.** **Four migrations (001–004).**
+**Six routers, 23 endpoints.** **Seven migrations (001–007);** the latest, 007, adds the membership temporal-overlap constraint.
 
 **Dependency direction:** `contracts/` imports nothing from `src/`. The API layer imports only from `contracts/` and `src/config`. The storage layer imports `contracts/` for types and defines its own schema. Nothing imports from `src/storage/` except `src/api/deps.py` (the single wiring point). This is the **Protocol boundary** — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -160,10 +164,10 @@ Every endpoint requires an `X-API-Key`. The actor stamped into `created_by`/`upd
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
-| POST | `/people` | `people:write` | Create a person |
+| POST | `/people` | `people:write` (+`people:elevate` for non-`member` `access_level`) | Create a person |
 | GET | `/people` | `people:read` | List people (`?active_only=`) |
 | GET | `/people/{id}` | `people:read` | Get one person |
-| PATCH | `/people/{id}` | `people:write` | Update a person |
+| PATCH | `/people/{id}` | `people:write` (+`people:elevate` to change `access_level`) | Update a person |
 | GET | `/people/by-identifier/{provider}/{external_id}` | `identifiers:read` | Reverse lookup → Person |
 | GET | `/people/{id}/identifiers` | `identifiers:read` | List a person's linked accounts |
 | POST | `/people/{id}/identifiers` | `identifiers:write` | Link an external account |
@@ -185,6 +189,18 @@ Every endpoint requires an `X-API-Key`. The actor stamped into `created_by`/`upd
 | POST | `/memberships/{id}/end` | `memberships:write` | End a membership (set `ended_at`) |
 
 See [docs/API.md](docs/API.md) for full request/response shapes, query parameters, error codes, and curl examples.
+
+### Behavior notes
+
+**Access-level changes (`people:elevate`).** Setting a non-`member` `access_level` on `POST /people`, or changing `access_level` on `PATCH /people/{id}`, requires the `people:elevate` scope (the `admin` wildcard satisfies it). A plain `people:write` key is rejected with **403** rather than having the field silently dropped — `access_level` is a privilege grant that downstream consumers trust for authorization.
+
+**Membership temporal integrity.**
+
+- Creating (`POST /memberships`) or updating (`PATCH /memberships/{id}`) a membership whose active date range **temporally overlaps** an existing membership for the same `(person_id, team_id)` is rejected with **400**. This is enforced at the database by a `btree_gist` `EXCLUDE` constraint (migration 007). "Active/overlap" uses the half-open range `[started_at, ended_at)`, with an open-ended (`NULL`) `ended_at` treated as infinity; because the upper bound is exclusive, ending a membership and re-adding the person on the **same day** does not overlap and is allowed.
+- Foreign-key violations on membership create/update (unknown `person_id`, `team_id`, or `role_kind_id`) now return **400** (previously surfaced as a 500).
+- `GET /memberships?active_only=true` means **currently active** = `ended_at IS NULL OR ended_at > current_date`. A membership with a *future* `ended_at` still counts as active (previously a future end date excluded it immediately).
+
+**Unknown parent team.** `POST /teams` with a nonexistent `parent_id` returns **400** ("unknown parent team"), not a misleading `409 slug already exists`.
 
 ## Testing
 
@@ -227,7 +243,7 @@ Machine-readable OpenAPI schema: `GET /openapi.json`. Interactive Swagger UI: `G
 
 ## Status
 
-Seven tables (`people`, `teams`, `role_kinds`, `team_memberships`, `api_keys`, `providers`, `person_identifiers`), 23 endpoints across 6 routers, two storage adapters, migrations 001–004. Level-2 auth (DB-issued scoped argon2 keys + attested actor + audit log) is merged, as is the `person_identifiers`/providers identity-mapping feature.
+Seven tables (`people`, `teams`, `role_kinds`, `team_memberships`, `api_keys`, `providers`, `person_identifiers`), 23 endpoints across 6 routers, two storage adapters, migrations 001–007 (latest: 007, membership temporal-overlap constraint). Level-2 auth (DB-issued scoped argon2 keys + attested actor + audit log) is merged, as is the `person_identifiers`/providers identity-mapping feature.
 
 **Not implemented (by design):**
 
