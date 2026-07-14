@@ -69,6 +69,38 @@ def test_ingest_dedup_returns_existing_and_merges_tags(store):
     assert set(second.doc.tags) == {"one", "two"}
 
 
+def test_reingest_after_soft_remove_does_not_proliferate_active_docs(store):
+    # Bug #5 end-to-end: once a URL's earliest row is soft-removed, repeated
+    # re-ingest must NOT keep spawning new active duplicates. The dedup lookup
+    # now prefers the active row, so the second re-ingest merges instead of
+    # inserting.
+    f = FakeFetchers(result=FetchResult(title="X"))
+
+    def ingest():
+        return ingest_doc(DocIngest(url="https://dup.com/a"), storage=store,
+                          fetchers=f, directory=FakeDirectory(), actor="bot")
+
+    first = ingest()
+    assert first.created is True
+    # Soft-remove the original row (row kept, active=False).
+    store.update_doc(first.doc.id, {"active": False}, actor="admin")
+
+    # Re-ingest: nothing active for this URL, so a fresh active row is created.
+    second = ingest()
+    assert second.created is True
+    assert second.doc.id != first.doc.id
+
+    # Re-ingest again: the live active row must be found and merged into,
+    # NOT duplicated. Pre-fix this created a third active doc.
+    third = ingest()
+    assert third.created is False
+    assert third.doc.id == second.doc.id
+
+    active = [d for d in store.list_docs(active_only=True) if d.url_normalized == "https://dup.com/a"]
+    assert len(active) == 1
+    assert active[0].id == second.doc.id
+
+
 def test_ingest_fetch_failure_warns_and_falls_back_to_url(store):
     fetchers = FakeFetchers(error=FetchError("timeout"))
     res = ingest_doc(DocIngest(url="https://github.com/a/b"), storage=store,

@@ -65,10 +65,18 @@ class InMemoryStorageAdapter:
         return hydrated.model_copy(update={"grants": self.list_grants(doc_id)})
 
     def get_doc_by_normalized_url(self, url_normalized: str) -> Doc | None:
-        for doc in self._docs.values():
-            if doc.url_normalized == url_normalized:
-                return self._hydrate(doc)
-        return None
+        # Canonical dedup rule (must match PostgresStorageAdapter and the
+        # partial unique index on url_normalized WHERE active): among docs
+        # sharing a url_normalized, prefer the active row, then break ties by
+        # earliest created_at (id as a final deterministic tiebreak). Preferring
+        # the active row is what stops a soft-removed older row from shadowing
+        # the live one and causing re-ingest to spawn duplicate active docs
+        # (bug #5).
+        matches = [d for d in self._docs.values() if d.url_normalized == url_normalized]
+        if not matches:
+            return None
+        winner = min(matches, key=lambda d: (not d.active, d.created_at, d.id))
+        return self._hydrate(winner)
 
     def list_docs(
         self, *, owning_team_id=None, owning_person_id=None,

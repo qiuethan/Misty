@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from contracts.directory import DirectoryClient, DirectoryUnavailable
 from contracts.fetcher import FetchError
-from contracts.storage import StorageAdapter
+from contracts.storage import DuplicateActiveUrl, StorageAdapter
 from contracts.types import DocIngest, IngestResult
 from src.fetch.registry import FetcherRegistry
 from src.url_norm import derive_source, normalize_url
@@ -23,6 +23,20 @@ def _now() -> datetime:
 def _apply_grants(storage, doc_id, grants, *, actor: str):
     for g in grants:
         storage.add_grant(doc_id, grantee_type=g.grantee_type, grantee_id=g.grantee_id, actor=actor)
+
+
+def _merge_into_existing(storage, existing, payload: DocIngest, *, actor: str) -> IngestResult:
+    """Idempotent dedup path: fold this ingest's tags/grants into the already
+    catalogued active doc and return it as created=False."""
+    for tag in payload.tags:
+        storage.add_tag(existing.id, tag)
+    _apply_grants(storage, existing.id, payload.grants, actor=actor)
+    refreshed = storage.get_doc(existing.id)
+    return IngestResult(
+        doc=refreshed,
+        created=False,
+        warnings=[f"already catalogued (added by {existing.created_by})"],
+    )
 
 
 def ingest_doc(
@@ -44,15 +58,7 @@ def ingest_doc(
     # introduced).
     existing = storage.get_doc_by_normalized_url(url_normalized)
     if existing is not None and existing.active:
-        for tag in payload.tags:
-            storage.add_tag(existing.id, tag)
-        _apply_grants(storage, existing.id, payload.grants, actor=actor)
-        refreshed = storage.get_doc(existing.id)
-        return IngestResult(
-            doc=refreshed,
-            created=False,
-            warnings=[f"already catalogued (added by {existing.created_by})"],
-        )
+        return _merge_into_existing(storage, existing, payload, actor=actor)
 
     # 2. Determine source — caller-supplied wins, else derive.
     if payload.source_id is not None:
@@ -89,22 +95,32 @@ def ingest_doc(
         directory.get_person_label, payload.owning_person_id, "owning_person_id", warnings
     )
 
-    # 5. Persist.
-    doc = storage.create_doc(
-        url=payload.url,
-        url_normalized=url_normalized,
-        source_id=source_id,
-        title=title,
-        description=payload.description,
-        owning_team_id=payload.owning_team_id,
-        owning_team_label=team_label,
-        owning_person_id=payload.owning_person_id,
-        owning_person_label=person_label,
-        content_snapshot=snapshot,
-        fetched_at=fetched_at,
-        tags=payload.tags,
-        actor=actor,
-    )
+    # 5. Persist. Between the dedup read (step 1) and this insert, a concurrent
+    # ingest of the same URL can create the active row first; the DB partial
+    # unique index (url_normalized WHERE active) makes create_doc raise
+    # DuplicateActiveUrl for the loser (bug #11). Treat that as an idempotent
+    # dedup: re-read the winning active row and merge tags/grants into it.
+    try:
+        doc = storage.create_doc(
+            url=payload.url,
+            url_normalized=url_normalized,
+            source_id=source_id,
+            title=title,
+            description=payload.description,
+            owning_team_id=payload.owning_team_id,
+            owning_team_label=team_label,
+            owning_person_id=payload.owning_person_id,
+            owning_person_label=person_label,
+            content_snapshot=snapshot,
+            fetched_at=fetched_at,
+            tags=payload.tags,
+            actor=actor,
+        )
+    except DuplicateActiveUrl:
+        existing = storage.get_doc_by_normalized_url(url_normalized)
+        if existing is not None and existing.active:
+            return _merge_into_existing(storage, existing, payload, actor=actor)
+        raise
     _apply_grants(storage, doc.id, payload.grants, actor=actor)
     doc = storage.get_doc(doc.id)  # re-hydrate with grants for the response
     return IngestResult(doc=doc, created=True, warnings=warnings)

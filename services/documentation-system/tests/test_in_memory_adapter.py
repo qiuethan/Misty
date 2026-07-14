@@ -41,6 +41,24 @@ def test_get_by_normalized_url(store):
     assert store.get_doc_by_normalized_url("https://nope.com") is None
 
 
+def test_get_by_normalized_url_prefers_active_over_older_inactive(store):
+    # Bug #5: an older soft-removed row must not shadow the live active row.
+    old = _mk(store, url="https://dup.com")
+    store.update_doc(old.id, {"active": False}, actor="tester")  # soft-remove the older row
+    live = _mk(store, url="https://dup.com")  # newer, active
+    got = store.get_doc_by_normalized_url("https://dup.com")
+    assert got is not None
+    assert got.id == live.id  # prefers active even though it is newer
+
+
+def test_get_by_normalized_url_active_tiebreak_earliest_created(store):
+    # Among multiple active rows the canonical winner is the earliest created_at.
+    first = _mk(store, url="https://tie.com")
+    _mk(store, url="https://tie.com")  # in-memory has no unique constraint
+    got = store.get_doc_by_normalized_url("https://tie.com")
+    assert got is not None and got.id == first.id
+
+
 def test_tags_roundtrip_and_dedup(store):
     d = _mk(store, tags=["a", "b"])
     assert set(store.get_doc(d.id).tags) == {"a", "b"}
