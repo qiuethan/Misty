@@ -7,9 +7,9 @@ function findSub(name) {
   return doc.subcommands.find((s) => s.name === name);
 }
 
-test('doc command is beta with four subcommands', () => {
+test('doc command is stable with four subcommands', () => {
   assert.equal(doc.name, 'doc');
-  assert.equal(doc.beta, true);
+  assert.equal(doc.beta, false);
   assert.deepEqual(doc.subcommands.map((s) => s.name).sort(), ['add', 'list', 'remove', 'show']);
 });
 
