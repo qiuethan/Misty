@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from src.api.app import create_app
 from src.api.deps import get_llm
 from src.api.deps import get_key_store
+from src.api.hashing import generate_key
 from src.key_store import InMemoryKeyStore
 from src.providers.base import (
     LLMResult,
@@ -35,11 +36,18 @@ def env_key(monkeypatch):
     yield "env-bootstrap-key-value"
 
 
-def _client(env_key, provider):
+def _client(env_key, provider, store=None):
     app = create_app()
-    app.dependency_overrides[get_key_store] = lambda: InMemoryKeyStore()
+    app.dependency_overrides[get_key_store] = lambda: store or InMemoryKeyStore()
     app.dependency_overrides[get_llm] = lambda: provider
     return TestClient(app), {"X-API-Key": env_key}
+
+
+def _consumer_key(store, *, scopes):
+    """Mint a consumer key into `store` and return its plaintext value."""
+    plaintext, prefix, key_hash = generate_key()
+    store.add(prefix=prefix, key_hash=key_hash, name="consumer", scopes=scopes)
+    return plaintext
 
 
 def _ok_result():
@@ -85,6 +93,44 @@ def test_chat_requires_auth(env_key):
     client, _ = _client(env_key, _FakeProvider(result=_ok_result()))
     resp = client.post("/chat", json={"messages": [{"role": "user", "content": "hi"}]})
     assert resp.status_code == 401
+
+
+def test_chat_key_without_chat_scope_forbidden(env_key):
+    # A valid, active key that lacks the `chat` scope must be rejected (403),
+    # not allowed to spend provider budget.
+    store = InMemoryKeyStore()
+    plaintext = _consumer_key(store, scopes=[])
+    client, _ = _client(env_key, _FakeProvider(result=_ok_result()), store=store)
+    resp = client.post(
+        "/chat",
+        headers={"X-API-Key": plaintext},
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert resp.status_code == 403
+
+
+def test_chat_key_with_chat_scope_allowed(env_key):
+    store = InMemoryKeyStore()
+    plaintext = _consumer_key(store, scopes=["chat"])
+    client, _ = _client(env_key, _FakeProvider(result=_ok_result()), store=store)
+    resp = client.post(
+        "/chat",
+        headers={"X-API-Key": plaintext},
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["content"] == "hello"
+
+
+def test_chat_admin_wildcard_key_allowed(env_key):
+    # The env-bootstrap key carries the admin/wildcard scope, which must satisfy
+    # the `chat` scope requirement so local dev / admin callers keep working.
+    provider = _FakeProvider(result=_ok_result())
+    client, headers = _client(env_key, provider)
+    resp = client.post(
+        "/chat", headers=headers, json={"messages": [{"role": "user", "content": "hi"}]}
+    )
+    assert resp.status_code == 200
 
 
 def test_chat_empty_messages_422(env_key):

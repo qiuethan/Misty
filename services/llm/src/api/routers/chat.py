@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from contracts.chat import ChatRequest, ChatResponse, Usage
-from src.api.auth import require_api_key
+from src.api.auth import require_scope
 from src.api.deps import get_llm
 from src.config import get_settings
 from src.providers.base import (
@@ -20,7 +20,7 @@ router = APIRouter()
 def chat(
     body: ChatRequest,
     request: Request,
-    _key=Depends(require_api_key),
+    _key=Depends(require_scope("chat")),
     llm: LLMProvider = Depends(get_llm),
 ) -> ChatResponse:
     settings = get_settings()
