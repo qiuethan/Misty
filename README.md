@@ -18,10 +18,9 @@ UTMIST is a student org with rotating leadership and mixed technical fluency. Ev
 - **`/whoami`** — see your linked identity, teams you're on, and access level. Requires you to be linked.
 - **`/team`** — look up, create, rename, add/remove members, and view rosters (subcommands: `create`, `list`, `rename`, `add`, `remove`, `roster`). Reads are public; writes are admin-only.
 - **`/my-teams`** — list your active memberships. Requires you to be linked.
-
-**Beta (currently visible only in the test guild; promote by flipping `beta: false` in each command module + re-registering):**
-
 - **`/doc`** — catalog and browse links (subcommands: `add`, `list`, `show`, `remove`), backed by documentation-system. Reads are public; writes are admin-only. Team-owner field has slug autocomplete.
+
+There are currently no beta commands.
 
 ### As an admin (in Discord)
 
@@ -33,7 +32,7 @@ UTMIST is a student org with rotating leadership and mixed technical fluency. Ev
 Every domain has a first-class HTTP API — build your own dashboard, sync job, or automation on top:
 
 - **[team-tracking](services/team-tracking/README.md)** — 23 endpoints across `people`, `teams`, `role_kinds`, `team_memberships`, `providers`, `person_identifiers`, `api_keys`. Full point-in-time roster queries. Scoped API keys, per-request audit log. **Actively consumed** by the Discord bot in production.
-- **[documentation-system](services/documentation-system/README.md)** — endpoints over `docs` and `sources`; ingest a URL and it's normalized, dedup'd, fetched (title + snapshot for supported sources), and owner-validated against team-tracking. Ownership degrades gracefully if the directory is unreachable. **Consumed** by the Discord bot's `/doc` command group (`add`, `list`, `show`, `remove`), currently in beta.
+- **[documentation-system](services/documentation-system/README.md)** — endpoints over `docs` and `sources`; ingest a URL and it's normalized, dedup'd, fetched (title + snapshot for supported sources), and owner-validated against team-tracking. Ownership degrades gracefully if the directory is unreachable. **Consumed** by the Discord bot's `/doc` command group (`add`, `list`, `show`, `remove`).
 
 Both APIs speak OpenAPI. Point Swagger UI or codegen at them.
 
@@ -50,8 +49,8 @@ Both APIs speak OpenAPI. Point Swagger UI or codegen at them.
 | Service | What it holds | Status |
 |---------|---------------|--------|
 | [`services/team-tracking/`](services/team-tracking/README.md) | People, teams, roles, memberships, external identity mapping (Discord/GitHub/Notion/UofT email → person) | **Deployed** (staging + prod). Directory is empty on prod until seeded. |
-| [`services/documentation-system/`](services/documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, and best-effort content snapshots | **Deployed** (staging + prod). Consumed by the bot's `/doc` command group (`add`/`list`/`show`/`remove`), currently in beta (test guild only). |
-| [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend + a browser-based "web playground" for iterating on commands without a Discord token | **Deployed** (staging + prod). 5 stable commands (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`) registered globally; 1 beta (`/doc`) in test guild only. |
+| [`services/documentation-system/`](services/documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, and best-effort content snapshots | **Deployed** (staging + prod). Consumed by the bot's `/doc` command group (`add`/`list`/`show`/`remove`), registered globally. |
+| [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend + a browser-based "web playground" for iterating on commands without a Discord token | **Deployed** (staging + prod). 6 stable commands (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`, `/doc`) registered globally; 0 beta. |
 | Search / retrieval | Full-text + semantic search over the catalog's snapshots | Deferred (not built) |
 
 **How they relate.** team-tracking is the foundation — everything else references it. documentation-system validates every doc's owner against team-tracking. The discord-bot's commands read/write the directory over HTTP. Each service owns its own database; they never share tables.
