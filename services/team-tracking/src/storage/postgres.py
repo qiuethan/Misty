@@ -23,6 +23,7 @@ from contracts.types import (
     TeamMembershipUpdate,
     TeamUpdate,
 )
+from src.storage.errors import UnknownParentTeamError
 from src.storage.schema import (
     api_keys,
     people,
@@ -228,6 +229,11 @@ class PostgresStorageAdapter:
                     .returning(teams)
                 ).one()
         except IntegrityError as e:
+            constraint = getattr(
+                getattr(getattr(e, "orig", None), "diag", None), "constraint_name", None
+            )
+            if constraint == "teams_parent_id_fkey":
+                raise UnknownParentTeamError(payload.parent_id) from e
             raise ValueError(f"slug already exists: {payload.slug}") from e
         return _team_row_to_model(row)
 
