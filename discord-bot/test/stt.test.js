@@ -35,3 +35,21 @@ test('transcribePcm accumulates only final results with word timestamps', async 
     { text: 'there', startMs: 1000 },
   ]);
 });
+
+test('transcribePcm splits a single large buffer into frame-sized AudioEvents', async () => {
+  let frameCount = 0;
+  const client = {
+    async send(command) {
+      for await (const _event of command.input.AudioStream) {
+        frameCount += 1;
+      }
+      return { TranscriptResultStream: (async function* () {})() };
+    },
+  };
+  const StartStreamTranscriptionCommand = class { constructor(input) { this.input = input; } };
+  const stt = createTranscribeClient({ region: 'us-east-1', sdk: { client, StartStreamTranscriptionCommand } });
+  async function* pcm() { yield Buffer.alloc(8000); }
+  await stt.transcribePcm({ pcmChunks: pcm() });
+  assert.equal(frameCount, Math.ceil(8000 / 3200));
+  assert.equal(frameCount, 3);
+});
