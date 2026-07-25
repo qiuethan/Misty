@@ -2,7 +2,7 @@ import { createWriteStream } from 'node:fs';
 import path from 'node:path';
 import prism from 'prism-media';
 import {
-  joinVoiceChannel, EndBehaviorType, getVoiceConnection, entersState, VoiceConnectionStatus,
+  joinVoiceChannel, EndBehaviorType, entersState, VoiceConnectionStatus,
 } from '@discordjs/voice';
 
 // 48kHz * 2ch * 2bytes = 192000 bytes/sec of silence padding.
@@ -17,6 +17,7 @@ export function createRecorder({ tmpDir }) {
     if (tracks.has(userId)) return tracks.get(userId);
     const filePath = path.join(tmpDir, `${userId}.pcm`);
     const stream = createWriteStream(filePath);
+    stream.on('error', (e) => console.error(`recorder: write stream error for ${userId}:`, e.message));
     const track = { displayName, stream, path: filePath, lastWriteMs: startedAt, bytesWritten: 0 };
     tracks.set(userId, track);
     return track;
@@ -68,13 +69,15 @@ export function createRecorder({ tmpDir }) {
     },
     async stop() {
       const endedAt = Date.now();
+      if (connection) {
+        connection.receiver.speaking.removeAllListeners('start');
+        connection.destroy();
+      }
       const out = [];
       for (const [userId, t] of tracks) {
         await new Promise((res) => t.stream.end(res));
         out.push({ userId, displayName: t.displayName, pcmPath: t.path });
       }
-      const existing = getVoiceConnection(connection?.joinConfig?.guildId);
-      if (existing) existing.destroy();
       return { tracks: out, startedAt, endedAt };
     },
   };
