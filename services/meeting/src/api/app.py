@@ -7,6 +7,10 @@ from src.config import verify_production_secrets
 def create_app() -> FastAPI:
     verify_production_secrets()
 
+    from src.api.deps import get_key_store
+
+    get_key_store()  # fail fast on a malformed CONSUMER_KEYS at boot, not first request
+
     app = FastAPI(
         title="UTMIST meeting",
         version="0.1.0",
