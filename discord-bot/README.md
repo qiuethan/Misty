@@ -186,7 +186,32 @@ and skips them.
 - `/my-teams` (linked) — list your active memberships.
 - `/doc <add|list|show|remove>` (linked; `remove` is admin) — catalog and look up UTMIST documents and links.
 
-All commands are currently on the **stable** channel (`beta = false`), so they register globally in every server the bot is in. There are no beta commands right now.
+- `/record start` (linked, **beta**) — joins your current voice channel and starts
+  recording the meeting. `/record status` (linked, beta) — shows elapsed recording
+  time. `/record stop` (linked, beta) — ends the recording and, within roughly
+  30–60s, posts a `meeting-minutes.pdf` (summary, decisions, action items,
+  full transcript) and `meeting-audio.mp3` back into the text channel. No audio
+  or transcript is persisted — temp files are cleaned up after posting.
+
+`/record` is currently on the **beta** channel, so it's only registered in the
+testing guild (`DISCORD_GUILD_ID`); it is not yet available in production servers.
+
+All other commands are on the **stable** channel (`beta = false`), so they register globally in every server the bot is in.
+
+### Meeting recording (`/record`) infra
+
+`/record` needs a few things beyond the base setup:
+
+- **ffmpeg** on the host/image — used to mix and transcode the captured voice
+  audio. The `Dockerfile` installs it via `apt-get`; if you run the bot outside
+  Docker, install ffmpeg yourself and make sure it's on `PATH`.
+- **AWS credentials** for Amazon Transcribe (streaming transcription) — resolved
+  via the standard AWS SDK credential chain (env vars, shared config/credentials
+  file, or an instance/task role on the hosting platform). Set `AWS_REGION`
+  (defaults to `us-east-1`) and provide credentials with Transcribe access.
+- Optional tuning env vars: `MAX_RECORDING_MS` (hard cap on a single recording,
+  default 1 hour) and `RECORDING_SILENCE_MS` (silence-padding threshold used
+  when aligning per-speaker audio, default 1000ms).
 
 ## Auth layer
 
