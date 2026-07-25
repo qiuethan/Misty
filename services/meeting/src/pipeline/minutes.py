@@ -34,16 +34,10 @@ def summarize_minutes(transcript: str, llm_client, model=None) -> Minutes:
     parsed = _extract_json(content)
     if not parsed or not isinstance(parsed.get("summary"), str):
         return Minutes(summary=(content or "").strip(), decisions=[], action_items=[])
+    raw_decisions = parsed.get("decisions", [])
+    raw_action_items = parsed.get("action_items", [])
     return Minutes(
         summary=parsed["summary"],
-        decisions=[
-            str(x)
-            for x in parsed.get("decisions", [])
-            if isinstance(parsed.get("decisions"), list)
-        ],
-        action_items=[
-            str(x)
-            for x in parsed.get("action_items", [])
-            if isinstance(parsed.get("action_items"), list)
-        ],
+        decisions=[str(x) for x in raw_decisions] if isinstance(raw_decisions, list) else [],
+        action_items=[str(x) for x in raw_action_items] if isinstance(raw_action_items, list) else [],
     )

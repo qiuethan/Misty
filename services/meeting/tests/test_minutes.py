@@ -27,3 +27,11 @@ def test_fallback_on_bad_json():
     llm = FakeLlm("not json")
     m = summarize_minutes("x", llm)
     assert m.summary == "not json" and m.decisions == [] and m.action_items == []
+
+
+def test_null_or_scalar_list_fields_fall_back_to_empty():
+    llm = FakeLlm('{"summary":"s","decisions":null,"action_items":5}')
+    m = summarize_minutes("x", llm)
+    assert m.summary == "s"
+    assert m.decisions == []
+    assert m.action_items == []
