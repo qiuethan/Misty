@@ -30,5 +30,8 @@ export function loadConfig(env = process.env) {
     llmApiKey: env.LLM_API_KEY,
     verificationBaseUrl: env.VERIFICATION_BASE_URL.replace(/\/+$/, ''),
     verificationApiKey: env.VERIFICATION_API_KEY,
+    awsRegion: env.AWS_REGION || 'us-east-1',
+    maxRecordingMs: Number(env.MAX_RECORDING_MS) || 3_600_000,
+    recordingSilenceMs: Number(env.RECORDING_SILENCE_MS) || 1000,
   };
 }
