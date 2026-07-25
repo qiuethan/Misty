@@ -29,34 +29,40 @@ export function createSessionManager({
     if (!s) return { status: 'not-recording' };
     sessions.delete(guildId);
     if (s.timer) clearTimeout(s.timer);
-    const { tracks, startedAt, endedAt } = await s.recorder.stop();
+    try {
+      const { tracks, startedAt, endedAt } = await s.recorder.stop();
 
-    const segments = [];
-    const participants = [];
-    for (const t of tracks) {
-      participants.push(t.displayName);
-      const monoPcm = await audio.runFfmpeg(audio.pcmToMono16kArgs(t.pcmPath));
-      async function* chunks() { yield monoPcm; }
-      const { words } = await transcribeClient.transcribePcm({ pcmChunks: chunks() });
-      segments.push(...wordsToSegments(t.displayName, words));
+      const segments = [];
+      const participants = [];
+      for (const t of tracks) {
+        participants.push(t.displayName);
+        const monoPcm = await audio.runFfmpeg(audio.pcmToMono16kArgs(t.pcmPath));
+        async function* chunks() { yield monoPcm; }
+        const { words } = await transcribeClient.transcribePcm({ pcmChunks: chunks() });
+        segments.push(...wordsToSegments(t.displayName, words));
+      }
+
+      const durationMs = endedAt - startedAt;
+      const meta = {
+        title: `Meeting recording — ${new Date(startedAt).toISOString().slice(0, 16).replace('T', ' ')}`,
+        startedAt: new Date(startedAt).toISOString().slice(0, 16).replace('T', ' '),
+        durationLabel: `${Math.round(durationMs / 60000)}m`,
+        participants,
+      };
+      const { pdfBuffer } = await reportService.buildReport({ segments, meta });
+
+      const mp3Path = path.join(s.tmpDir, 'meeting.mp3');
+      if (tracks.length) {
+        await audio.runFfmpeg(audio.mixToMp3Args(tracks.map((t) => t.pcmPath), mp3Path));
+      }
+      await poster({ channel: s.textChannel, pdfBuffer, mp3Path: tracks.length ? mp3Path : null, meta });
+      return { status: 'stopped' };
+    } catch (err) {
+      console.error('meeting pipeline failed:', err?.message ?? err);
+      return { status: 'error' };
+    } finally {
+      if (s.tmpDir) await rm(s.tmpDir, { recursive: true, force: true });
     }
-
-    const durationMs = endedAt - startedAt;
-    const meta = {
-      title: `Meeting recording — ${new Date(startedAt).toISOString().slice(0, 16).replace('T', ' ')}`,
-      startedAt: new Date(startedAt).toISOString().slice(0, 16).replace('T', ' '),
-      durationLabel: `${Math.round(durationMs / 60000)}m`,
-      participants,
-    };
-    const { pdfBuffer } = await reportService.buildReport({ segments, meta });
-
-    const mp3Path = path.join(s.tmpDir, 'meeting.mp3');
-    if (tracks.length) {
-      await audio.runFfmpeg(audio.mixToMp3Args(tracks.map((t) => t.pcmPath), mp3Path));
-    }
-    await poster({ channel: s.textChannel, pdfBuffer, mp3Path: tracks.length ? mp3Path : null, meta });
-    await rm(s.tmpDir, { recursive: true, force: true });
-    return { status: 'stopped' };
   }
 
   return {
@@ -68,7 +74,7 @@ export function createSessionManager({
       sessions.set(guildId, session);
       session.recorder = makeRecorder({ tmpDir: dir });
       session.recorder.start(voiceChannel).catch((e) => console.error('recorder start failed:', e?.message ?? e));
-      session.timer = setTimeout(() => { runPipeline(guildId).catch(() => {}); }, maxRecordingMs);
+      session.timer = setTimeout(() => { runPipeline(guildId).catch((e) => console.error('meeting auto-stop pipeline failed:', e?.message ?? e)); }, maxRecordingMs);
       if (session.timer && typeof session.timer.unref === 'function') session.timer.unref();
       return { status: 'recording' };
     },
