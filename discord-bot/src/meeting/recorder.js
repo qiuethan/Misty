@@ -17,7 +17,7 @@ export function createRecorder({ tmpDir }) {
     if (tracks.has(userId)) return tracks.get(userId);
     const filePath = path.join(tmpDir, `${userId}.pcm`);
     const stream = createWriteStream(filePath);
-    const track = { displayName, stream, path: filePath, lastWriteMs: Date.now(), bytesWritten: 0 };
+    const track = { displayName, stream, path: filePath, lastWriteMs: startedAt, bytesWritten: 0 };
     tracks.set(userId, track);
     return track;
   }
@@ -30,9 +30,14 @@ export function createRecorder({ tmpDir }) {
     });
     const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
     // Pad leading silence so this burst lands at the right point on the timeline.
+    // lastWriteMs starts at the session's startedAt (absolute t=0), so even the
+    // FIRST burst gets padded from session start. This keeps every user's track
+    // aligned to a shared absolute timeline, which the ffmpeg amix overlay and
+    // the per-track Transcribe word StartTimes (treated as absolute meeting time)
+    // both depend on.
     const now = Date.now();
     const gapMs = now - track.lastWriteMs;
-    if (track.bytesWritten > 0 && gapMs > 0) {
+    if (gapMs > 0) {
       track.stream.write(Buffer.alloc(Math.floor(gapMs * BYTES_PER_MS)));
       track.bytesWritten += Math.floor(gapMs * BYTES_PER_MS);
     }
