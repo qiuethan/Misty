@@ -1,4 +1,4 @@
-import { MessageFlags } from 'discord.js';
+import { MessageFlags, AttachmentBuilder } from 'discord.js';
 import { dispatch, dispatchAutocomplete } from '../router.js';
 import { authMessages } from '../messages.js';
 import { resolvePrincipal } from '../auth/principal.js';
@@ -227,7 +227,29 @@ export async function handleMention(message, { appContext, botId }) {
   }
 }
 
+// Posts a completed meeting recording (PDF minutes + optional MP3 audio) to the
+// text channel where /record was started. Injected into the session manager
+// via setPoster() at wire time because it needs a live discord.js `channel`
+// object, which the session manager (surface-agnostic) must not depend on.
+export function makeDiscordPoster() {
+  return async function discordPoster({ channel, pdfBuffer, mp3Path, meta }) {
+    const files = [new AttachmentBuilder(pdfBuffer, { name: 'meeting-minutes.pdf' })];
+    try {
+      if (mp3Path) files.push(new AttachmentBuilder(mp3Path, { name: 'meeting-audio.mp3' }));
+      await channel.send({ content: `📄 **${meta.title}**`, files });
+    } catch (e) {
+      // Most likely the audio exceeded the guild's upload limit; retry with the
+      // PDF only. Never throw — a failed post must not crash the pipeline.
+      await channel.send({
+        content: `📄 **${meta.title}** (audio too large to attach)`,
+        files: [new AttachmentBuilder(pdfBuffer, { name: 'meeting-minutes.pdf' })],
+      }).catch((err) => console.error('poster failed:', err.message));
+    }
+  };
+}
+
 export function wireDiscordClient(client, { commands, appContext }) {
+  appContext.sessionManager?.setPoster(makeDiscordPoster());
   client.on('interactionCreate', async (interaction) => {
     // Autocomplete interactions are a separate path: they CANNOT be deferred and
     // must respond within 3s. Best-effort — dispatchAutocomplete never throws.
@@ -257,7 +279,14 @@ export function wireDiscordClient(client, { commands, appContext }) {
       // work succeeds. Deferring extends the response window to 15 minutes.
       const ephemeral = resolveEphemeral(command, intent.subcommand);
       await interaction.deferReply(ephemeral ? { flags: MessageFlags.Ephemeral } : {});
-      const payload = await dispatch(intent, { commands, appContext });
+      const ctxExtra = interaction.commandName === 'record'
+        ? {
+          guildId: interaction.guildId,
+          voiceChannel: interaction.member?.voice?.channel ?? null,
+          textChannel: interaction.channel,
+        }
+        : {};
+      const payload = await dispatch(intent, { commands, appContext, ctxExtra });
       await safeReply(interaction, payload);
     } catch (err) {
       console.error('Unhandled interaction error:', err);

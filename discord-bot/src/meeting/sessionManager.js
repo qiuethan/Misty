@@ -22,6 +22,7 @@ export function createSessionManager({
   reportService, transcribeClient, audio, makeRecorder, poster,
   now = Date.now, maxRecordingMs = 3_600_000, tmpRoot = os.tmpdir(),
 }) {
+  let post = poster;
   const sessions = new Map(); // guildId -> { recorder, textChannel, startedAt, tmpDir, timer }
 
   async function runPipeline(guildId) {
@@ -55,7 +56,7 @@ export function createSessionManager({
       if (tracks.length) {
         await audio.runFfmpeg(audio.mixToMp3Args(tracks.map((t) => t.pcmPath), mp3Path));
       }
-      await poster({ channel: s.textChannel, pdfBuffer, mp3Path: tracks.length ? mp3Path : null, meta });
+      await post({ channel: s.textChannel, pdfBuffer, mp3Path: tracks.length ? mp3Path : null, meta });
       return { status: 'stopped' };
     } catch (err) {
       console.error('meeting pipeline failed:', err?.message ?? err);
@@ -84,5 +85,6 @@ export function createSessionManager({
       return { status: 'recording', elapsedMs: now() - s.startedAt };
     },
     stop(guildId) { return runPipeline(guildId); },
+    setPoster(fn) { post = fn; },
   };
 }

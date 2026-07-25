@@ -31,7 +31,7 @@ function commandsAvailableToIntent(commands, intent, appContext) {
  * @param {object} dependencies Command registry and shared application context.
  * @returns {Promise<object|null>} Reply payload, or null for an unknown command.
  */
-export async function dispatch(intent, { commands, appContext }) {
+export async function dispatch(intent, { commands, appContext, ctxExtra = {} }) {
   const command = commands.get(intent.commandName);
   if (!command) return null;
 
@@ -70,7 +70,7 @@ export async function dispatch(intent, { commands, appContext }) {
       options: intent.options ?? {},
       subcommand: intent.subcommand ?? null,
       principal,
-      ctx: { ...appContext, commands: availableCommands },
+      ctx: { ...appContext, ...ctxExtra, commands: availableCommands },
       discordUserId: intent.discordUserId,
       discordHandle: intent.discordHandle,
     });

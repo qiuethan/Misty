@@ -18,7 +18,11 @@ async function main() {
     // (Consequence: thread messages that don't re-mention the bot arrive with
     // empty content and are ignored — matches the "re-mention to follow up" design.)
     const client = new Client({
-      intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.GuildVoiceStates,
+      ],
     });
     wireDiscordClient(client, { commands, appContext });
     client.once('clientReady', (c) => console.log(`Bot ready as ${c.user.tag}`));
