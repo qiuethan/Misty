@@ -5,21 +5,30 @@ fonts, so accented names and non-latin scripts (Cyrillic, Greek, and the many
 other scripts DejaVu covers) render correctly instead of being replaced with
 ``?``. DejaVu does *not* cover CJK or pictographic emoji; those characters
 degrade to a missing-glyph box -- never a lossy ``?`` substitution.
+
+Structured sections are laid out as tables: the meta header (key/value), action
+items (a checkbox checklist), and the transcript (Time / Speaker / Text, with
+the heading row repeated on every page). Free-form sections (summary,
+decisions) stay as prose / bullets.
 """
 
 from pathlib import Path
 
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
+from fpdf.fonts import FontFace
 
 from src.contracts import Minutes
 
 _FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 
 # Palette
-_ACCENT = (37, 99, 235)  # blue: title + section headings + speaker prefix
-_MUTED = (110, 110, 110)  # meta line, footer, "None recorded."
+_ACCENT = (37, 99, 235)  # blue: title + section headings + table headers
+_MUTED = (110, 110, 110)  # meta values, footer, "None recorded."
+_LABEL = (60, 60, 60)  # meta labels
 _RULE = (210, 210, 210)  # hairline rules
+_STRIPE = (244, 246, 250)  # zebra fill for transcript rows
+_WHITE = (255, 255, 255)
 
 
 class _MeetingPDF(FPDF):
@@ -64,9 +73,26 @@ def _heading(pdf: FPDF, text: str) -> None:
 
 
 def _muted_line(pdf: FPDF, text: str) -> None:
+    pdf.set_font("DejaVu", "", 11)
     pdf.set_text_color(*_MUTED)
     _line(pdf, 6, text)
     pdf.set_text_color(0, 0, 0)
+
+
+def _meta_table(pdf: FPDF, rows: list[tuple[str, str]]) -> None:
+    pdf.set_font("DejaVu", "", 10)
+    with pdf.table(
+        borders_layout="NONE",
+        first_row_as_headings=False,
+        col_widths=(24, 128),
+        text_align=("LEFT", "LEFT"),
+        line_height=5.5,
+        width=pdf.epw,
+    ) as table:
+        for label, value in rows:
+            row = table.row()
+            row.cell(label, style=FontFace(emphasis="BOLD", color=_LABEL))
+            row.cell(value, style=FontFace(color=_MUTED))
 
 
 def _bulleted(pdf: FPDF, items: list[str]) -> None:
@@ -78,41 +104,60 @@ def _bulleted(pdf: FPDF, items: list[str]) -> None:
         _line(pdf, 6, f"• {item}")  # • bullet (real Unicode now that fonts allow it)
 
 
-def _transcript(pdf: FPDF, transcript: str) -> None:
-    """Render the transcript as a chat log: each turn's ``[ts] Speaker:`` prefix
-    in bold accent, the utterance in regular mono, a blank line between turns.
-
-    ``assemble_transcript`` emits one turn per line as ``[HH:MM:SS] speaker: text``.
-    Lines that don't match that shape are printed verbatim in regular mono.
-    """
-    pdf.set_font("DejaVuMono", "", 9)
-    lines = [ln for ln in (transcript or "").split("\n") if ln.strip()]
-    if not lines:
-        pdf.set_font("DejaVu", "", 11)
+def _action_items(pdf: FPDF, items: list[str]) -> None:
+    if not items:
         _muted_line(pdf, "None recorded.")
         return
+    pdf.set_font("DejaVu", "", 11)
+    with pdf.table(
+        borders_layout="NONE",
+        first_row_as_headings=False,
+        col_widths=(7, 145),
+        text_align=("CENTER", "LEFT"),
+        line_height=6,
+        width=pdf.epw,
+    ) as table:
+        for item in items:
+            row = table.row()
+            row.cell("☐")  # ballot box: an open checkbox
+            row.cell(item)
 
-    for line in lines:
-        prefix = None
-        rest = line
-        # Split "[ts] speaker: text" into a bold "[ts] speaker:" prefix + " text".
-        if line.startswith("[") and "] " in line:
-            ts, after = line.split("] ", 1)
-            speaker, sep, text = after.partition(": ")
-            if sep:
-                prefix = f"{ts}] {speaker}: "
-                rest = text
 
-        if prefix is not None:
-            pdf.set_font("DejaVuMono", "B", 9)
-            pdf.set_text_color(*_ACCENT)
-            pdf.write(4.6, prefix)
-            pdf.set_font("DejaVuMono", "", 9)
-            pdf.set_text_color(0, 0, 0)
-            pdf.write(4.6, rest)
-        else:
-            pdf.write(4.6, line)
-        pdf.ln(7)  # end this turn + blank-line separation before the next
+def _parse_turn(line: str) -> tuple[str, str, str]:
+    """Split an ``assemble_transcript`` line ``[HH:MM:SS] speaker: text`` into
+    ``(time, speaker, text)``. Lines that don't match go entirely in the text
+    column with empty time/speaker."""
+    if line.startswith("[") and "] " in line:
+        ts, after = line.split("] ", 1)
+        speaker, sep, text = after.partition(": ")
+        if sep:
+            return ts.lstrip("[").strip(), speaker.strip(), text.strip()
+    return "", "", line.strip()
+
+
+def _transcript(pdf: FPDF, transcript: str) -> None:
+    lines = [ln for ln in (transcript or "").split("\n") if ln.strip()]
+    if not lines:
+        _muted_line(pdf, "None recorded.")
+        return
+    pdf.set_font("DejaVu", "", 9)
+    with pdf.table(
+        borders_layout="HORIZONTAL_LINES",
+        headings_style=FontFace(emphasis="BOLD", color=_WHITE, fill_color=_ACCENT),
+        col_widths=(16, 26, 110),
+        text_align=("LEFT", "LEFT", "LEFT"),
+        cell_fill_mode="ROWS",
+        cell_fill_color=_STRIPE,
+        line_height=5,
+        width=pdf.epw,
+    ) as table:
+        table.row(("Time", "Speaker", "Text"))
+        for line in lines:
+            ts, speaker, text = _parse_turn(line)
+            row = table.row()
+            row.cell(ts, style=FontFace(family="DejaVuMono"))
+            row.cell(speaker, style=FontFace(emphasis="BOLD"))
+            row.cell(text)
 
 
 def render_meeting_pdf(minutes: Minutes, transcript: str, meta: dict) -> bytes:
@@ -127,33 +172,34 @@ def render_meeting_pdf(minutes: Minutes, transcript: str, meta: dict) -> bytes:
     pdf.set_text_color(0, 0, 0)
     _rule(pdf, gap_above=1, gap_below=4)
 
-    # Meta header
-    started_at = meta.get("started_at", "")
-    duration_label = meta.get("duration_label", "")
+    # Meta header (key/value table)
     participants = meta.get("participants", []) or []
-    pdf.set_font("DejaVu", "", 10)
-    pdf.set_text_color(*_MUTED)
-    _line(pdf, 5, f"Started: {started_at}    Duration: {duration_label}")
-    _line(pdf, 5, f"Participants: {', '.join(participants) if participants else 'None recorded.'}")
-    pdf.set_text_color(0, 0, 0)
+    _meta_table(
+        pdf,
+        [
+            ("Started", str(meta.get("started_at", "") or "-")),
+            ("Duration", str(meta.get("duration_label", "") or "-")),
+            ("Participants", ", ".join(participants) if participants else "None recorded."),
+        ],
+    )
 
     # Summary
     _heading(pdf, "Summary")
-    pdf.set_font("DejaVu", "", 11)
     if minutes.summary:
+        pdf.set_font("DejaVu", "", 11)
         _line(pdf, 6, minutes.summary)
     else:
         _muted_line(pdf, "None recorded.")
 
-    # Decisions
+    # Decisions (bullets)
     _heading(pdf, "Decisions")
     _bulleted(pdf, minutes.decisions)
 
-    # Action Items
+    # Action Items (checklist table)
     _heading(pdf, "Action Items")
-    _bulleted(pdf, minutes.action_items)
+    _action_items(pdf, minutes.action_items)
 
-    # Full Transcript
+    # Full Transcript (Time / Speaker / Text table)
     _heading(pdf, "Full Transcript")
     _transcript(pdf, transcript)
 
