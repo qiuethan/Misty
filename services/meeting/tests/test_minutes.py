@@ -24,6 +24,16 @@ def test_parses_json():
     assert "hi" in llm.calls[0]["messages"][-1]["content"]
 
 
+def test_parses_llm_title():
+    llm = FakeLlm('{"title":"Q3 Roadmap Sync","summary":"s","decisions":[],"action_items":[]}')
+    assert summarize_minutes("x", llm).title == "Q3 Roadmap Sync"
+
+
+def test_title_defaults_empty_when_absent_or_non_string():
+    assert summarize_minutes("x", FakeLlm('{"summary":"s"}')).title == ""
+    assert summarize_minutes("x", FakeLlm('{"title":123,"summary":"s"}')).title == ""
+
+
 def test_tolerates_fenced_json():
     llm = FakeLlm('```json\n{"summary":"s","decisions":[],"action_items":[]}\n```')
     assert summarize_minutes("x", llm).summary == "s"
@@ -50,3 +60,4 @@ def test_degrades_to_placeholder_minutes_on_llm_outage():
     assert m.summary == "(minutes unavailable: LLM service error)"
     assert m.decisions == []
     assert m.action_items == []
+    assert m.title == ""  # no title on outage -> PDF uses its fallback

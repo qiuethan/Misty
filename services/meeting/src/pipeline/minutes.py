@@ -10,8 +10,11 @@ _logger = logging.getLogger(__name__)
 MINUTES_SYSTEM_PROMPT = (
     "You write concise meeting minutes for a student organization. Given a "
     "timestamped transcript, respond with ONLY a JSON object of shape "
-    '{"summary": string, "decisions": string[], "action_items": string[]}. '
-    "summary is 2-5 sentences. No prose outside the JSON."
+    '{"title": string, "summary": string, "decisions": string[], "action_items": string[]}. '
+    "title is a short, specific meeting title of at most 8 words that captures "
+    "what the meeting was about (no surrounding quotes, no trailing punctuation), "
+    'e.g. "Weekly Sync: Q3 Roadmap & Hiring". summary is 2-5 sentences. No prose '
+    "outside the JSON."
 )
 
 
@@ -46,7 +49,9 @@ def summarize_minutes(transcript: str, llm_client, model=None) -> Minutes:
         return Minutes(summary=(content or "").strip(), decisions=[], action_items=[])
     raw_decisions = parsed.get("decisions", [])
     raw_action_items = parsed.get("action_items", [])
+    raw_title = parsed.get("title")
     return Minutes(
+        title=str(raw_title).strip()[:120] if isinstance(raw_title, str) else "",
         summary=parsed["summary"],
         decisions=[str(x) for x in raw_decisions] if isinstance(raw_decisions, list) else [],
         action_items=[str(x) for x in raw_action_items] if isinstance(raw_action_items, list) else [],
