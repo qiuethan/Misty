@@ -21,15 +21,15 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_api_key: str = ""
     request_timeout_s: float = Field(default=60.0, gt=0)
-    # Optional safety cap (see sessions.py MeetingSession.feed): once a meeting
-    # exceeds this many ms, further audio frames are dropped. Default is None =
-    # NO cap -- meetings run until /record stop or auto-stop-on-empty (the bot
-    # ends a recording when everyone leaves the voice channel). Set MAX_MEETING_MS
-    # to re-enable a bound. Caveat until the incremental-transcription redesign
-    # (Misty #121): with no cap, a long meeting with people continuously present
-    # buffers all its PCM in memory, so a genuinely unbounded meeting can OOM the
-    # service. Auto-stop-on-empty mitigates the common case.
-    max_meeting_ms: int | None = Field(default=None, gt=0)
+    # Safety cap (see sessions.py MeetingSession.feed): once a meeting exceeds
+    # this many ms, further audio frames are dropped. This is a BACKSTOP, not
+    # the normal end condition -- recordings usually end on /record stop or
+    # auto-stop-on-empty (the bot ends a recording when everyone leaves the voice
+    # channel). The cap bounds worst-case memory because the current design
+    # buffers all PCM in memory until the incremental-transcription redesign
+    # (Misty #121). Set MAX_MEETING_MS to another value, or None, to change or
+    # disable it.
+    max_meeting_ms: int | None = Field(default=14_400_000, gt=0)  # 4 hours
 
 
 @lru_cache(maxsize=1)
