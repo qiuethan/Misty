@@ -287,3 +287,86 @@ def test_stop_cleans_up_tmp_dir_even_on_report_builder_error(tmp_root):
 
     assert not os.path.exists(os.path.join(tmp_root, "session-err"))
     assert registry.get("session-err") is None
+
+
+def test_feed_sanitizes_path_traversal_speaker_id(tmp_root):
+    """A malicious speaker_id (attacker/caller-controlled, decoded straight off
+    the WS binary frame with no validation upstream -- see
+    api/routers/meetings.py) must never let feed() write outside the
+    session's own tmp dir, and the sanitized on-disk filename must contain no
+    path separators."""
+    audio = FakeAudio()
+    malicious_ids = ["../../etc/evil", "/abs/path/evil", "../../../../tmp/pwned"]
+    transcribers = [FakeTranscriber([]) for _ in malicious_ids]
+    deps = _make_deps(tmp_root, transcribers, audio=audio)
+    registry = SessionRegistry(deps)
+    session = registry.create("session-traversal", "guild-1")
+
+    for speaker_id in malicious_ids:
+        session.feed(speaker_id, "display", b"frame", ts_ms=0)
+
+    session_tmp_dir = os.path.realpath(os.path.join(tmp_root, "session-traversal"))
+    for speaker_id in malicious_ids:
+        buf = session._speakers[speaker_id]
+        # The written file must stay under the session's own tmp dir.
+        real_path = os.path.realpath(buf.pcm_path)
+        assert real_path.startswith(session_tmp_dir + os.sep)
+        # The filename component itself must contain no path separators.
+        filename = os.path.basename(buf.pcm_path)
+        assert os.sep not in filename
+        assert "/" not in filename and ".." not in filename
+        assert os.path.exists(buf.pcm_path)
+
+    # Distinct raw ids must not collide onto the same sanitized filename.
+    filenames = {os.path.basename(session._speakers[sid].pcm_path) for sid in malicious_ids}
+    assert len(filenames) == len(malicious_ids)
+
+    # display_name / speaker label plumbing is untouched: raw speaker_id
+    # remains the dict key and is unaffected by path sanitization.
+    assert set(session._speakers.keys()) == set(malicious_ids)
+
+
+def test_transcript_view_tolerates_new_speaker_added_during_iteration(tmp_root):
+    """Regression for 'dictionary changed size during iteration': feed() runs
+    synchronously (e.g. from the live WS ingest loop) and can insert a
+    brand-new speaker into self._speakers while transcript_view() is
+    suspended at an `await` mid-iteration over the existing speakers. The
+    view must snapshot before iterating so this doesn't crash, and a speaker
+    added mid-poll is simply picked up on a later call."""
+
+    class InsertingTranscriber:
+        """A fake transcriber whose transcribe() call simulates a concurrent
+        feed() for a brand-new speaker arriving mid-iteration (as would happen
+        if the live WS ingest loop ran on another asyncio task while this
+        coroutine was suspended at `await`)."""
+
+        def __init__(self, session):
+            self._session = session
+            self._did_insert = False
+
+        async def transcribe(self, pcm_chunks, sample_rate=16000):
+            _ = [c async for c in pcm_chunks]
+            if not self._did_insert:
+                self._did_insert = True
+                self._session.feed("late-speaker", "late", b"late-frame", ts_ms=0)
+            return {"text": "hi", "words": [{"text": "hi", "start_ms": 0}]}
+
+    audio = FakeAudio()
+    deps = _make_deps(tmp_root, [], audio=audio)
+    registry = SessionRegistry(deps)
+    session = registry.create("session-mutate", "guild-1")
+
+    # Install a transcriber for "alice-id" that mutates self._speakers when
+    # awaited -- reproducing the "insert during await" race feed() enables.
+    session._deps["make_transcriber"] = lambda: InsertingTranscriber(session)
+    session.feed("alice-id", "alice", b"alice-frame", ts_ms=0)
+
+    # Must not raise "RuntimeError: dictionary changed size during iteration".
+    view = asyncio.run(session.transcript_view())
+
+    # Only alice's words show up in THIS poll's view (the late speaker's
+    # buffer had no words fed into their own transcriber run this pass) --
+    # they'll appear on a subsequent poll instead. The key assertion is that
+    # iteration didn't crash, and the new speaker IS now tracked.
+    assert [(s.speaker, s.text) for s in view] == [("alice", "hi")]
+    assert "late-speaker" in session._speakers

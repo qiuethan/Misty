@@ -22,6 +22,7 @@ during the sub-plan 3 live integration phase.
 
 import asyncio
 import base64
+import hashlib
 import logging
 import os
 import shutil
@@ -62,6 +63,23 @@ def words_to_segments(speaker: str, words: list[dict], gap_ms: int = 3000) -> li
         segments.append(Segment(speaker=speaker, start_ms=current_start, text=" ".join(current_words)))
 
     return segments
+
+
+def _safe_filename_component(raw: str) -> str:
+    """Derive a filesystem-safe, collision-resistant filename component from an
+    attacker/caller-controlled speaker_id (decoded straight off the WS binary
+    frame, see api/routers/meetings.py -- no charset or path-traversal
+    validation happens there). NEVER interpolate the raw speaker_id into a
+    filesystem path: values like ``../../etc/evil`` or ``/abs/path`` would
+    otherwise let a WS client redirect PCM writes (and the later ffmpeg mix
+    read) to an arbitrary path outside the session's tmp dir (CWE-22).
+
+    A hash of the raw id is used (rather than an allowlist substitution) so
+    two distinct raw ids can never collide onto the same sanitized filename.
+    The raw speaker_id itself is preserved untouched as the dict key / for
+    display_name mapping -- only the on-disk path uses this sanitized value.
+    """
+    return hashlib.sha256(raw.encode("utf-8", errors="surrogateescape")).hexdigest()[:32]
 
 
 async def _achunks(chunks: list[bytes]):
@@ -155,7 +173,7 @@ class MeetingSession:
 
         buf = self._speakers.get(speaker_id)
         if buf is None:
-            pcm_path = os.path.join(self._tmp_dir, f"{speaker_id}.pcm")
+            pcm_path = os.path.join(self._tmp_dir, f"{_safe_filename_component(speaker_id)}.pcm")
             transcriber = self._deps["make_transcriber"]()
             buf = _SpeakerBuffer(display_name, pcm_path, transcriber)
             self._speakers[speaker_id] = buf
@@ -167,7 +185,14 @@ class MeetingSession:
 
     async def transcript_view(self) -> list[Segment]:
         segments: list[Segment] = []
-        for buf in self._speakers.values():
+        # Snapshot into a list before iterating: feed() runs synchronously from
+        # a separate asyncio task (the live WS ingest loop) and can insert a
+        # brand-new speaker into self._speakers while this coroutine is
+        # suspended at the `await` below, which would otherwise raise
+        # "RuntimeError: dictionary changed size during iteration". A speaker
+        # who first appears mid-poll simply shows up on the next poll (or at
+        # stop()) instead -- an acceptable, self-correcting gap.
+        for buf in list(self._speakers.values()):
             words = await buf.transcribe_buffered()
             segments.extend(words_to_segments(buf.display_name, words))
         segments.sort(key=lambda s: s.start_ms)
@@ -186,7 +211,10 @@ class MeetingSession:
     async def stop(self) -> StopResponse:
         try:
             segments: list[Segment] = []
-            for buf in self._speakers.values():
+            # Same snapshot-before-iterating rationale as transcript_view()
+            # above: a concurrent feed() for a new speaker must not mutate
+            # self._speakers while we're suspended at the await below.
+            for buf in list(self._speakers.values()):
                 words = await buf.transcribe_buffered()
                 segments.extend(words_to_segments(buf.display_name, words))
             segments.sort(key=lambda s: s.start_ms)
