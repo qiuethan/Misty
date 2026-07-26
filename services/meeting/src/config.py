@@ -21,11 +21,15 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_api_key: str = ""
     request_timeout_s: float = Field(default=60.0, gt=0)
-    # Cap only (see sessions.py MeetingSession.feed) -- bounds unbounded PCM
-    # buffer growth for a single meeting. Does NOT fix the separate cost issue
-    # of transcript_view()/stop() re-transcribing the whole buffer on every
-    # poll; that's deferred to the sub-plan 3 incremental-transcription redesign.
-    max_meeting_ms: int = Field(default=14_400_000, gt=0)  # 4 hours
+    # Optional safety cap (see sessions.py MeetingSession.feed): once a meeting
+    # exceeds this many ms, further audio frames are dropped. Default is None =
+    # NO cap -- meetings run until /record stop or auto-stop-on-empty (the bot
+    # ends a recording when everyone leaves the voice channel). Set MAX_MEETING_MS
+    # to re-enable a bound. Caveat until the incremental-transcription redesign
+    # (Misty #121): with no cap, a long meeting with people continuously present
+    # buffers all its PCM in memory, so a genuinely unbounded meeting can OOM the
+    # service. Auto-stop-on-empty mitigates the common case.
+    max_meeting_ms: int | None = Field(default=None, gt=0)
 
 
 @lru_cache(maxsize=1)

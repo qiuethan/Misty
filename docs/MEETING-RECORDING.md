@@ -6,7 +6,7 @@ Feature owner: Misty #92. Related: [platform ARCHITECTURE](ARCHITECTURE.md), [`s
 
 ## What it does
 
-A member runs `/record start` in a Discord voice channel. The bot joins, and as people talk it streams their audio to the `meeting` service, which transcribes each speaker live into a rolling transcript. On `/record stop` the service turns the transcript into minutes (via the `llm` service), renders a PDF, mixes the audio, and hands it back; the bot posts the **PDF + audio** to the text channel. Nothing is persisted — the transcript lives in memory for the meeting and is discarded after the report is returned.
+A **linked** member (identity resolved via the directory — see "Authorization" below) runs `/record start` in a Discord voice channel. The bot joins, and as people talk it streams their audio to the `meeting` service, which transcribes each speaker live into a rolling transcript. Recording ends on `/record stop` **or automatically when everyone leaves the voice channel** (the bot ends the meeting once no non-bot member remains). On stop the service turns the transcript into minutes (via the `llm` service), renders a PDF, mixes the audio, and hands it back; the bot posts the **PDF + audio** to the text channel. Nothing is persisted — the transcript lives in memory for the meeting and is discarded after the report is returned.
 
 ## The boundary, and the one constraint that forces it
 
@@ -67,13 +67,17 @@ Instead, `/record` is a **dedicated path in the Discord adapter**: `adapters/dis
 
 **Surface isolation** is preserved: only `index.js`, `registerCommands.js`, and `adapters/*` (plus the sanctioned voice modules `recorder.js`/`meetingSurface.js`) import `discord.js`/`@discordjs/voice`. `meetingClient.js` is transport-only (no Discord). The attachment poster is Discord-specific, so it is built in `index.js` (the composition root) and **injected** into `meetingSurface` — keeping `context.js` free of any Discord import.
 
+**Authorization.** Because `/record` bypasses `router.js`, it also bypasses the router's single Policy Enforcement Point. So the dedicated handler re-runs the same `resolvePrincipal → authorize('linked', …)` check itself before doing anything — an unlinked caller is turned away with the standard "link your account" message, exactly as if the command had gone through neutral dispatch. If this check is ever removed, any guild member could drive live voice capture unauthenticated.
+
+**Auto-stop.** `wireDiscordClient` listens for `voiceStateUpdate`; when a member leaves the channel currently being recorded and no non-bot member remains, it calls `meetingSurface.stop(guildId)` — the same path as `/record stop`. The recorded channel is read from the live session via `meetingSurface.activeVoiceChannel(guildId)` (stored opaquely, so `meetingSurface` keeps no `discord.js` dependency), which keeps the head-count check honest and makes the listener a no-op once a session has been torn down.
+
 ## Deployment
 
 `meeting` is a private Railway service (`meeting.railway.internal:<PORT>`), like the other services: `platform_auth` consumer keys, `/health`, Dockerfile build (ffmpeg installed in the image), GitHub-connected auto-deploy on push to `staging`. It needs AWS credentials (Transcribe, via the standard chain), an `llm` consumer key (for minutes), and its own `CONSUMER_KEYS` set. The bot gets a `meeting` consumer key (`MEETING_API_KEY`) and `MEETING_BASE_URL=http://meeting.railway.internal:<PORT>`; the WebSocket rides Railway's private network. If `MEETING_BASE_URL` is unset the bot boots fine and `/record` reports "not configured" — the feature degrades gracefully.
 
 ## Known limitations & live-verify items
 
-- **Transcription re-billing:** the current session model re-transcribes the whole buffer on every `/transcript` poll and at stop, which re-bills AWS. The intended fix is a persistent per-speaker Transcribe stream fed incrementally (finalized words never re-sent). A `max_meeting_ms` cap bounds memory in the meantime.
+- **Transcription re-billing + unbounded memory:** the current session model re-transcribes the whole buffer on every `/transcript` poll and at stop, which re-bills AWS, and it holds every meeting's PCM in memory for the meeting's life. The intended fix is a persistent per-speaker Transcribe stream fed incrementally (finalized words never re-sent) — Misty #121. There is **no length cap by default** (`max_meeting_ms=None`): a meeting runs until `/record stop` or auto-stop-on-empty, so a genuinely marathon meeting with people continuously present can grow memory without bound and OOM the service. Auto-stop-on-empty covers the common case; set `MAX_MEETING_MS` to re-enable a hard bound until #121 lands.
 - **Opus decode assumption:** the service decodes forwarded Discord Opus with a specific ffmpeg input (`-f data -c:a libopus`); this needs live confirmation against the real byte stream (fallback: Ogg-wrapped input).
 - **Per-frame decode cost:** one ffmpeg invocation per ~20 ms Opus frame — fine for small meetings; batch before decode if it bites.
 - **Concurrency:** one AWS Transcribe stream per active speaker; watch the account's concurrent-stream limit.

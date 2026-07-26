@@ -45,6 +45,7 @@ export function createMeetingSurface({
       stream,
       recorder,
       textChannel,
+      voiceChannel,
       startedAt: now(),
     });
 
@@ -55,6 +56,15 @@ export function createMeetingSurface({
     const session = sessions.get(guildId);
     if (!session) return { status: 'not-recording' };
     return { status: 'recording', elapsedMs: now() - session.startedAt };
+  }
+
+  // The (opaque) voice channel currently being recorded for a guild, or null.
+  // The Discord adapter uses this to auto-stop when the channel empties -- kept
+  // here (the single session source of truth) so it can't drift from the live
+  // session, but treated opaquely so this module stays free of any discord.js
+  // dependency.
+  function activeVoiceChannel(guildId) {
+    return sessions.get(guildId)?.voiceChannel ?? null;
   }
 
   async function stop(guildId) {
@@ -88,5 +98,5 @@ export function createMeetingSurface({
     }
   }
 
-  return { start, status, stop };
+  return { start, status, stop, activeVoiceChannel };
 }

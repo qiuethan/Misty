@@ -8,7 +8,9 @@ import {
   payloadToDiscordReply,
   resolveEphemeral,
   wireDiscordClient,
+  handleVoiceStateUpdate,
 } from '../src/adapters/discord.js';
+import { DirectoryUnavailable } from '../src/directoryClient.js';
 
 // A minimal fake discord.js interaction that tracks the response lifecycle the
 // way the real one does: deferReply() flips `deferred`, reply() flips `replied`.
@@ -294,4 +296,142 @@ test('wireDiscordClient responds to autocomplete with suggestions', async () => 
   await client.emit(fakeAutocompleteInteraction({ commandName: 'doc', subcommand: 'list', focused: { name: 'team', value: 'm' }, calls }));
   const respond = calls.find((c) => c.method === 'respond');
   assert.deepEqual(respond.choices, [{ name: 'ML', value: 'ml' }]);
+});
+
+// --- /record auth enforcement (dedicated adapter path, bypasses the router PEP) ---
+
+function fakeRecordInteraction({ subcommand, voiceChannel = null, calls }) {
+  return {
+    commandName: 'record',
+    guildId: 'g1',
+    user: { id: 'u1', username: 'alex' },
+    channel: { id: 'tc1' },
+    member: { voice: { channel: voiceChannel } },
+    isChatInputCommand: () => true,
+    isAutocomplete: () => false,
+    options: { getSubcommand: () => subcommand },
+    async deferReply(opts) { calls.push({ method: 'deferReply', opts }); },
+    async editReply(payload) { calls.push({ method: 'editReply', payload }); },
+  };
+}
+
+test('/record start is denied for an UNLINKED caller and never starts recording', async () => {
+  const calls = [];
+  let startCalled = false;
+  const appContext = {
+    directory: { getPersonByDiscordId: async () => null },
+    meetingSurface: { start: () => { startCalled = true; return { status: 'recording' }; } },
+  };
+  const client = fakeClient();
+  wireDiscordClient(client, { commands: new Map(), appContext });
+
+  await client.emit(fakeRecordInteraction({ subcommand: 'start', voiceChannel: { id: 'vc1' }, calls }));
+
+  const edit = calls.find((c) => c.method === 'editReply');
+  assert.match(edit.payload.content, /link your account/i);
+  assert.equal(startCalled, false, 'an unlinked caller must not reach meetingSurface.start');
+});
+
+test('/record start proceeds for a LINKED caller in a voice channel', async () => {
+  const calls = [];
+  let startArgs = null;
+  const voiceChannel = { id: 'vc1' };
+  const appContext = {
+    directory: { getPersonByDiscordId: async () => ({ id: 'p1' }) },
+    meetingSurface: { start: (args) => { startArgs = args; return { status: 'recording' }; } },
+  };
+  const client = fakeClient();
+  wireDiscordClient(client, { commands: new Map(), appContext });
+
+  await client.emit(fakeRecordInteraction({ subcommand: 'start', voiceChannel, calls }));
+
+  assert.ok(startArgs, 'a linked caller should reach meetingSurface.start');
+  assert.equal(startArgs.voiceChannel, voiceChannel);
+  const edit = calls.find((c) => c.method === 'editReply');
+  assert.match(edit.payload.content, /recording/i);
+});
+
+test('/record start fails closed (no start) when the directory is unavailable', async () => {
+  const calls = [];
+  let startCalled = false;
+  const appContext = {
+    directory: { getPersonByDiscordId: async () => { throw new DirectoryUnavailable('down'); } },
+    meetingSurface: { start: () => { startCalled = true; return { status: 'recording' }; } },
+  };
+  const client = fakeClient();
+  wireDiscordClient(client, { commands: new Map(), appContext });
+
+  await client.emit(fakeRecordInteraction({ subcommand: 'start', voiceChannel: { id: 'vc1' }, calls }));
+
+  const edit = calls.find((c) => c.method === 'editReply');
+  assert.match(edit.payload.content, /unavailable/i);
+  assert.equal(startCalled, false);
+});
+
+// --- auto-stop when everyone leaves the recorded voice channel ---
+
+const asMember = (bot) => ({ user: { bot } });
+const fakeVoiceChannel = (id, members) =>
+  ({ id, members: new Map(members.map((m, i) => [String(i), m])) });
+
+test('auto-stop: stops the recording when the last human leaves the recorded channel', async () => {
+  let stoppedGuild = null;
+  const voiceChannel = fakeVoiceChannel('vc1', [asMember(true)]); // only the recorder bot remains
+  const appContext = {
+    meetingSurface: {
+      activeVoiceChannel: () => voiceChannel,
+      stop: async (g) => { stoppedGuild = g; return { status: 'stopped' }; },
+    },
+  };
+
+  await handleVoiceStateUpdate({ channelId: 'vc1', guild: { id: 'g1' } }, { channelId: null }, appContext);
+
+  assert.equal(stoppedGuild, 'g1');
+});
+
+test('auto-stop: does NOT stop while humans remain in the recorded channel', async () => {
+  let stopCalled = false;
+  const voiceChannel = fakeVoiceChannel('vc1', [asMember(true), asMember(false)]); // bot + a human
+  const appContext = {
+    meetingSurface: { activeVoiceChannel: () => voiceChannel, stop: async () => { stopCalled = true; } },
+  };
+
+  await handleVoiceStateUpdate({ channelId: 'vc1', guild: { id: 'g1' } }, { channelId: null }, appContext);
+
+  assert.equal(stopCalled, false);
+});
+
+test('auto-stop: ignores a leave from a channel that is not being recorded', async () => {
+  let stopCalled = false;
+  const voiceChannel = fakeVoiceChannel('vc1', [asMember(true)]);
+  const appContext = {
+    meetingSurface: { activeVoiceChannel: () => voiceChannel, stop: async () => { stopCalled = true; } },
+  };
+
+  await handleVoiceStateUpdate({ channelId: 'vc2', guild: { id: 'g1' } }, { channelId: null }, appContext);
+
+  assert.equal(stopCalled, false);
+});
+
+test('auto-stop: ignores non-leave transitions (e.g. mute toggled, same channel)', async () => {
+  let stopCalled = false;
+  const voiceChannel = fakeVoiceChannel('vc1', [asMember(true)]);
+  const appContext = {
+    meetingSurface: { activeVoiceChannel: () => voiceChannel, stop: async () => { stopCalled = true; } },
+  };
+
+  await handleVoiceStateUpdate({ channelId: 'vc1', guild: { id: 'g1' } }, { channelId: 'vc1' }, appContext);
+
+  assert.equal(stopCalled, false);
+});
+
+test('auto-stop: no-op when nothing is being recorded for the guild', async () => {
+  let stopCalled = false;
+  const appContext = {
+    meetingSurface: { activeVoiceChannel: () => null, stop: async () => { stopCalled = true; } },
+  };
+
+  await handleVoiceStateUpdate({ channelId: 'vc1', guild: { id: 'g1' } }, { channelId: null }, appContext);
+
+  assert.equal(stopCalled, false);
 });

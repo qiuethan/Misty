@@ -265,6 +265,28 @@ async function handleRecordInteraction(interaction, appContext) {
 
   const reply = (content) => interaction.editReply({ content }).catch((e) => console.error('record reply failed:', e.message));
 
+  // `/record` bypasses the neutral dispatch, which is where the Policy
+  // Enforcement Point normally lives -- so re-run authenticate -> authorize
+  // here against the command's declared 'linked' policy. Without this, anyone
+  // in the (beta) guild could drive live voice recording unauthenticated.
+  let principal;
+  try {
+    principal = await resolvePrincipal(appContext.directory, interaction.user.id);
+  } catch (e) {
+    if (e instanceof DirectoryUnavailable) {
+      await reply(authMessages.unavailable().content);
+      return;
+    }
+    console.error('record auth lookup failed:', e.message);
+    await reply(authMessages.internalError().content);
+    return;
+  }
+  const decision = authorize('linked', principal);
+  if (!decision.ok) {
+    await reply(authMessages.denied(decision.reason).content);
+    return;
+  }
+
   if (subcommand === 'start') {
     const voiceChannel = interaction.member?.voice?.channel;
     if (!voiceChannel) {
@@ -312,6 +334,29 @@ async function handleRecordInteraction(interaction, appContext) {
   }
 
   await reply('Unknown /record subcommand.');
+}
+
+// Auto-stop: when the last non-bot member leaves the voice channel being
+// recorded, finalize the meeting (the bot itself stays in the channel until
+// stop, so it's filtered out of the head-count). Fires on every voiceStateUpdate
+// and no-ops unless a member actually LEFT the recorded channel and no humans
+// remain. Idempotent with `/record stop` -- both funnel through
+// meetingSurface.stop, which clears the session, so a subsequent event finds
+// no active channel and does nothing.
+export async function handleVoiceStateUpdate(oldState, newState, appContext) {
+  // Only relevant when a member leaves (or moves out of) a channel.
+  if (!oldState.channelId || oldState.channelId === newState.channelId) return;
+  const guildId = oldState.guild?.id;
+  if (!guildId) return;
+
+  const voiceChannel = appContext.meetingSurface?.activeVoiceChannel?.(guildId);
+  if (!voiceChannel || voiceChannel.id !== oldState.channelId) return;
+
+  // Anyone (other than bots -- the recorder bot is in here too) still present?
+  const humansRemaining = [...voiceChannel.members.values()].filter((m) => !m.user?.bot).length;
+  if (humansRemaining > 0) return;
+
+  await appContext.meetingSurface.stop(guildId);
 }
 
 export function wireDiscordClient(client, { commands, appContext }) {
@@ -378,5 +423,11 @@ export function wireDiscordClient(client, { commands, appContext }) {
     } catch (err) {
       console.error('Unhandled mention error:', err);
     }
+  });
+
+  // Auto-stop a recording when everyone leaves its voice channel.
+  client.on('voiceStateUpdate', (oldState, newState) => {
+    handleVoiceStateUpdate(oldState, newState, appContext).catch((err) =>
+      console.error('voiceStateUpdate handler error:', err?.message ?? err));
   });
 }
