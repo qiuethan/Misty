@@ -46,7 +46,11 @@ def key_store_from_config(consumer_keys_json: str) -> InMemoryKeyStore:
         return store
     try:
         entries = json.loads(raw)
+        if not isinstance(entries, list):
+            raise TypeError("'CONSUMER_KEYS' must be a JSON array")
         for entry in entries:
+            if not isinstance(entry, dict):
+                raise TypeError("each CONSUMER_KEYS entry must be an object")
             scopes = entry.get("scopes", [])
             if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
                 raise TypeError(
