@@ -367,9 +367,15 @@ function humansIn(voiceChannel) {
 // or a voice-region failover would trigger, irreversibly terminating a live
 // meeting), we DEBOUNCE: when the recorded channel goes empty we schedule a stop
 // after a grace period, and cancel it if a human is back when any later event
-// arrives OR if they're back at fire time (re-check). Idempotent with
-// `/record stop` -- both funnel through meetingSurface.stop, which clears the
-// session, so a stale timer that fires afterward finds no active channel.
+// arrives OR if they're back at fire time (re-check).
+//
+// Each pending timer is bound to the SPECIFIC recording (its `sessionId`) that
+// scheduled it. That matters because a guild can record again immediately: if a
+// timer scheduled for session A were keyed only by guild, a manual /record stop
+// of A followed by a new recording B could let A's stale timer terminate B early
+// (and A's still-pending timer would suppress scheduling B's own). Binding to
+// sessionId means B always schedules its own full-grace timer, and a timer from
+// an ended session no-ops at fire time. Idempotent with `/record stop`.
 //
 // Injectable timers keep it unit-testable. Returns the voiceStateUpdate handler.
 export function createAutoStop({
@@ -378,12 +384,12 @@ export function createAutoStop({
   setTimer = setTimeout,
   clearTimer = clearTimeout,
 } = {}) {
-  const pending = new Map(); // guildId -> timer handle
+  const pending = new Map(); // guildId -> { handle, sessionId }
 
   const cancel = (guildId) => {
-    const handle = pending.get(guildId);
-    if (handle !== undefined) {
-      clearTimer(handle);
+    const entry = pending.get(guildId);
+    if (entry) {
+      clearTimer(entry.handle);
       pending.delete(guildId);
     }
   };
@@ -392,24 +398,33 @@ export function createAutoStop({
     const guildId = (oldState?.guild ?? newState?.guild)?.id;
     if (!guildId) return;
 
-    const voiceChannel = meetingSurface?.activeVoiceChannel?.(guildId);
+    const session = meetingSurface?.activeSession?.(guildId);
     // Not recording (or session already torn down): drop any pending stop.
-    if (!voiceChannel) return cancel(guildId);
+    if (!session) return cancel(guildId);
     // Someone is (still/again) present: cancel a pending stop, nothing to do.
-    if (humansIn(voiceChannel) > 0) return cancel(guildId);
-    // Channel empty of humans: schedule a stop once (don't stack timers).
-    if (pending.has(guildId)) return;
+    if (humansIn(session.voiceChannel) > 0) return cancel(guildId);
 
+    const existing = pending.get(guildId);
+    if (existing) {
+      // Already scheduled for THIS recording -> don't stack a second timer.
+      if (existing.sessionId === session.sessionId) return;
+      // Stale timer from a previous recording in this guild -> replace it.
+      clearTimer(existing.handle);
+      pending.delete(guildId);
+    }
+
+    const { sessionId } = session;
     const handle = setTimer(() => {
       pending.delete(guildId);
-      // Re-check at fire time: bail if the meeting ended or a human returned.
-      const vc = meetingSurface?.activeVoiceChannel?.(guildId);
-      if (!vc || humansIn(vc) > 0) return;
+      // Re-check at fire time: only stop if it's STILL the same recording and
+      // STILL empty (the meeting may have ended, or a human returned).
+      const current = meetingSurface?.activeSession?.(guildId);
+      if (!current || current.sessionId !== sessionId || humansIn(current.voiceChannel) > 0) return;
       Promise.resolve(meetingSurface.stop(guildId)).catch((err) =>
         console.error(`auto-stop failed for guild ${guildId}:`, err?.message ?? err));
     }, graceMs);
     handle?.unref?.(); // don't keep the process alive on the grace timer alone
-    pending.set(guildId, handle);
+    pending.set(guildId, { handle, sessionId });
   };
 }
 

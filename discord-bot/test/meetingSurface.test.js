@@ -283,17 +283,17 @@ test('a rejected recorder.start does not crash the process (logged via console.e
   }
 });
 
-test('activeVoiceChannel returns the recorded channel while active and null otherwise', async () => {
+test('activeSession returns {sessionId, voiceChannel} while active and null otherwise', async () => {
   const fakes = makeFakes();
   const surface = createMeetingSurface({ ...fakes, genId: () => 'sess-1' });
 
   const voiceChannel = { id: 'vc1' };
   const textChannel = { id: 'tc1' };
 
-  assert.equal(surface.activeVoiceChannel('g1'), null);
+  assert.equal(surface.activeSession('g1'), null);
   surface.start({ guildId: 'g1', voiceChannel, textChannel });
-  assert.equal(surface.activeVoiceChannel('g1'), voiceChannel);
+  assert.deepEqual(surface.activeSession('g1'), { sessionId: 'sess-1', voiceChannel });
 
   await surface.stop('g1');
-  assert.equal(surface.activeVoiceChannel('g1'), null);
+  assert.equal(surface.activeSession('g1'), null);
 });
