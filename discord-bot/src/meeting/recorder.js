@@ -6,6 +6,7 @@ export function createRecorder({ sink, now = Date.now }) {
   let connection = null;
   let startedAt = null;
   const knownSpeakers = new Set();
+  let stopped = false;
 
   function subscribe(userId, member) {
     if (!knownSpeakers.has(userId)) {
@@ -17,6 +18,7 @@ export function createRecorder({ sink, now = Date.now }) {
       end: { behavior: EndBehaviorType.AfterSilence, duration: 1000 },
     });
     opus.on('data', (packet) => {
+      if (stopped) return;
       sink.sendFrame(userId, now() - startedAt, packet);
     });
     opus.on('error', (e) => console.error(`recorder: opus stream error for ${userId}:`, e.message));
@@ -40,6 +42,7 @@ export function createRecorder({ sink, now = Date.now }) {
       });
     },
     async stop() {
+      stopped = true;
       if (connection) {
         connection.receiver.speaking.removeAllListeners('start');
         connection.destroy();
