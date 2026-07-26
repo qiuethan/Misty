@@ -35,7 +35,7 @@ State is still **ephemeral**: a session exists only while its meeting is live, a
 ```text
 Discord voice  ──Opus──▶  bot recorder ──sendFrame──▶  meetingClient (WS) ══▶  meeting service
                                                                                   │
-                                                              per-speaker AWS Transcribe streaming
+                                                     per-speaker AWS Transcribe (buffered re-transcription)
                                                                                   │
    /record stop ──POST /stop──────────────────────────────────────────────────▶  finalize:
                                                                     transcript → llm service → minutes
@@ -43,9 +43,9 @@ Discord voice  ──Opus──▶  bot recorder ──sendFrame──▶  meeti
    channel.send(PDF + MP3)  ◀────────────── {pdf_b64, audio_b64, transcript, minutes} ◀──
 ```
 
-**Live:** the bot's recorder taps each speaker's raw Opus packets and forwards them (untouched, no decode) over one WebSocket. The service decodes/resamples each speaker and runs **one AWS Transcribe streaming session per speaker**, appending finalized words to the rolling transcript. `GET /meetings/{id}/transcript` exposes it at any time — this is the hook that makes in-meeting "ask Misty" a fast-follow (the Q&A feature itself is not built yet).
+**Live:** the bot's recorder taps each speaker's raw Opus packets and forwards them (untouched, no decode) over one WebSocket. The service decodes/resamples each speaker's audio into a **per-speaker buffer** and transcribes those buffers via AWS Transcribe streaming to build the rolling transcript. (Current implementation: the whole buffer is re-transcribed on each poll/stop; **persistent incremental per-speaker streams** — transcribing continuously without re-sending finalized audio — are a deferred optimization, see "Known limitations".) `GET /meetings/{id}/transcript` exposes the transcript at any time — the hook that makes in-meeting "ask Misty" a fast-follow (the Q&A feature itself is not built yet).
 
-**Stop:** `POST /meetings/{id}/stop` finalizes the streams, assembles the transcript, calls the `llm` service for minutes, renders the PDF, mixes the per-speaker audio to MP3, returns them base64-encoded, and discards the session.
+**Stop:** `POST /meetings/{id}/stop` transcribes the final per-speaker buffers, assembles the transcript, calls the `llm` service for minutes, renders the PDF, mixes the per-speaker audio to MP3, returns them base64-encoded, and discards the session.
 
 **Timeline correctness:** each forwarded frame carries `ts_ms` = milliseconds since the meeting started. AWS Transcribe reports word times relative to *each speaker's own* audio, so the service anchors every speaker's words by that speaker's first `ts_ms`. Without this, a person who joins the conversation late would sort to the *top* of the merged transcript. (This exact bug was caught in review — `ts_ms` must always be sent and honored.)
 
@@ -53,10 +53,10 @@ Discord voice  ──Opus──▶  bot recorder ──sendFrame──▶  meeti
 
 The bot's `meetingClient.encodeFrame` and the service's `_parse_frame` are inverses. **If you change one, change the other.**
 
-- **WebSocket:** `{wsUrl}/meetings/{sessionId}/stream?key={MEETING_API_KEY}&guild_id={guildId}`
+- **WebSocket:** `{wsUrl}/meetings/{sessionId}/stream?guild_id={guildId}` — the consumer key is sent as the **first WS text frame** `{"key": "…"}` (keeps it out of URLs/logs); the service also still accepts a `?key=` query param.
 - **Binary audio frame:** `[2-byte big-endian speaker_id length][speaker_id UTF-8][8-byte big-endian ts_ms][raw Opus payload]`
 - **Control frame (text/JSON):** `{"speaker_id": "...", "display_name": "..."}` — registers the display name shown for a speaker.
-- **Auth:** the `platform_auth` consumer key, on the WS as `?key=`, and on `GET /transcript` / `POST /stop` as the `X-API-Key` header. The `meetings` scope is required.
+- **Auth:** the `platform_auth` consumer key — on the WS as the first text frame `{"key": "…"}` (or a `?key=` query param; both server-supported), and on `GET /transcript` / `POST /stop` as the `X-API-Key` header. The `meetings` scope is required.
 - **`POST /stop` response:** `{ transcript, minutes, pdf_b64, audio_b64 }` (PDF + MP3 base64-encoded).
 
 ## The "separate surface" in the bot
