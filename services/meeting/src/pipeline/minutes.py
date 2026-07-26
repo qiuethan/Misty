@@ -1,8 +1,11 @@
 import json
+import logging
 import re
 
 from src.contracts import Minutes
 from src.pipeline.llm_client import LlmUnavailable
+
+_logger = logging.getLogger(__name__)
 
 MINUTES_SYSTEM_PROMPT = (
     "You write concise meeting minutes for a student organization. Given a "
@@ -33,7 +36,8 @@ def summarize_minutes(transcript: str, llm_client, model=None) -> Minutes:
             max_tokens=1500,
             messages=[{"role": "user", "content": f"Transcript:\n\n{transcript}"}],
         )
-    except LlmUnavailable:
+    except LlmUnavailable as exc:
+        _logger.warning("LLM unavailable, returning placeholder minutes: %s", exc)
         return Minutes(
             summary="(minutes unavailable: LLM service error)", decisions=[], action_items=[]
         )

@@ -6,6 +6,7 @@ of any AWS SDK/network/credential dependency.
 """
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterable
 
 LANGUAGE_CODE = "en-US"
@@ -82,6 +83,8 @@ class _Transcriber:
         finally:
             if not consume_task.done():
                 consume_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await consume_task
 
         return {
             "text": " ".join(accumulator.transcript_parts),

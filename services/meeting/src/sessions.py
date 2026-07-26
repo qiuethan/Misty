@@ -26,6 +26,7 @@ import hashlib
 import logging
 import os
 import shutil
+import threading
 
 from src.contracts import Segment, StopResponse
 from src.pipeline.transcript import assemble_transcript
@@ -75,7 +76,9 @@ def _safe_filename_component(raw: str) -> str:
     read) to an arbitrary path outside the session's tmp dir (CWE-22).
 
     A hash of the raw id is used (rather than an allowlist substitution) so
-    two distinct raw ids can never collide onto the same sanitized filename.
+    two distinct raw ids collide onto the same sanitized filename only with
+    negligible probability (a 128-bit truncation of a cryptographic hash --
+    not a mathematical impossibility, but not a practical concern either).
     The raw speaker_id itself is preserved untouched as the dict key / for
     display_name mapping -- only the on-disk path uses this sanitized value.
     """
@@ -124,9 +127,12 @@ class _SpeakerBuffer:
     def has_audio(self) -> bool:
         return os.path.exists(self.pcm_path) and os.path.getsize(self.pcm_path) > 0
 
-    async def transcribe_buffered(self) -> list[dict]:
-        # Snapshot so concurrent feeds don't mutate the list mid-iteration.
-        result = await self.transcriber.transcribe(_achunks(list(self.pcm_chunks)), sample_rate=16000)
+    async def transcribe_buffered(self, pcm_chunks: list[bytes]) -> list[dict]:
+        # ``pcm_chunks`` must already be an immutable snapshot taken by the
+        # caller (MeetingSession) under ``self._lock`` -- this method itself
+        # does no locking so it's safe to ``await`` here without holding
+        # anything that feed() (running on a worker thread) needs.
+        result = await self.transcriber.transcribe(_achunks(pcm_chunks), sample_rate=16000)
         words = result.get("words", [])
         base = self.base_ts_ms or 0
         # Offset each Transcribe-relative word start_ms by this speaker's
@@ -143,6 +149,17 @@ class MeetingSession:
         self._on_finalize = on_finalize
         self._started_at = deps["now"]()
         self._speakers: dict[str, _SpeakerBuffer] = {}
+        # Guards all reads/mutations of self._speakers (dict shape) and of any
+        # individual buffer's pcm_chunks list. feed() runs synchronously on a
+        # worker thread (via asyncio.to_thread from the WS ingest loop) while
+        # transcript_view()/stop()/_meta() run on the event-loop thread -- a
+        # plain dict/list is not safe under that cross-thread access pattern
+        # (e.g. a comprehension over self._speakers.values() can raise
+        # "dictionary changed size during iteration" if feed() inserts a new
+        # speaker mid-comprehension). Non-reentrant by design: lock scopes
+        # below are kept small and never nested, and never held across an
+        # ``await``.
+        self._lock = threading.Lock()
         self._tmp_dir = os.path.join(deps["tmp_root"], session_id)
         os.makedirs(self._tmp_dir, exist_ok=True)
         self._finalized = False
@@ -171,29 +188,38 @@ class MeetingSession:
                     )
                 return
 
-        buf = self._speakers.get(speaker_id)
-        if buf is None:
-            pcm_path = os.path.join(self._tmp_dir, f"{_safe_filename_component(speaker_id)}.pcm")
-            transcriber = self._deps["make_transcriber"]()
-            buf = _SpeakerBuffer(display_name, pcm_path, transcriber)
-            self._speakers[speaker_id] = buf
-        else:
-            buf.display_name = display_name
-
+        # ffmpeg decode is CPU work with no shared-state touch -- do it OUTSIDE
+        # the lock so it doesn't block readers any longer than necessary.
         pcm = self._deps["audio"].decode(opus_frame_bytes)
-        buf.append(pcm, ts_ms)
+
+        with self._lock:
+            buf = self._speakers.get(speaker_id)
+            if buf is None:
+                pcm_path = os.path.join(self._tmp_dir, f"{_safe_filename_component(speaker_id)}.pcm")
+                transcriber = self._deps["make_transcriber"]()
+                buf = _SpeakerBuffer(display_name, pcm_path, transcriber)
+                self._speakers[speaker_id] = buf
+            else:
+                buf.display_name = display_name
+            buf.append(pcm, ts_ms)
 
     async def transcript_view(self) -> list[Segment]:
         segments: list[Segment] = []
-        # Snapshot into a list before iterating: feed() runs synchronously from
-        # a separate asyncio task (the live WS ingest loop) and can insert a
-        # brand-new speaker into self._speakers while this coroutine is
-        # suspended at the `await` below, which would otherwise raise
-        # "RuntimeError: dictionary changed size during iteration". A speaker
-        # who first appears mid-poll simply shows up on the next poll (or at
-        # stop()) instead -- an acceptable, self-correcting gap.
-        for buf in list(self._speakers.values()):
-            words = await buf.transcribe_buffered()
+        # Snapshot BOTH the speaker list and each buffer's accumulated PCM
+        # under the lock, then release it before doing any async transcribe
+        # work. feed() runs synchronously on a worker thread (via
+        # asyncio.to_thread from the live WS ingest loop) and can insert a
+        # brand-new speaker into self._speakers, or append to an existing
+        # buffer's pcm_chunks, at any time -- including while this coroutine
+        # is suspended at an `await`. Snapshotting under a short, non-async
+        # lock section avoids both "dictionary changed size during iteration"
+        # and mutating the list mid-transcribe. A speaker who first appears
+        # (or speaks more) mid-poll simply shows up fully on the next poll (or
+        # at stop()) instead -- an acceptable, self-correcting gap.
+        with self._lock:
+            snapshot = [(buf, list(buf.pcm_chunks)) for buf in self._speakers.values()]
+        for buf, pcm_chunks in snapshot:
+            words = await buf.transcribe_buffered(pcm_chunks)
             segments.extend(words_to_segments(buf.display_name, words))
         segments.sort(key=lambda s: s.start_ms)
         return segments
@@ -201,21 +227,25 @@ class MeetingSession:
     def _meta(self) -> dict:
         elapsed_s = (self._deps["now"]() - self._started_at).total_seconds()
         minutes = max(0, int(elapsed_s // 60))
+        with self._lock:
+            participants = [buf.display_name for buf in self._speakers.values()]
         return {
             "title": f"Meeting {self.session_id}",
             "started_at": str(self._started_at),
             "duration_label": f"{minutes}m",
-            "participants": [buf.display_name for buf in self._speakers.values()],
+            "participants": participants,
         }
 
     async def stop(self) -> StopResponse:
         try:
             segments: list[Segment] = []
-            # Same snapshot-before-iterating rationale as transcript_view()
-            # above: a concurrent feed() for a new speaker must not mutate
-            # self._speakers while we're suspended at the await below.
-            for buf in list(self._speakers.values()):
-                words = await buf.transcribe_buffered()
+            # Same lock-scoped snapshot rationale as transcript_view() above:
+            # a concurrent feed() must not mutate self._speakers or a
+            # buffer's pcm_chunks while we're suspended at the await below.
+            with self._lock:
+                snapshot = [(buf, list(buf.pcm_chunks)) for buf in self._speakers.values()]
+            for buf, pcm_chunks in snapshot:
+                words = await buf.transcribe_buffered(pcm_chunks)
                 segments.extend(words_to_segments(buf.display_name, words))
             segments.sort(key=lambda s: s.start_ms)
 
@@ -232,7 +262,8 @@ class MeetingSession:
             pdf_b64 = base64.b64encode(pdf_bytes).decode("ascii")
 
             audio_b64 = None
-            pcm_paths = [buf.pcm_path for buf in self._speakers.values() if buf.has_audio()]
+            with self._lock:
+                pcm_paths = [buf.pcm_path for buf in self._speakers.values() if buf.has_audio()]
             if pcm_paths:
                 output_path = os.path.join(self._tmp_dir, "mix.mp3")
                 # Fix #2: mixer.mix() shells out to ffmpeg synchronously (subprocess.run).

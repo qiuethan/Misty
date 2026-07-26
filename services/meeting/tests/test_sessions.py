@@ -5,6 +5,7 @@ import asyncio
 import os
 import shutil
 import tempfile
+import threading
 from datetime import datetime, timezone
 
 import pytest
@@ -370,3 +371,61 @@ def test_transcript_view_tolerates_new_speaker_added_during_iteration(tmp_root):
     # iteration didn't crash, and the new speaker IS now tracked.
     assert [(s.speaker, s.text) for s in view] == [("alice", "hi")]
     assert "late-speaker" in session._speakers
+
+
+def test_feed_from_worker_thread_races_readers_without_crashing(tmp_root):
+    """Regression for the thread-safety follow-up: feed() runs on a WORKER
+    THREAD in production (asyncio.to_thread from the WS ingest loop) while
+    _meta()/stop()'s pcm_paths comprehension run on the event-loop thread.
+    Both iterate self._speakers.values() directly (not via `list(...)` at the
+    call site), so without a lock a comprehension can observe the dict
+    resizing mid-iteration and raise "RuntimeError: dictionary changed size
+    during iteration". Hammer feed() from real background threads while
+    repeatedly calling _meta() and building pcm_paths, and assert nothing
+    crashes and every fed speaker is eventually visible."""
+    audio = FakeAudio()
+    n_speakers = 40
+    transcribers = [FakeTranscriber([]) for _ in range(n_speakers)]
+    deps = _make_deps(tmp_root, transcribers, audio=audio)
+    registry = SessionRegistry(deps)
+    session = registry.create("session-race", "guild-1")
+
+    errors: list[BaseException] = []
+    stop_reading = False
+
+    def feed_worker(i: int) -> None:
+        try:
+            session.feed(f"speaker-{i}", f"display-{i}", f"frame-{i}".encode(), ts_ms=i)
+        except BaseException as exc:  # noqa: BLE001 -- capture any race-induced crash
+            errors.append(exc)
+
+    def read_worker() -> None:
+        try:
+            while not stop_reading:
+                session._meta()
+                with session._lock:
+                    [buf.pcm_path for buf in session._speakers.values() if buf.has_audio()]
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    reader = threading.Thread(target=read_worker)
+    reader.start()
+    try:
+        feeders = [threading.Thread(target=feed_worker, args=(i,)) for i in range(n_speakers)]
+        for t in feeders:
+            t.start()
+        for t in feeders:
+            t.join(timeout=10)
+    finally:
+        stop_reading = True
+        reader.join(timeout=10)
+
+    assert errors == []
+    assert set(session._speakers.keys()) == {f"speaker-{i}" for i in range(n_speakers)}
+
+    # The session must still be fully usable afterwards (lock released cleanly,
+    # no deadlock left behind).
+    view = asyncio.run(session.transcript_view())
+    assert isinstance(view, list)
+    result = asyncio.run(session.stop())
+    assert result.transcript == ""
