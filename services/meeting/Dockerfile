@@ -4,6 +4,11 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
+# Audio decode/mix (src/audio) shells out to the ffmpeg binary -- install it
+# before the dependency-install layer so it's cached independently of the
+# Python deps below.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+
 # Workspace root manifest + lockfile, the shared package(s), and this service.
 COPY pyproject.toml uv.lock ./
 COPY packages/ ./packages/
