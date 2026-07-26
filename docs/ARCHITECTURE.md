@@ -23,6 +23,9 @@ plus the Discord bot as a consumer:
 | [`documentation-system`](../services/documentation-system) | The docs catalog — the org's index of URLs | validates owner ids against team-tracking |
 | [`services/llm`](../services/llm) | Stateless LLM proxy | `POST /chat` over Amazon Bedrock; requires the `chat` scope; holds no DB/state |
 | [`services/verification`](../services/verification) | Email ownership verification | request/confirm an email code; `verification:write` scope |
+| [`services/meeting`](../services/meeting) | **Stateful** live meeting transcription + minutes | WS audio stream in → rolling transcript → minutes/PDF on stop; `meetings` scope. The one stateful service — see [MEETING-RECORDING.md](MEETING-RECORDING.md) |
+
+> **Meeting recording** spans two components (the `meeting` service + a Discord *voice surface* in the bot) and is the platform's one stateful service and its one non-neutral-command bot path. Its cross-cutting design — and *why* it breaks both conventions — is documented separately in **[MEETING-RECORDING.md](MEETING-RECORDING.md)**.
 
 The rest of this document details the team-tracking ↔ documentation-system
 ownership relationship (the one cross-service data flow today); `llm` and
