@@ -259,7 +259,7 @@ export function makeAttachmentPoster() {
 // equivalent on other surfaces, so it bypasses dispatch()/the router entirely
 // and talks straight to appContext.meetingSurface. commands/record.js exists
 // solely for slash-command registration metadata.
-async function handleRecordInteraction(interaction, appContext) {
+async function handleRecordInteraction(interaction, appContext, recordCommand) {
   const subcommand = interaction.options.getSubcommand(false);
   await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
@@ -267,24 +267,33 @@ async function handleRecordInteraction(interaction, appContext) {
 
   // `/record` bypasses the neutral dispatch, which is where the Policy
   // Enforcement Point normally lives -- so re-run authenticate -> authorize
-  // here against the command's declared 'linked' policy. Without this, anyone
-  // in the (beta) guild could drive live voice recording unauthenticated.
-  let principal;
-  try {
-    principal = await resolvePrincipal(appContext.directory, interaction.user.id);
-  } catch (e) {
-    if (e instanceof DirectoryUnavailable) {
-      await reply(authMessages.unavailable().content);
+  // here. Resolve the SAME policy the router would (per-subcommand auth, else
+  // command auth, fail-secure to 'linked') from the command metadata rather
+  // than hardcoding it, so the two can't drift if record.js is ever retightened.
+  // `start` inherits 'linked' (recording consumes resources); `status`/`stop`
+  // are declared 'public' so a directory outage can't strand a live recording.
+  const activeSub = recordCommand?.subcommands?.find((s) => s.name === subcommand);
+  const rawAuth = activeSub?.auth ?? recordCommand?.auth;
+  const policy = (typeof rawAuth === 'function' ? rawAuth(interaction) : rawAuth) ?? 'linked';
+
+  if (policy !== 'public') {
+    let principal;
+    try {
+      principal = await resolvePrincipal(appContext.directory, interaction.user.id);
+    } catch (e) {
+      if (e instanceof DirectoryUnavailable) {
+        await reply(authMessages.unavailable().content);
+        return;
+      }
+      console.error('record auth lookup failed:', e.message);
+      await reply(authMessages.internalError().content);
       return;
     }
-    console.error('record auth lookup failed:', e.message);
-    await reply(authMessages.internalError().content);
-    return;
-  }
-  const decision = authorize('linked', principal);
-  if (!decision.ok) {
-    await reply(authMessages.denied(decision.reason).content);
-    return;
+    const decision = authorize(policy, principal);
+    if (!decision.ok) {
+      await reply(authMessages.denied(decision.reason).content);
+      return;
+    }
   }
 
   if (subcommand === 'start') {
@@ -336,27 +345,72 @@ async function handleRecordInteraction(interaction, appContext) {
   await reply('Unknown /record subcommand.');
 }
 
-// Auto-stop: when the last non-bot member leaves the voice channel being
-// recorded, finalize the meeting (the bot itself stays in the channel until
-// stop, so it's filtered out of the head-count). Fires on every voiceStateUpdate
-// and no-ops unless a member actually LEFT the recorded channel and no humans
-// remain. Idempotent with `/record stop` -- both funnel through
-// meetingSurface.stop, which clears the session, so a subsequent event finds
-// no active channel and does nothing.
-export async function handleVoiceStateUpdate(oldState, newState, appContext) {
-  // Only relevant when a member leaves (or moves out of) a channel.
-  if (!oldState.channelId || oldState.channelId === newState.channelId) return;
-  const guildId = oldState.guild?.id;
-  if (!guildId) return;
+export const AUTO_STOP_GRACE_MS = 20_000;
 
-  const voiceChannel = appContext.meetingSurface?.activeVoiceChannel?.(guildId);
-  if (!voiceChannel || voiceChannel.id !== oldState.channelId) return;
+// Count the non-bot members currently in a (recorded) voice channel. The
+// recorder bot is in the channel too, so it's filtered out.
+//
+// Caveat: `channel.members` is derived by discord.js from the voice-state cache,
+// and each entry needs a resolved `GuildMember`. The bot runs without the
+// privileged `GuildMembers` intent (see index.js), so it relies on the member
+// object carried on each VOICE_STATE_UPDATE payload. In normal operation that
+// keeps voice participants cached; only a custom member sweeper (we configure
+// none) could evict a still-present member and undercount. Acceptable given the
+// grace-timer re-check below.
+function humansIn(voiceChannel) {
+  if (!voiceChannel) return 0;
+  return [...voiceChannel.members.values()].filter((m) => !m.user?.bot).length;
+}
 
-  // Anyone (other than bots -- the recorder bot is in here too) still present?
-  const humansRemaining = [...voiceChannel.members.values()].filter((m) => !m.user?.bot).length;
-  if (humansRemaining > 0) return;
+// Auto-stop: end a recording when everyone leaves its voice channel. Rather than
+// finalizing on the raw "last member left" event (which a transient client blip
+// or a voice-region failover would trigger, irreversibly terminating a live
+// meeting), we DEBOUNCE: when the recorded channel goes empty we schedule a stop
+// after a grace period, and cancel it if a human is back when any later event
+// arrives OR if they're back at fire time (re-check). Idempotent with
+// `/record stop` -- both funnel through meetingSurface.stop, which clears the
+// session, so a stale timer that fires afterward finds no active channel.
+//
+// Injectable timers keep it unit-testable. Returns the voiceStateUpdate handler.
+export function createAutoStop({
+  meetingSurface,
+  graceMs = AUTO_STOP_GRACE_MS,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+} = {}) {
+  const pending = new Map(); // guildId -> timer handle
 
-  await appContext.meetingSurface.stop(guildId);
+  const cancel = (guildId) => {
+    const handle = pending.get(guildId);
+    if (handle !== undefined) {
+      clearTimer(handle);
+      pending.delete(guildId);
+    }
+  };
+
+  return function onVoiceStateUpdate(oldState, newState) {
+    const guildId = (oldState?.guild ?? newState?.guild)?.id;
+    if (!guildId) return;
+
+    const voiceChannel = meetingSurface?.activeVoiceChannel?.(guildId);
+    // Not recording (or session already torn down): drop any pending stop.
+    if (!voiceChannel) return cancel(guildId);
+    // Someone is (still/again) present: cancel a pending stop, nothing to do.
+    if (humansIn(voiceChannel) > 0) return cancel(guildId);
+    // Channel empty of humans: schedule a stop once (don't stack timers).
+    if (pending.has(guildId)) return;
+
+    const handle = setTimer(() => {
+      pending.delete(guildId);
+      // Re-check at fire time: bail if the meeting ended or a human returned.
+      const vc = meetingSurface?.activeVoiceChannel?.(guildId);
+      if (!vc || humansIn(vc) > 0) return;
+      Promise.resolve(meetingSurface.stop(guildId)).catch((err) =>
+        console.error(`auto-stop failed for guild ${guildId}:`, err?.message ?? err));
+    }, graceMs);
+    handle?.unref?.(); // don't keep the process alive on the grace timer alone
+    pending.set(guildId, handle);
+  };
 }
 
 export function wireDiscordClient(client, { commands, appContext }) {
@@ -384,7 +438,7 @@ export function wireDiscordClient(client, { commands, appContext }) {
     // command/router contract stays surface-agnostic.
     if (interaction.commandName === 'record') {
       try {
-        await handleRecordInteraction(interaction, appContext);
+        await handleRecordInteraction(interaction, appContext, commands.get('record'));
       } catch (err) {
         console.error('Unhandled /record error:', err);
       }
@@ -425,9 +479,13 @@ export function wireDiscordClient(client, { commands, appContext }) {
     }
   });
 
-  // Auto-stop a recording when everyone leaves its voice channel.
+  // Auto-stop a recording when everyone leaves its voice channel (debounced).
+  const onVoiceStateUpdate = createAutoStop({ meetingSurface: appContext.meetingSurface });
   client.on('voiceStateUpdate', (oldState, newState) => {
-    handleVoiceStateUpdate(oldState, newState, appContext).catch((err) =>
-      console.error('voiceStateUpdate handler error:', err?.message ?? err));
+    try {
+      onVoiceStateUpdate(oldState, newState);
+    } catch (err) {
+      console.error('voiceStateUpdate handler error:', err?.message ?? err);
+    }
   });
 }

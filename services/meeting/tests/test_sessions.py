@@ -288,6 +288,34 @@ def test_feed_drops_frames_and_logs_once_past_max_meeting_ms(tmp_root):
     assert buf.pcm_chunks == [b"frame-within-cap"]
 
 
+def test_feed_does_not_drop_frames_when_max_meeting_ms_is_none(tmp_root):
+    # With no cap (the default -- max_meeting_ms absent/None), a meeting runs
+    # indefinitely: frames are buffered no matter how much time has elapsed,
+    # well past the OLD 4h default.
+    clock = {"t": datetime(2026, 7, 25, 18, 0, tzinfo=timezone.utc)}
+
+    def now():
+        return clock["t"]
+
+    audio = FakeAudio()
+    # One speaker ("alice-id") -> one transcriber created on her first frame.
+    deps = _make_deps(tmp_root, [FakeTranscriber([])], audio=audio, now=now)
+    assert deps.get("max_meeting_ms") is None  # no cap by default
+    registry = SessionRegistry(deps)
+    session = registry.create("session-nocap", "guild-1")
+
+    session.feed("alice-id", "alice", b"frame-1", ts_ms=0)
+
+    # Advance the clock 12 hours -- far beyond the old 4h cap.
+    clock["t"] = datetime(2026, 7, 26, 6, 0, tzinfo=timezone.utc)
+    session.feed("alice-id", "alice", b"frame-2", ts_ms=43_200_000)
+
+    # Both frames were buffered: nothing dropped.
+    assert len(audio.decode_calls) == 2
+    buf = session._speakers["alice-id"]
+    assert buf.pcm_chunks == [b"frame-1", b"frame-2"]
+
+
 def test_stop_cleans_up_tmp_dir_even_on_report_builder_error(tmp_root):
     def boom(segments, meta):
         raise RuntimeError("report builder exploded")

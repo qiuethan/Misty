@@ -8,9 +8,10 @@ import {
   payloadToDiscordReply,
   resolveEphemeral,
   wireDiscordClient,
-  handleVoiceStateUpdate,
+  createAutoStop,
 } from '../src/adapters/discord.js';
 import { DirectoryUnavailable } from '../src/directoryClient.js';
+import record from '../src/commands/record.js';
 
 // A minimal fake discord.js interaction that tracks the response lifecycle the
 // way the real one does: deferReply() flips `deferred`, reply() flips `replied`.
@@ -315,6 +316,10 @@ function fakeRecordInteraction({ subcommand, voiceChannel = null, calls }) {
   };
 }
 
+// The real `record` command in the registry so the adapter reads its per-
+// subcommand auth (start='linked', status/stop='public') straight from metadata.
+const recordCommands = new Map([['record', record]]);
+
 test('/record start is denied for an UNLINKED caller and never starts recording', async () => {
   const calls = [];
   let startCalled = false;
@@ -323,7 +328,7 @@ test('/record start is denied for an UNLINKED caller and never starts recording'
     meetingSurface: { start: () => { startCalled = true; return { status: 'recording' }; } },
   };
   const client = fakeClient();
-  wireDiscordClient(client, { commands: new Map(), appContext });
+  wireDiscordClient(client, { commands: recordCommands, appContext });
 
   await client.emit(fakeRecordInteraction({ subcommand: 'start', voiceChannel: { id: 'vc1' }, calls }));
 
@@ -341,7 +346,7 @@ test('/record start proceeds for a LINKED caller in a voice channel', async () =
     meetingSurface: { start: (args) => { startArgs = args; return { status: 'recording' }; } },
   };
   const client = fakeClient();
-  wireDiscordClient(client, { commands: new Map(), appContext });
+  wireDiscordClient(client, { commands: recordCommands, appContext });
 
   await client.emit(fakeRecordInteraction({ subcommand: 'start', voiceChannel, calls }));
 
@@ -359,7 +364,7 @@ test('/record start fails closed (no start) when the directory is unavailable', 
     meetingSurface: { start: () => { startCalled = true; return { status: 'recording' }; } },
   };
   const client = fakeClient();
-  wireDiscordClient(client, { commands: new Map(), appContext });
+  wireDiscordClient(client, { commands: recordCommands, appContext });
 
   await client.emit(fakeRecordInteraction({ subcommand: 'start', voiceChannel: { id: 'vc1' }, calls }));
 
@@ -368,70 +373,145 @@ test('/record start fails closed (no start) when the directory is unavailable', 
   assert.equal(startCalled, false);
 });
 
-// --- auto-stop when everyone leaves the recorded voice channel ---
+test('/record stop is PUBLIC: an unlinked caller can still stop a runaway recording', async () => {
+  const calls = [];
+  let stopped = false;
+  const appContext = {
+    // A directory OUTAGE must not strand a live recording -- stop must not even
+    // depend on the lookup. (Throw to prove stop never calls resolvePrincipal.)
+    directory: { getPersonByDiscordId: async () => { throw new DirectoryUnavailable('down'); } },
+    meetingSurface: { stop: async () => { stopped = true; return { status: 'stopped' }; } },
+  };
+  const client = fakeClient();
+  wireDiscordClient(client, { commands: recordCommands, appContext });
+
+  await client.emit(fakeRecordInteraction({ subcommand: 'stop', calls }));
+
+  assert.equal(stopped, true, 'stop is public and must proceed regardless of link/directory state');
+});
+
+test('/record status is PUBLIC: works for an unlinked caller without a directory call', async () => {
+  const calls = [];
+  const appContext = {
+    directory: { getPersonByDiscordId: async () => { throw new DirectoryUnavailable('down'); } },
+    meetingSurface: { status: () => ({ status: 'not-recording' }) },
+  };
+  const client = fakeClient();
+  wireDiscordClient(client, { commands: recordCommands, appContext });
+
+  await client.emit(fakeRecordInteraction({ subcommand: 'status', calls }));
+
+  const edit = calls.find((c) => c.method === 'editReply');
+  assert.match(edit.payload.content, /no recording in progress/i);
+});
+
+// --- auto-stop when everyone leaves the recorded voice channel (debounced) ---
 
 const asMember = (bot) => ({ user: { bot } });
 const fakeVoiceChannel = (id, members) =>
   ({ id, members: new Map(members.map((m, i) => [String(i), m])) });
 
-test('auto-stop: stops the recording when the last human leaves the recorded channel', async () => {
-  let stoppedGuild = null;
-  const voiceChannel = fakeVoiceChannel('vc1', [asMember(true)]); // only the recorder bot remains
-  const appContext = {
-    meetingSurface: {
-      activeVoiceChannel: () => voiceChannel,
-      stop: async (g) => { stoppedGuild = g; return { status: 'stopped' }; },
-    },
+// A controllable timer: setTimer captures the callback, fire() runs it.
+function fakeTimer() {
+  const state = { cb: null, cleared: 0 };
+  return {
+    setTimer: (fn) => { state.cb = fn; return 1; },
+    clearTimer: () => { state.cleared += 1; state.cb = null; },
+    fire: () => { const fn = state.cb; state.cb = null; if (fn) return fn(); },
+    get scheduled() { return state.cb !== null; },
+    get cleared() { return state.cleared; },
   };
+}
 
-  await handleVoiceStateUpdate({ channelId: 'vc1', guild: { id: 'g1' } }, { channelId: null }, appContext);
+const leaveEvent = { channelId: 'vc1', guild: { id: 'g1' } };
+const nowInVc2 = { channelId: 'vc2', guild: { id: 'g1' } };
 
-  assert.equal(stoppedGuild, 'g1');
+test('auto-stop: DEBOUNCES -- schedules on empty, stops only after the grace timer fires', async () => {
+  const timer = fakeTimer();
+  let stopped = null;
+  const meetingSurface = {
+    activeVoiceChannel: () => fakeVoiceChannel('vc1', [asMember(true)]), // only the bot
+    stop: async (g) => { stopped = g; return { status: 'stopped' }; },
+  };
+  const onVSU = createAutoStop({ meetingSurface, setTimer: timer.setTimer, clearTimer: timer.clearTimer });
+
+  onVSU(leaveEvent, { channelId: null, guild: { id: 'g1' } });
+  assert.equal(timer.scheduled, true, 'stop must be SCHEDULED, not fired immediately');
+  assert.equal(stopped, null);
+
+  await timer.fire();
+  assert.equal(stopped, 'g1');
 });
 
-test('auto-stop: does NOT stop while humans remain in the recorded channel', async () => {
+test('auto-stop: cancels the pending stop if a human returns before the timer fires', async () => {
+  const timer = fakeTimer();
   let stopCalled = false;
-  const voiceChannel = fakeVoiceChannel('vc1', [asMember(true), asMember(false)]); // bot + a human
-  const appContext = {
-    meetingSurface: { activeVoiceChannel: () => voiceChannel, stop: async () => { stopCalled = true; } },
+  let occupants = [asMember(true)]; // starts empty of humans
+  const meetingSurface = {
+    activeVoiceChannel: () => fakeVoiceChannel('vc1', occupants),
+    stop: async () => { stopCalled = true; },
   };
+  const onVSU = createAutoStop({ meetingSurface, setTimer: timer.setTimer, clearTimer: timer.clearTimer });
 
-  await handleVoiceStateUpdate({ channelId: 'vc1', guild: { id: 'g1' } }, { channelId: null }, appContext);
+  onVSU(leaveEvent, { channelId: null, guild: { id: 'g1' } });
+  assert.equal(timer.scheduled, true);
 
+  occupants = [asMember(true), asMember(false)]; // a human is back
+  onVSU({ channelId: null, guild: { id: 'g1' } }, { channelId: 'vc1', guild: { id: 'g1' } });
+  assert.equal(timer.cleared, 1, 'a returning human must cancel the pending stop');
+  assert.equal(timer.scheduled, false);
+
+  await timer.fire(); // no-op: callback was cleared
   assert.equal(stopCalled, false);
 });
 
-test('auto-stop: ignores a leave from a channel that is not being recorded', async () => {
+test('auto-stop: re-checks at fire time and does NOT stop if a human is back', async () => {
+  const timer = fakeTimer();
   let stopCalled = false;
-  const voiceChannel = fakeVoiceChannel('vc1', [asMember(true)]);
-  const appContext = {
-    meetingSurface: { activeVoiceChannel: () => voiceChannel, stop: async () => { stopCalled = true; } },
+  let occupants = [asMember(true)];
+  const meetingSurface = {
+    activeVoiceChannel: () => fakeVoiceChannel('vc1', occupants),
+    stop: async () => { stopCalled = true; },
   };
+  const onVSU = createAutoStop({ meetingSurface, setTimer: timer.setTimer, clearTimer: timer.clearTimer });
 
-  await handleVoiceStateUpdate({ channelId: 'vc2', guild: { id: 'g1' } }, { channelId: null }, appContext);
-
-  assert.equal(stopCalled, false);
+  onVSU(leaveEvent, { channelId: null, guild: { id: 'g1' } });
+  occupants = [asMember(true), asMember(false)]; // human back, but no cancelling event arrived
+  await timer.fire();
+  assert.equal(stopCalled, false, 'the fire-time re-check must bail when humans are present');
 });
 
-test('auto-stop: ignores non-leave transitions (e.g. mute toggled, same channel)', async () => {
-  let stopCalled = false;
-  const voiceChannel = fakeVoiceChannel('vc1', [asMember(true)]);
-  const appContext = {
-    meetingSurface: { activeVoiceChannel: () => voiceChannel, stop: async () => { stopCalled = true; } },
+test('auto-stop: covers the channel-MOVE case (member moves out, leaving it empty)', async () => {
+  const timer = fakeTimer();
+  const meetingSurface = {
+    activeVoiceChannel: () => fakeVoiceChannel('vc1', [asMember(true)]),
+    stop: async () => {},
   };
+  const onVSU = createAutoStop({ meetingSurface, setTimer: timer.setTimer, clearTimer: timer.clearTimer });
 
-  await handleVoiceStateUpdate({ channelId: 'vc1', guild: { id: 'g1' } }, { channelId: 'vc1' }, appContext);
-
-  assert.equal(stopCalled, false);
+  // Both channelIds non-null: the last human MOVED from vc1 (recorded) to vc2.
+  onVSU(leaveEvent, nowInVc2);
+  assert.equal(timer.scheduled, true);
 });
 
-test('auto-stop: no-op when nothing is being recorded for the guild', async () => {
-  let stopCalled = false;
-  const appContext = {
-    meetingSurface: { activeVoiceChannel: () => null, stop: async () => { stopCalled = true; } },
+test('auto-stop: does not schedule while humans remain', async () => {
+  const timer = fakeTimer();
+  const meetingSurface = {
+    activeVoiceChannel: () => fakeVoiceChannel('vc1', [asMember(true), asMember(false)]),
+    stop: async () => {},
   };
+  const onVSU = createAutoStop({ meetingSurface, setTimer: timer.setTimer, clearTimer: timer.clearTimer });
 
-  await handleVoiceStateUpdate({ channelId: 'vc1', guild: { id: 'g1' } }, { channelId: null }, appContext);
-
-  assert.equal(stopCalled, false);
+  onVSU(leaveEvent, { channelId: null, guild: { id: 'g1' } });
+  assert.equal(timer.scheduled, false);
 });
+
+test('auto-stop: no-op (and clears any pending) when nothing is being recorded', async () => {
+  const timer = fakeTimer();
+  const meetingSurface = { activeVoiceChannel: () => null, stop: async () => {} };
+  const onVSU = createAutoStop({ meetingSurface, setTimer: timer.setTimer, clearTimer: timer.clearTimer });
+
+  onVSU(leaveEvent, { channelId: null, guild: { id: 'g1' } });
+  assert.equal(timer.scheduled, false);
+});
+

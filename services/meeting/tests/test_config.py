@@ -8,6 +8,19 @@ def test_defaults_local():
     assert s.meeting_env == "local"
 
 
+def test_max_meeting_ms_defaults_to_none_no_cap():
+    # No default length cap: a meeting runs until /record stop or auto-stop-on-
+    # empty. MAX_MEETING_MS can still be set to re-enable a hard bound.
+    s = Settings(_env_file=None)
+    assert s.max_meeting_ms is None
+
+
+def test_max_meeting_ms_still_validates_when_set():
+    assert Settings(_env_file=None, max_meeting_ms=60_000).max_meeting_ms == 60_000
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, max_meeting_ms=0)  # gt=0 still enforced
+
+
 def test_prod_requires_secrets():
     s = Settings(_env_file=None, meeting_env="production")
     with pytest.raises(RuntimeError):
