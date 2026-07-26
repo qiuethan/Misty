@@ -2,11 +2,14 @@ import { Client, GatewayIntentBits } from 'discord.js';
 import { loadConfig } from './config.js';
 import { createAppContext } from './context.js';
 import { commands } from './commands/index.js';
-import { wireDiscordClient } from './adapters/discord.js';
+import { wireDiscordClient, makeAttachmentPoster } from './adapters/discord.js';
 
 async function main() {
   const config = loadConfig();
-  const appContext = createAppContext(config);
+  // Inject the Discord attachment poster here (not inside context.js) so
+  // context.js stays surface-agnostic — index.js is one of the few modules
+  // allowed to import from adapters/discord.js.
+  const appContext = createAppContext(config, { poster: makeAttachmentPoster() });
 
   const enableDiscord = process.env.ENABLE_DISCORD !== 'false';
   const enableWeb = process.env.ENABLE_WEB === 'true';

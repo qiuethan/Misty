@@ -227,6 +227,90 @@ export async function handleMention(message, { appContext, botId }) {
   }
 }
 
+// Base64-decodes the report produced by the meeting service into Discord
+// attachments and posts them to the meeting's text channel. Never throws —
+// meetingSurface.stop() awaits this and a poster failure must not prevent the
+// session from being torn down. If the full post (including audio) fails —
+// e.g. the audio is too large for Discord's attachment limit — fall back to
+// posting the PDF alone.
+export function makeAttachmentPoster() {
+  return async ({ channel, report }) => {
+    const files = [
+      new AttachmentBuilder(Buffer.from(report.pdf_b64, 'base64'), { name: 'meeting-minutes.pdf' }),
+    ];
+    if (report.audio_b64) {
+      files.push(new AttachmentBuilder(Buffer.from(report.audio_b64, 'base64'), { name: 'meeting-audio.mp3' }));
+    }
+    try {
+      await channel.send({ content: '📄 Meeting minutes', files });
+    } catch {
+      await channel
+        .send({ content: '📄 Meeting minutes (audio too large to attach)', files: [files[0]] })
+        .catch(() => {});
+    }
+  };
+}
+
+// `/record` is a DEDICATED adapter path, not a neutral command: it drives
+// live voice I/O (joining a voice channel, streaming Opus) that has no
+// equivalent on other surfaces, so it bypasses dispatch()/the router entirely
+// and talks straight to appContext.meetingSurface. commands/record.js exists
+// solely for slash-command registration metadata.
+async function handleRecordInteraction(interaction, appContext) {
+  const subcommand = interaction.options.getSubcommand(false);
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
+
+  const reply = (content) => interaction.editReply({ content }).catch((e) => console.error('record reply failed:', e.message));
+
+  if (subcommand === 'start') {
+    const voiceChannel = interaction.member?.voice?.channel;
+    if (!voiceChannel) {
+      await reply('Join a voice channel first.');
+      return;
+    }
+    let result;
+    try {
+      result = await appContext.meetingSurface.start({
+        guildId: interaction.guildId,
+        voiceChannel,
+        textChannel: interaction.channel,
+      });
+    } catch (e) {
+      console.error('meetingSurface.start failed:', e.message);
+      await reply("Couldn't start recording — the meeting service may be unavailable.");
+      return;
+    }
+    if (result.status === 'already-recording') await reply('Already recording.');
+    else if (result.status === 'unconfigured') await reply("Meeting recording isn't configured.");
+    else await reply('🔴 Recording…');
+    return;
+  }
+
+  if (subcommand === 'status') {
+    const result = appContext.meetingSurface.status(interaction.guildId);
+    if (result.status === 'not-recording') await reply('No recording in progress.');
+    else await reply(`🔴 Recording (${Math.round((result.elapsedMs ?? 0) / 1000)}s elapsed).`);
+    return;
+  }
+
+  if (subcommand === 'stop') {
+    let result;
+    try {
+      result = await appContext.meetingSurface.stop(interaction.guildId);
+    } catch (e) {
+      console.error('meetingSurface.stop failed:', e.message);
+      await reply("Couldn't stop recording — please try again.");
+      return;
+    }
+    if (result.status === 'not-recording') await reply('No recording in progress.');
+    else if (result.status === 'error') await reply('Something went wrong stopping the recording.');
+    else await reply('⏳ Processing — minutes will post here shortly.');
+    return;
+  }
+
+  await reply('Unknown /record subcommand.');
+}
+
 export function wireDiscordClient(client, { commands, appContext }) {
   client.on('interactionCreate', async (interaction) => {
     // Autocomplete interactions are a separate path: they CANNOT be deferred and
@@ -246,6 +330,19 @@ export function wireDiscordClient(client, { commands, appContext }) {
     }
 
     if (!interaction.isChatInputCommand()) return;
+
+    // `/record` is a dedicated adapter path (live voice I/O has no neutral
+    // equivalent) — intercept it BEFORE the neutral dispatch below so the
+    // command/router contract stays surface-agnostic.
+    if (interaction.commandName === 'record') {
+      try {
+        await handleRecordInteraction(interaction, appContext);
+      } catch (err) {
+        console.error('Unhandled /record error:', err);
+      }
+      return;
+    }
+
     const command = commands.get(interaction.commandName);
     if (!command) return;
     try {

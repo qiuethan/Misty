@@ -399,11 +399,11 @@ test('registry includes team and my-teams', () => {
   assert.equal(commands.get('my-teams'), myTeamsCmd);
 });
 
-test('doc is now stable — no commands remain on the beta channel', () => {
+test('doc is stable; record is the sole beta command (testing-guild only)', () => {
   const { stable, beta } = partitionCommands([...commands.values()]);
   assert.ok(stable.some((c) => c.name === 'doc'));
-  assert.deepEqual(beta.map((c) => c.name), []);
-  assert.equal(stable.length, commands.size);
+  assert.deepEqual(beta.map((c) => c.name), ['record']);
+  assert.equal(stable.length + beta.length, commands.size);
 });
 
 test('buildDiscordData marks autocomplete string options', () => {
