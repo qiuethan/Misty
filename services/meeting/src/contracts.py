@@ -13,6 +13,10 @@ class Segment(BaseModel):
     text: str
 
 
+class TranscriptView(BaseModel):
+    segments: list[Segment] = []
+
+
 class StopResponse(BaseModel):
     transcript: str
     minutes: Minutes

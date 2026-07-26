@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from src.api.middleware import AuditLogMiddleware
+from src.api.routers.meetings import router as meetings_router
 from src.config import verify_production_secrets
 
 
@@ -17,6 +18,7 @@ def create_app() -> FastAPI:
         description="Meeting recording + transcription service.",
     )
     app.add_middleware(AuditLogMiddleware, logger_name="meeting.audit")
+    app.include_router(meetings_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:

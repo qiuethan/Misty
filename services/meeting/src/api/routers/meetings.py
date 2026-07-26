@@ -1,0 +1,247 @@
+"""Meeting endpoints: transcript polling, stop, and the live audio-ingest WebSocket.
+
+WebSocket protocol -- ``WS /meetings/{session_id}/stream``
+============================================================
+This is the wire contract the Discord-bot sub-plan mirrors on the client side.
+
+Connect
+-------
+``ws://.../meetings/{session_id}/stream?key=<consumer-key>&guild_id=<guild-id>``
+
+- ``key`` (query param, preferred): the consumer's API key (same key used for
+  ``X-API-Key`` on the HTTP endpoints). Validated against the key store before
+  the socket is accepted; on failure the connection is closed during the
+  handshake (HTTP-level reject).
+- If ``key`` is omitted from the query string, the server instead accepts the
+  socket and waits for exactly one text frame of the form ``{"key": "..."}``
+  as the very first message. If that message is missing, malformed, or the
+  key fails validation, the socket is closed immediately with WS close code
+  ``1008`` (policy violation) before any audio is processed.
+- ``guild_id`` (query param, optional): passed straight through to
+  ``SessionRegistry.create``. If omitted, ``session_id`` is used as the
+  guild_id (explicit fallback -- this task does not implement sourcing
+  guild_id from a control message; see task report for rationale).
+- ``session_id`` must match ``^[A-Za-z0-9_-]{1,64}$`` (it is used to build a
+  filesystem path in ``sessions.py``) -- otherwise the connection is refused
+  with close code 1008 before any session is created.
+
+Once authenticated, two kinds of application messages are accepted:
+
+1. Control messages (WebSocket **text** frames, UTF-8 JSON):
+   ``{"speaker_id": "<id>", "display_name": "<name>"}``
+   Registers/updates the display name shown for a speaker_id. Sent whenever a
+   speaker's identity becomes known/changes (e.g. a Discord user joins voice).
+   Unknown/malformed text frames are ignored (not fatal).
+
+2. Audio frames (WebSocket **binary** frames), one raw Opus packet each,
+   framed as:
+
+   ``[2 bytes: speaker_id_len, big-endian uint16]``
+   ``[speaker_id_len bytes: speaker_id, UTF-8]``
+   ``[8 bytes: ts_ms, big-endian uint64]``
+   ``[remaining bytes: one Opus packet payload]``
+
+   i.e. a length-prefixed speaker id, then an 8-byte millisecond timestamp,
+   then the raw Opus payload with no further framing. Truncated/undersized
+   frames are dropped (not fatal). Each valid frame is fed to the session as
+   ``session.feed(speaker_id, display_name, opus_payload, ts_ms)`` where
+   ``display_name`` is whatever was last registered for that speaker_id (or
+   the speaker_id itself if never registered).
+
+   NOTE (flagged for live-verify, sub-plan 3): ``session.feed`` decodes each
+   frame via a fresh ffmpeg subprocess (see ``wiring.AudioAdapter``). That is
+   one ffmpeg process per ~20ms Opus frame -- correct but not batched.
+   Batching (buffer raw Opus per speaker, decode once per flush) is a
+   follow-up perf item, as is confirming live that the bot's Opus byte stream
+   is header-less raw frames (matching ``decoder.opus_to_pcm16k_args``'s
+   documented assumption) rather than Ogg-wrapped.
+
+Disconnect
+----------
+If the client disconnects (or the connection errors) without the consumer
+having called ``POST /meetings/{session_id}/stop`` first, the server tears
+the session down itself by calling ``session.stop()`` -- the only teardown
+``MeetingSession`` exposes, so this also runs the full finalize pipeline
+(transcription flush, minutes, PDF, audio mix) on an abrupt disconnect. A
+lighter "just delete the temp dir and deregister" teardown would require a
+change to ``sessions.py`` (out of this task's scope) -- flagged as a
+live-verify/UX item, not solved here.
+"""
+
+import json
+import re
+import secrets
+
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from platform_auth import ADMIN_SCOPE, parse_prefix, verify_key
+
+from src.api.auth import require_scope
+from src.api.deps import get_key_store
+from src.api.wiring import get_session_registry
+from src.config import get_settings
+from src.contracts import StopResponse, TranscriptView
+from src.key_store import InMemoryKeyStore
+from src.sessions import SessionRegistry
+
+router = APIRouter()
+
+# Single scope covering all meeting endpoints (HTTP + WS). This service has one
+# internal consumer class (the Discord bot) so a single scope is a deliberate
+# simplification rather than separate read/write/stream scopes.
+MEETINGS_SCOPE = "meetings"
+
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_ENVELOPE = "meeting_"
+
+_SPEAKER_LEN_BYTES = 2
+_TS_BYTES = 8
+
+
+def _valid_session_id(session_id: str) -> bool:
+    return bool(_SESSION_ID_RE.fullmatch(session_id))
+
+
+def _authenticate_ws(key: str | None, store: InMemoryKeyStore, scope: str) -> bool:
+    """Validate a raw API key string for WS auth (mirrors platform_auth's
+    require_api_key logic, but standalone since the WS handshake can't reuse
+    the HTTP Depends() chain the same way)."""
+    if not key:
+        return False
+
+    prefix = parse_prefix(key, _ENVELOPE)
+    if prefix is not None:
+        key_hash = store.get_api_key_hash(prefix)
+        if key_hash is None or not verify_key(key, key_hash):
+            return False
+        row = store.get_api_key_by_prefix(prefix)
+        if row is None or not row.active or row.revoked_at is not None:
+            return False
+        return scope in row.scopes or ADMIN_SCOPE in row.scopes
+
+    env_key = get_settings().api_key
+    if env_key and secrets.compare_digest(key.encode(), env_key.encode()):
+        return True  # env-bootstrap key carries admin scope
+    return False
+
+
+def _parse_frame(data: bytes) -> tuple[str, int, bytes] | None:
+    """Parse one binary audio frame per the framing documented in the module
+    docstring. Returns None for truncated/malformed frames (caller drops them)."""
+    if len(data) < _SPEAKER_LEN_BYTES:
+        return None
+    speaker_len = int.from_bytes(data[:_SPEAKER_LEN_BYTES], "big")
+    header_end = _SPEAKER_LEN_BYTES + speaker_len
+    if len(data) < header_end + _TS_BYTES:
+        return None
+    speaker_id = data[_SPEAKER_LEN_BYTES:header_end].decode("utf-8", errors="replace")
+    ts_ms = int.from_bytes(data[header_end : header_end + _TS_BYTES], "big")
+    opus_payload = data[header_end + _TS_BYTES :]
+    return speaker_id, ts_ms, opus_payload
+
+
+@router.get("/meetings/{session_id}/transcript", response_model=TranscriptView)
+async def get_transcript(
+    session_id: str,
+    _key=Depends(require_scope(MEETINGS_SCOPE)),
+    registry: SessionRegistry = Depends(get_session_registry),
+) -> TranscriptView:
+    if not _valid_session_id(session_id):
+        raise HTTPException(status_code=400, detail="invalid session_id")
+    session = registry.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="unknown session")
+    segments = await session.transcript_view()
+    return TranscriptView(segments=segments)
+
+
+@router.post("/meetings/{session_id}/stop", response_model=StopResponse)
+async def stop_meeting(
+    session_id: str,
+    _key=Depends(require_scope(MEETINGS_SCOPE)),
+    registry: SessionRegistry = Depends(get_session_registry),
+) -> StopResponse:
+    if not _valid_session_id(session_id):
+        raise HTTPException(status_code=400, detail="invalid session_id")
+    session = registry.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="unknown session")
+    return await session.stop()
+
+
+@router.websocket("/meetings/{session_id}/stream")
+async def stream_meeting(
+    websocket: WebSocket,
+    session_id: str,
+    key: str | None = Query(default=None),
+    guild_id: str | None = Query(default=None),
+    store: InMemoryKeyStore = Depends(get_key_store),
+    registry: SessionRegistry = Depends(get_session_registry),
+) -> None:
+    if not _valid_session_id(session_id):
+        await websocket.close(code=1008)
+        return
+
+    if key is not None:
+        # Auth-at-handshake path: reject before accept() so a bad key never
+        # gets a full WS connection.
+        if not _authenticate_ws(key, store, MEETINGS_SCOPE):
+            await websocket.close(code=1008)
+            return
+        await websocket.accept()
+    else:
+        # Fallback: accept, then require the first text frame to be the key.
+        await websocket.accept()
+        try:
+            first = await websocket.receive_text()
+        except WebSocketDisconnect:
+            return
+        resolved_key = None
+        try:
+            payload = json.loads(first)
+            if isinstance(payload, dict):
+                resolved_key = payload.get("key")
+        except (ValueError, TypeError):
+            resolved_key = None
+        if not _authenticate_ws(resolved_key, store, MEETINGS_SCOPE):
+            await websocket.close(code=1008)
+            return
+
+    session = registry.create(session_id, guild_id or session_id)
+    display_names: dict[str, str] = {}
+
+    try:
+        while True:
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+
+            text = message.get("text")
+            if text is not None:
+                try:
+                    control = json.loads(text)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(control, dict) and "speaker_id" in control:
+                    speaker_id = control["speaker_id"]
+                    display_names[speaker_id] = control.get("display_name", speaker_id)
+                continue
+
+            data = message.get("bytes")
+            if not data:
+                continue
+            frame = _parse_frame(data)
+            if frame is None:
+                continue
+            speaker_id, ts_ms, opus_payload = frame
+            display_name = display_names.get(speaker_id, speaker_id)
+            session.feed(speaker_id, display_name, opus_payload, ts_ms)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        # If the consumer already called POST /stop, sessions.py's stop() has
+        # deregistered the session -- registry.get returns None and we skip.
+        if registry.get(session_id) is not None:
+            try:
+                await session.stop()
+            except Exception:  # noqa: BLE001 - best-effort teardown on disconnect
+                pass
