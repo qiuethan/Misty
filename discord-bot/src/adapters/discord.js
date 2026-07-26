@@ -347,19 +347,29 @@ async function handleRecordInteraction(interaction, appContext, recordCommand) {
 
 export const AUTO_STOP_GRACE_MS = 20_000;
 
-// Count the non-bot members currently in a (recorded) voice channel. The
-// recorder bot is in the channel too, so it's filtered out.
+// Count the human (non-bot) occupants of a recorded voice channel.
 //
-// Caveat: `channel.members` is derived by discord.js from the voice-state cache,
-// and each entry needs a resolved `GuildMember`. The bot runs without the
-// privileged `GuildMembers` intent (see index.js), so it relies on the member
-// object carried on each VOICE_STATE_UPDATE payload. In normal operation that
-// keeps voice participants cached; only a custom member sweeper (we configure
-// none) could evict a still-present member and undercount. Acceptable given the
-// grace-timer re-check below.
-function humansIn(voiceChannel) {
-  if (!voiceChannel) return 0;
-  return [...voiceChannel.members.values()].filter((m) => !m.user?.bot).length;
+// We count from `guild.voiceStates.cache`, NOT `channel.members`. `channel.members`
+// resolves each voice state to a `GuildMember` via `guild.members.cache`, which is
+// only kept populated by the privileged `GuildMembers` intent — which the bot does
+// not request (see index.js). Without it that member resolution is unreliable, so a
+// still-present member (including the bot itself, whose member often isn't cached)
+// can be miscounted, which is why auto-stop wasn't firing. `voiceStates.cache` is
+// maintained by `GuildVoiceStates` (which we DO have — it's what powers voice
+// receive) and carries each occupant's user id + channel id directly, with no
+// member-cache dependency. We exclude the recorder bot by its own user id (the
+// reliable signal) and other bots best-effort via any resolved member.
+function humansIn(voiceChannel, botId) {
+  const guild = voiceChannel?.guild;
+  if (!guild) return 0;
+  let count = 0;
+  for (const state of guild.voiceStates.cache.values()) {
+    if (state.channelId !== voiceChannel.id) continue;
+    if (botId && state.id === botId) continue; // the recorder bot itself
+    if (state.member?.user?.bot) continue; // other bots (best-effort; may be uncached)
+    count += 1;
+  }
+  return count;
 }
 
 // Auto-stop: end a recording when everyone leaves its voice channel. Rather than
@@ -380,6 +390,7 @@ function humansIn(voiceChannel) {
 // Injectable timers keep it unit-testable. Returns the voiceStateUpdate handler.
 export function createAutoStop({
   meetingSurface,
+  getBotId = () => undefined,
   graceMs = AUTO_STOP_GRACE_MS,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
@@ -398,11 +409,12 @@ export function createAutoStop({
     const guildId = (oldState?.guild ?? newState?.guild)?.id;
     if (!guildId) return;
 
+    const botId = getBotId();
     const session = meetingSurface?.activeSession?.(guildId);
     // Not recording (or session already torn down): drop any pending stop.
     if (!session) return cancel(guildId);
     // Someone is (still/again) present: cancel a pending stop, nothing to do.
-    if (humansIn(session.voiceChannel) > 0) return cancel(guildId);
+    if (humansIn(session.voiceChannel, botId) > 0) return cancel(guildId);
 
     const existing = pending.get(guildId);
     if (existing) {
@@ -419,7 +431,9 @@ export function createAutoStop({
       // Re-check at fire time: only stop if it's STILL the same recording and
       // STILL empty (the meeting may have ended, or a human returned).
       const current = meetingSurface?.activeSession?.(guildId);
-      if (!current || current.sessionId !== sessionId || humansIn(current.voiceChannel) > 0) return;
+      if (!current || current.sessionId !== sessionId || humansIn(current.voiceChannel, getBotId()) > 0) {
+        return;
+      }
       Promise.resolve(meetingSurface.stop(guildId)).catch((err) =>
         console.error(`auto-stop failed for guild ${guildId}:`, err?.message ?? err));
     }, graceMs);
@@ -495,7 +509,10 @@ export function wireDiscordClient(client, { commands, appContext }) {
   });
 
   // Auto-stop a recording when everyone leaves its voice channel (debounced).
-  const onVoiceStateUpdate = createAutoStop({ meetingSurface: appContext.meetingSurface });
+  const onVoiceStateUpdate = createAutoStop({
+    meetingSurface: appContext.meetingSurface,
+    getBotId: () => client.user?.id,
+  });
   client.on('voiceStateUpdate', (oldState, newState) => {
     try {
       onVoiceStateUpdate(oldState, newState);
