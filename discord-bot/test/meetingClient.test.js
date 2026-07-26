@@ -51,6 +51,13 @@ class FakeWebSocket {
     this.readyState = FakeWebSocket.OPEN;
     for (const cb of this.listeners.open || []) cb();
   }
+  _error(err) {
+    for (const cb of this.listeners.error || []) cb(err);
+  }
+  _close() {
+    this.readyState = FakeWebSocket.CLOSED;
+    for (const cb of this.listeners.close || []) cb();
+  }
 }
 FakeWebSocket.CONNECTING = 0;
 FakeWebSocket.OPEN = 1;
@@ -172,4 +179,54 @@ test('close() closes the underlying socket', () => {
   const ws = FakeWebSocket.instances.at(-1);
   stream.close();
   assert.equal(ws.closed, true);
+});
+
+test('a WS "error" event does not throw out of openStream/sendFrame and invokes onError', () => {
+  const client = createMeetingClient({ baseUrl: BASE, wsUrl: WS_BASE, apiKey: KEY, WebSocketImpl: FakeWebSocket });
+  const onErrorCalls = [];
+  const stream = client.openStream('sess-1', { guildId: 'g1', onError: (e) => onErrorCalls.push(e) });
+  const ws = FakeWebSocket.instances.at(-1);
+
+  const originalError = console.error;
+  console.error = () => {};
+  let threw = false;
+  try {
+    ws._error(new Error('ECONNREFUSED'));
+  } catch {
+    threw = true;
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(threw, false);
+  assert.equal(onErrorCalls.length, 1);
+  assert.equal(onErrorCalls[0].message, 'ECONNREFUSED');
+
+  // dead after error: sendFrame/sendControl must no-op, not throw
+  assert.doesNotThrow(() => stream.sendFrame('u1', 1, Buffer.from([1])));
+  assert.doesNotThrow(() => stream.sendControl({ speakerId: 'u1', displayName: 'Alice' }));
+  assert.equal(ws.sent.length, 0);
+});
+
+test('a WS "close" event marks the stream dead so subsequent sends are dropped, not queued', () => {
+  const client = createMeetingClient({ baseUrl: BASE, wsUrl: WS_BASE, apiKey: KEY, WebSocketImpl: FakeWebSocket });
+  const stream = client.openStream('sess-1', { guildId: 'g1' });
+  const ws = FakeWebSocket.instances.at(-1);
+
+  ws._close();
+  assert.doesNotThrow(() => stream.sendFrame('u1', 1, Buffer.from([1])));
+  assert.equal(ws.sent.length, 0);
+});
+
+test('openStream works without an onError callback (optional param)', () => {
+  const client = createMeetingClient({ baseUrl: BASE, wsUrl: WS_BASE, apiKey: KEY, WebSocketImpl: FakeWebSocket });
+  const stream = client.openStream('sess-1', { guildId: 'g1' });
+  const ws = FakeWebSocket.instances.at(-1);
+
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    assert.doesNotThrow(() => ws._error(new Error('boom')));
+  } finally {
+    console.error = originalError;
+  }
 });

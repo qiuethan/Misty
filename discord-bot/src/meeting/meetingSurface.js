@@ -18,11 +18,26 @@ export function createMeetingSurface({
     }
 
     const sessionId = genId();
-    const stream = meetingClient.openStream(sessionId, { guildId });
+
+    // Idempotent teardown: if the guild's session has already been removed
+    // (e.g. a normal stop() raced us, or this fires twice), this is a no-op.
+    const teardown = () => {
+      if (sessions.get(guildId)?.sessionId !== sessionId) return;
+      sessions.delete(guildId);
+      Promise.resolve(stream.close()).catch((err) => {
+        console.error(`meetingSurface: error closing stream during teardown for guild ${guildId}:`, err);
+      });
+    };
+
+    const stream = meetingClient.openStream(sessionId, {
+      guildId,
+      onError: () => teardown(),
+    });
     const recorder = makeRecorder({ sink: stream, now });
 
     Promise.resolve(recorder.start(voiceChannel)).catch((err) => {
       console.error(`meetingSurface: recorder failed to start for guild ${guildId}:`, err);
+      teardown();
     });
 
     sessions.set(guildId, {
@@ -52,9 +67,14 @@ export function createMeetingSurface({
 
     try {
       const { sessionId, stream, recorder, textChannel } = session;
+      // Order matters: finalize server-side (POST /stop) BEFORE closing the
+      // WS. The service treats a WS disconnect with no prior /stop as an
+      // abrupt-disconnect discard() (deregister + temp-file cleanup, no
+      // finalize) -- closing the WS first would race the session into being
+      // discarded, so the subsequent /stop 404s and we lose the minutes.
       await recorder.stop();
-      await stream.close();
       const report = await meetingClient.stop(sessionId);
+      await stream.close();
       await poster({ channel: textChannel, report });
       return { status: 'stopped' };
     } catch (err) {

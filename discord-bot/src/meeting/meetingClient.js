@@ -22,24 +22,43 @@ export function createMeetingClient({ baseUrl, wsUrl, apiKey, WebSocketImpl = Ws
     return Buffer.concat([head, id, ts, opusBuffer]);
   }
 
-  function openStream(sessionId, { guildId }) {
+  function openStream(sessionId, { guildId, onError }) {
     const url = `${wsUrl}/meetings/${sessionId}/stream?key=${apiKey}&guild_id=${guildId}`;
     const ws = new WebSocketImpl(url);
 
     let open = false;
+    let dead = false;
     const queue = [];
 
     const onOpen = () => {
       open = true;
       for (const data of queue.splice(0)) ws.send(data);
     };
+    const onErrorEvent = (e) => {
+      dead = true;
+      console.error('meeting stream error:', e?.message ?? e);
+      try {
+        onError?.(e);
+      } catch (cbErr) {
+        console.error('meeting stream onError callback failed:', cbErr);
+      }
+    };
+    const onCloseEvent = () => {
+      dead = true;
+    };
+
     if (typeof ws.addEventListener === 'function') {
       ws.addEventListener('open', onOpen);
+      ws.addEventListener('error', onErrorEvent);
+      ws.addEventListener('close', onCloseEvent);
     } else if (typeof ws.on === 'function') {
       ws.on('open', onOpen);
+      ws.on('error', onErrorEvent);
+      ws.on('close', onCloseEvent);
     }
 
     const dispatch = (data) => {
+      if (dead) return;
       if (open) ws.send(data);
       else queue.push(data);
     };
