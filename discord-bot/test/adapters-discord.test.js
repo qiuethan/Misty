@@ -407,12 +407,29 @@ test('/record status is PUBLIC: works for an unlinked caller without a directory
 
 // --- auto-stop when everyone leaves the recorded voice channel (debounced) ---
 
-const asMember = (bot) => ({ user: { bot } });
-const fakeVoiceChannel = (id, members) =>
-  ({ id, members: new Map(members.map((m, i) => [String(i), m])) });
-// meetingSurface.activeSession(guildId) snapshot: { sessionId, voiceChannel }.
-const activeSessionOf = (sessionId, id, members) =>
-  ({ sessionId, voiceChannel: fakeVoiceChannel(id, members) });
+// The head-count reads guild.voiceStates.cache (populated by GuildVoiceStates),
+// NOT channel.members (which needs the privileged GuildMembers intent). Model
+// exactly that: a channel with an id + a guild whose voiceStates.cache lists the
+// occupants of THIS channel as { id: userId, channelId, member }. `resolved:false`
+// simulates a member the bot couldn't resolve (no GuildMembers intent) -- the
+// exact case that made channel.members miscount and auto-stop never fire.
+const BOT_ID = 'bot-1';
+function fakeVoiceChannel(id, occupants) {
+  const cache = new Map();
+  for (const o of occupants) {
+    cache.set(o.userId, {
+      id: o.userId,
+      channelId: id,
+      member: o.resolved === false ? null : { user: { bot: !!o.bot } },
+    });
+  }
+  return { id, guild: { voiceStates: { cache } } };
+}
+const botOcc = { userId: BOT_ID, bot: true };
+const botOccUnresolved = { userId: BOT_ID, resolved: false }; // member not cached
+const humanOcc = (userId = 'h1') => ({ userId, bot: false });
+const activeSessionOf = (sessionId, channelId, occupants) =>
+  ({ sessionId, voiceChannel: fakeVoiceChannel(channelId, occupants) });
 
 // A controllable timer: setTimer captures the callback, fire() runs it.
 function fakeTimer() {
@@ -426,19 +443,34 @@ function fakeTimer() {
   };
 }
 
+const makeAutoStop = (timer, meetingSurface) =>
+  createAutoStop({ meetingSurface, getBotId: () => BOT_ID, setTimer: timer.setTimer, clearTimer: timer.clearTimer });
+
 const leaveEvent = { channelId: 'vc1', guild: { id: 'g1' } };
 const nowInVc2 = { channelId: 'vc2', guild: { id: 'g1' } };
+const left = { channelId: null, guild: { id: 'g1' } };
+
+test('auto-stop: the recorder bot alone does NOT count as an occupant (even if its member is uncached)', async () => {
+  // Regression for the live bug: channel.members miscounted the bot without the
+  // GuildMembers intent, so the channel never looked empty. Counting voice states
+  // and excluding the bot by id fixes it -- even when the bot's member is null.
+  const timer = fakeTimer();
+  const meetingSurface = {
+    activeSession: () => activeSessionOf('s1', 'vc1', [botOccUnresolved]),
+    stop: async () => {},
+  };
+  makeAutoStop(timer, meetingSurface)(leaveEvent, left);
+  assert.equal(timer.scheduled, true, 'a channel with only the bot must read as empty and schedule a stop');
+});
 
 test('auto-stop: DEBOUNCES -- schedules on empty, stops only after the grace timer fires', async () => {
   const timer = fakeTimer();
   let stopped = null;
   const meetingSurface = {
-    activeSession: () => activeSessionOf('s1', 'vc1', [asMember(true)]), // only the bot
+    activeSession: () => activeSessionOf('s1', 'vc1', [botOcc]), // only the bot
     stop: async (g) => { stopped = g; return { status: 'stopped' }; },
   };
-  const onVSU = createAutoStop({ meetingSurface, setTimer: timer.setTimer, clearTimer: timer.clearTimer });
-
-  onVSU(leaveEvent, { channelId: null, guild: { id: 'g1' } });
+  makeAutoStop(timer, meetingSurface)(leaveEvent, left);
   assert.equal(timer.scheduled, true, 'stop must be SCHEDULED, not fired immediately');
   assert.equal(stopped, null);
 
@@ -449,18 +481,18 @@ test('auto-stop: DEBOUNCES -- schedules on empty, stops only after the grace tim
 test('auto-stop: cancels the pending stop if a human returns before the timer fires', async () => {
   const timer = fakeTimer();
   let stopCalled = false;
-  let occupants = [asMember(true)]; // starts empty of humans
+  let occupants = [botOcc]; // empty of humans
   const meetingSurface = {
     activeSession: () => activeSessionOf('s1', 'vc1', occupants),
     stop: async () => { stopCalled = true; },
   };
-  const onVSU = createAutoStop({ meetingSurface, setTimer: timer.setTimer, clearTimer: timer.clearTimer });
+  const onVSU = makeAutoStop(timer, meetingSurface);
 
-  onVSU(leaveEvent, { channelId: null, guild: { id: 'g1' } });
+  onVSU(leaveEvent, left);
   assert.equal(timer.scheduled, true);
 
-  occupants = [asMember(true), asMember(false)]; // a human is back
-  onVSU({ channelId: null, guild: { id: 'g1' } }, { channelId: 'vc1', guild: { id: 'g1' } });
+  occupants = [botOcc, humanOcc()]; // a human is back
+  onVSU(left, { channelId: 'vc1', guild: { id: 'g1' } });
   assert.equal(timer.cleared, 1, 'a returning human must cancel the pending stop');
   assert.equal(timer.scheduled, false);
 
@@ -471,75 +503,65 @@ test('auto-stop: cancels the pending stop if a human returns before the timer fi
 test('auto-stop: re-checks at fire time and does NOT stop if a human is back', async () => {
   const timer = fakeTimer();
   let stopCalled = false;
-  let occupants = [asMember(true)];
+  let occupants = [botOcc];
   const meetingSurface = {
     activeSession: () => activeSessionOf('s1', 'vc1', occupants),
     stop: async () => { stopCalled = true; },
   };
-  const onVSU = createAutoStop({ meetingSurface, setTimer: timer.setTimer, clearTimer: timer.clearTimer });
+  const onVSU = makeAutoStop(timer, meetingSurface);
 
-  onVSU(leaveEvent, { channelId: null, guild: { id: 'g1' } });
-  occupants = [asMember(true), asMember(false)]; // human back, but no cancelling event arrived
+  onVSU(leaveEvent, left);
+  occupants = [botOcc, humanOcc()]; // human back, but no cancelling event arrived
   await timer.fire();
   assert.equal(stopCalled, false, 'the fire-time re-check must bail when humans are present');
 });
 
 test('auto-stop: a stale timer from an ENDED session never stops a LATER recording in the guild', async () => {
-  // Regression (cross-session): session A empties -> schedules. A is stopped and
-  // session B starts in the same guild. B must schedule its OWN full-grace timer,
-  // and A's stale timer must no-op if it ever fires.
-  const timerA = fakeTimer();
-  let session = activeSessionOf('A', 'vc1', [asMember(true)]); // A, empty of humans
+  const timer = fakeTimer();
+  let session = activeSessionOf('A', 'vc1', [botOcc]); // A, empty of humans
   const stops = [];
   const meetingSurface = { activeSession: () => session, stop: async (g) => { stops.push(g); } };
-  const onVSU = createAutoStop({ meetingSurface, setTimer: timerA.setTimer, clearTimer: timerA.clearTimer });
+  const onVSU = makeAutoStop(timer, meetingSurface);
 
-  onVSU(leaveEvent, { channelId: null, guild: { id: 'g1' } });
-  assert.equal(timerA.scheduled, true); // A's timer pending
+  onVSU(leaveEvent, left);
+  assert.equal(timer.scheduled, true); // A's timer pending
 
-  // A ends, B starts (same guild, empty). B's first empty event must REPLACE A's
-  // stale timer (clear it) and schedule a fresh one for B.
-  session = activeSessionOf('B', 'vc1', [asMember(true)]);
-  onVSU(leaveEvent, { channelId: null, guild: { id: 'g1' } });
-  assert.equal(timerA.cleared, 1, "B's empty event must clear A's stale timer");
-  assert.equal(timerA.scheduled, true); // now bound to B
+  // A ends, B starts (same guild, empty). B's empty event must REPLACE A's stale
+  // timer and schedule a fresh one bound to B.
+  session = activeSessionOf('B', 'vc1', [botOcc]);
+  onVSU(leaveEvent, left);
+  assert.equal(timer.cleared, 1, "B's empty event must clear A's stale timer");
+  assert.equal(timer.scheduled, true);
 
-  // Firing (B's timer) stops B once; and it's the only stop.
-  await timerA.fire();
+  await timer.fire();
   assert.deepEqual(stops, ['g1']);
 });
 
 test('auto-stop: covers the channel-MOVE case (member moves out, leaving it empty)', async () => {
   const timer = fakeTimer();
   const meetingSurface = {
-    activeSession: () => activeSessionOf('s1', 'vc1', [asMember(true)]),
+    activeSession: () => activeSessionOf('s1', 'vc1', [botOcc]),
     stop: async () => {},
   };
-  const onVSU = createAutoStop({ meetingSurface, setTimer: timer.setTimer, clearTimer: timer.clearTimer });
-
   // Both channelIds non-null: the last human MOVED from vc1 (recorded) to vc2.
-  onVSU(leaveEvent, nowInVc2);
+  makeAutoStop(timer, meetingSurface)(leaveEvent, nowInVc2);
   assert.equal(timer.scheduled, true);
 });
 
 test('auto-stop: does not schedule while humans remain', async () => {
   const timer = fakeTimer();
   const meetingSurface = {
-    activeSession: () => activeSessionOf('s1', 'vc1', [asMember(true), asMember(false)]),
+    activeSession: () => activeSessionOf('s1', 'vc1', [botOcc, humanOcc()]),
     stop: async () => {},
   };
-  const onVSU = createAutoStop({ meetingSurface, setTimer: timer.setTimer, clearTimer: timer.clearTimer });
-
-  onVSU(leaveEvent, { channelId: null, guild: { id: 'g1' } });
+  makeAutoStop(timer, meetingSurface)(leaveEvent, left);
   assert.equal(timer.scheduled, false);
 });
 
 test('auto-stop: no-op (and clears any pending) when nothing is being recorded', async () => {
   const timer = fakeTimer();
   const meetingSurface = { activeSession: () => null, stop: async () => {} };
-  const onVSU = createAutoStop({ meetingSurface, setTimer: timer.setTimer, clearTimer: timer.clearTimer });
-
-  onVSU(leaveEvent, { channelId: null, guild: { id: 'g1' } });
+  makeAutoStop(timer, meetingSurface)(leaveEvent, left);
   assert.equal(timer.scheduled, false);
 });
 
