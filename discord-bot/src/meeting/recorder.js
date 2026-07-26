@@ -30,6 +30,7 @@ export function createRecorder({ sink, now = Date.now }) {
       sink.sendFrame(userId, now() - startedAt, packet);
     });
     opus.on('error', (e) => console.error(`recorder: opus stream error for ${userId}:`, e.message));
+    opus.once('error', clearActive);
     opus.once('end', clearActive);
     opus.once('close', clearActive);
   }
