@@ -112,13 +112,20 @@ def test_create_rejects_duplicate_session_id(tmp_root):
 
 
 def test_feed_and_transcript_view_merge_chronologically_across_speakers(tmp_root):
+    # Both speakers' Transcribe output starts near 0 -- this is realistic: AWS
+    # Transcribe's word start_ms is relative to the start of each speaker's OWN
+    # concatenated PCM buffer, not to the meeting. Bob's FIRST fed frame has
+    # ts_ms=30000 (he starts speaking ~30s into the meeting), even though his
+    # own Transcribe words start at ~0/100 relative to his own buffer. The
+    # session must anchor bob's words to his base ts_ms so the merged,
+    # cross-speaker transcript sorts him AFTER alice, not before.
     alice_words = [
         {"text": "hello", "start_ms": 0},
         {"text": "there", "start_ms": 500},
     ]
     bob_words = [
-        {"text": "hi", "start_ms": 100},
-        {"text": "friend", "start_ms": 4000},
+        {"text": "hi", "start_ms": 0},
+        {"text": "friend", "start_ms": 100},
     ]
     alice_transcriber = FakeTranscriber(alice_words)
     bob_transcriber = FakeTranscriber(bob_words)
@@ -128,25 +135,31 @@ def test_feed_and_transcript_view_merge_chronologically_across_speakers(tmp_root
 
     session = registry.create("session-1", "guild-1")
     session.feed("alice-id", "alice", b"alice-frame-1", ts_ms=0)
-    session.feed("bob-id", "bob", b"bob-frame-1", ts_ms=100)
+    session.feed("bob-id", "bob", b"bob-frame-1", ts_ms=30000)
     session.feed("alice-id", "alice", b"alice-frame-2", ts_ms=500)
+    session.feed("bob-id", "bob", b"bob-frame-2", ts_ms=30100)
 
     # Routing: decode was called once per fed frame.
-    assert audio.decode_calls == [b"alice-frame-1", b"bob-frame-1", b"alice-frame-2"]
+    assert audio.decode_calls == [
+        b"alice-frame-1",
+        b"bob-frame-1",
+        b"alice-frame-2",
+        b"bob-frame-2",
+    ]
 
     view = asyncio.run(session.transcript_view())
 
+    # Bob's words, anchored to his base ts_ms (30000), must sort AFTER alice's,
+    # even though Bob's raw Transcribe start_ms values (0, 100) are smaller
+    # than alice's (0, 500) in isolation.
     assert [(s.speaker, s.start_ms, s.text) for s in view] == [
         ("alice", 0, "hello there"),
-        ("bob", 100, "hi"),
-        ("bob", 4000, "friend"),
+        ("bob", 30000, "hi friend"),
     ]
 
     result = asyncio.run(session.stop())
 
-    assert result.transcript == (
-        "[00:00] alice: hello there\n[00:00] bob: hi\n[00:04] bob: friend"
-    )
+    assert result.transcript == ("[00:00] alice: hello there\n[00:30] bob: hi friend")
     assert result.minutes.summary == "Test summary"
 
     import base64

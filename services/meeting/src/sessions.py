@@ -71,8 +71,30 @@ class _SpeakerBuffer:
         self.pcm_path = pcm_path
         self.transcriber = transcriber
         self.pcm_chunks: list[bytes] = []
+        # Absolute meeting-relative ts_ms of this speaker's FIRST fed frame. AWS
+        # Transcribe's word start_ms values are relative to the start of this
+        # speaker's own concatenated PCM buffer (each speaker's audio starts near
+        # word start_ms 0), NOT to the meeting's start. We anchor by adding this
+        # base offset to every word's start_ms before building segments, so that
+        # cross-speaker sorting-by-start_ms in transcript_view()/stop() reflects
+        # real chronological (meeting-relative) order instead of each speaker
+        # restarting at ~0.
+        #
+        # Known residual limitation (sub-plan 3 refinement): because each
+        # speaker's PCM is a concatenation of only the frames they spoke
+        # (inter-utterance silence is never written to their buffer), this base
+        # offset anchors only the FIRST word correctly. If a speaker has a long
+        # silence mid-meeting and then resumes, later words in that same
+        # speaker's buffer will still under-count the elapsed wall-clock gap
+        # (Transcribe sees back-to-back audio with no gap). This fixes the
+        # gross cross-speaker ordering bug; true per-utterance anchoring
+        # (tracking ts_ms per contiguous run of frames, not just the first)
+        # is left for the live-integration phase.
+        self.base_ts_ms: int | None = None
 
-    def append(self, pcm_bytes: bytes) -> None:
+    def append(self, pcm_bytes: bytes, ts_ms: int | None = None) -> None:
+        if self.base_ts_ms is None and ts_ms is not None:
+            self.base_ts_ms = ts_ms
         self.pcm_chunks.append(pcm_bytes)
         with open(self.pcm_path, "ab") as f:
             f.write(pcm_bytes)
@@ -83,7 +105,12 @@ class _SpeakerBuffer:
     async def transcribe_buffered(self) -> list[dict]:
         # Snapshot so concurrent feeds don't mutate the list mid-iteration.
         result = await self.transcriber.transcribe(_achunks(list(self.pcm_chunks)), sample_rate=16000)
-        return result.get("words", [])
+        words = result.get("words", [])
+        base = self.base_ts_ms or 0
+        # Offset each Transcribe-relative word start_ms by this speaker's
+        # absolute meeting-relative base offset -- see the comment in
+        # __init__ for why this is necessary and its known limitation.
+        return [{**word, "start_ms": word["start_ms"] + base} for word in words]
 
 
 class MeetingSession:
@@ -109,7 +136,7 @@ class MeetingSession:
             buf.display_name = display_name
 
         pcm = self._deps["audio"].decode(opus_frame_bytes)
-        buf.append(pcm)
+        buf.append(pcm, ts_ms)
 
     async def transcript_view(self) -> list[Segment]:
         segments: list[Segment] = []
