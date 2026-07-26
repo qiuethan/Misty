@@ -26,13 +26,13 @@ The bot deliberately carries **no processing dependencies** (no `@aws-sdk`, no `
 
 ## Why the `meeting` service is *stateful*
 
-Every other backend service (`team-tracking`, `documentation-system`, `llm`, `verification`) is a stateless source-of-truth: a request goes in, a response comes out, nothing is held between calls. `meeting` is the deliberate exception. **Live transcription requires *something* to hold the rolling transcript across the life of a meeting**, and the bot is the wrong place (we're keeping it lean and processing-free). So the service keeps an **in-memory registry of active meeting sessions**, each holding its per-speaker AWS Transcribe streams, the growing transcript, and the buffered audio. This is a considered trade, not an accident — it's the price of "ask Misty during the meeting" being possible at all.
+Every other backend service (`team-tracking`, `documentation-system`, `llm`, `verification`) is a stateless source-of-truth: a request goes in, a response comes out, nothing is held between calls. `meeting` is the deliberate exception. **Live transcription requires *something* to hold the rolling transcript across the life of a meeting**, and the bot is the wrong place (we're keeping it lean and processing-free). So the service keeps an **in-memory registry of active meeting sessions**, each holding its per-speaker buffered audio and the growing rolling transcript, re-transcribed from the buffer as needed (see "Live" below). This is a considered trade, not an accident — it's the price of "ask Misty during the meeting" being possible at all. Persistent per-speaker Transcribe streams (incremental, not re-transcribed) are a deferred optimization — see "Known limitations" below.
 
 State is still **ephemeral**: a session exists only while its meeting is live, and `POST /stop` (or an abrupt WebSocket disconnect) tears it down and deletes its temp files. Nothing reaches a database or object store.
 
 ## Data flow
 
-```
+```text
 Discord voice  ──Opus──▶  bot recorder ──sendFrame──▶  meetingClient (WS) ══▶  meeting service
                                                                                   │
                                                               per-speaker AWS Transcribe streaming

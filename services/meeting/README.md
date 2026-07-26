@@ -61,7 +61,7 @@ Auth is scoped API keys via the shared `platform_auth` package, matching `llm` �
 
 - Every HTTP request needs `X-API-Key`; the WebSocket takes the same key as a `?key=` query param (see below). A key is either the shared bootstrap env key (`API_KEY`, scope: `admin`) or a per-consumer key seeded from `CONSUMER_KEYS`.
 - **`CONSUMER_KEYS` is a JSON array**, each entry `{"name", "prefix", "key_hash", "scopes"}`. At boot, the key store (`src/key_store.py`) parses it into an in-memory store satisfying `platform_auth`'s `ApiKeyStore` protocol — a malformed `CONSUMER_KEYS` fails fast at startup.
-- Keys use the **`meeting_` envelope** (`meeting_<prefix>_<secret>`). There is a single scope, `meetings`, covering every endpoint (HTTP and WS) — this service has one internal consumer class (the Discord bot), so separate read/write/stream scopes were a deliberate simplification.
+- Keys use the **`meeting_` envelope** (`meeting_<prefix>_<secret>`). There is a single scope, `meetings`, covering every **protected** endpoint (HTTP and WS) — this service has one internal consumer class (the Discord bot), so separate read/write/stream scopes were a deliberate simplification. The one exception is `/health`, which is unauthenticated (see below).
 
 ### Minting consumer keys
 
@@ -77,7 +77,7 @@ Append the printed JSON object to the service's `CONSUMER_KEYS` array and redepl
 
 ## API at a glance
 
-Every endpoint (HTTP and WS) requires the `meetings` scope; the `admin` wildcard also satisfies it.
+Every **protected** endpoint (HTTP and WS) requires `X-API-Key` + the `meetings` scope (the `admin` wildcard also satisfies it) — `/health` is the unauthenticated exception.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -107,7 +107,7 @@ The wire contract the Discord-bot side mirrors.
 1. **Control** (WebSocket text frame, UTF-8 JSON): `{"speaker_id": "<id>", "display_name": "<name>"}` — registers/updates the display name shown for a speaker_id. Send this whenever a speaker's identity becomes known (e.g. a Discord user joins voice). Unknown/malformed text frames are ignored, not fatal.
 2. **Audio** (WebSocket binary frame), one raw Opus packet per frame, framed as:
 
-   ```
+   ```text
    [2 bytes  big-endian uint16]  speaker_id_len
    [speaker_id_len bytes, UTF-8] speaker_id
    [8 bytes  big-endian uint64]  ts_ms

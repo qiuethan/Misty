@@ -14,8 +14,9 @@ see each service's own `docs/ARCHITECTURE.md`:
 
 ## The services
 
-The platform is **four backend services**, each a source of truth for one domain,
-plus the Discord bot as a consumer:
+The platform is **five backend services** — four source-of-truth services, each
+owning one domain, plus the stateful `meeting` processing service — plus the
+Discord bot as a consumer:
 
 | Service | Domain | Key surface |
 |---------|--------|-------------|
