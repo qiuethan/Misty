@@ -20,7 +20,6 @@ the brief. True incremental/live streaming transcription can be layered in
 during the sub-plan 3 live integration phase.
 """
 
-import asyncio
 import base64
 import os
 import shutil
@@ -111,10 +110,10 @@ class MeetingSession:
         pcm = self._deps["audio"].decode(opus_frame_bytes)
         buf.append(pcm)
 
-    def transcript_view(self) -> list[Segment]:
+    async def transcript_view(self) -> list[Segment]:
         segments: list[Segment] = []
         for buf in self._speakers.values():
-            words = asyncio.run(buf.transcribe_buffered())
+            words = await buf.transcribe_buffered()
             segments.extend(words_to_segments(buf.display_name, words))
         segments.sort(key=lambda s: s.start_ms)
         return segments

@@ -134,7 +134,7 @@ def test_feed_and_transcript_view_merge_chronologically_across_speakers(tmp_root
     # Routing: decode was called once per fed frame.
     assert audio.decode_calls == [b"alice-frame-1", b"bob-frame-1", b"alice-frame-2"]
 
-    view = session.transcript_view()
+    view = asyncio.run(session.transcript_view())
 
     assert [(s.speaker, s.start_ms, s.text) for s in view] == [
         ("alice", 0, "hello there"),
