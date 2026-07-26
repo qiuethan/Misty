@@ -1,10 +1,13 @@
-.venv
-__pycache__
-*.pyc
-.pytest_cache
-.ruff_cache
-.env
-.env.example
-tests
-docs
-.git
+# Root-context .dockerignore. Every service Dockerfile builds from the repo root
+# and `COPY services/<name>/ ...`, so patterns MUST be recursive (`**/`) to
+# exclude nested service paths — a bare `tests`/`.env` only matches the root.
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.env
+**/.env.example
+**/tests
+**/docs
+**/.git
