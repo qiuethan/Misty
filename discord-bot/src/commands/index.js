@@ -7,7 +7,6 @@ import seed from './seed.js';
 import team from './team.js';
 import myTeams from './my-teams.js';
 import doc from './doc.js';
-import record from './record.js';
 import help from './help.js';
 
 // Single source of truth for the command set: consumed by the router (dispatch)
@@ -23,7 +22,6 @@ export const commands = new Map([
   [team.name, team],
   [myTeams.name, myTeams],
   [doc.name, doc],
-  [record.name, record],
   [help.name, help],
 ]);
 

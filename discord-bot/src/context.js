@@ -8,12 +8,6 @@ import { createTeamService } from './teamService.js';
 import { createDocService } from './docService.js';
 import { createLlmClient } from './llmClient.js';
 import { createHelperService } from './helperService.js';
-import os from 'node:os';
-import { createTranscribeClient } from './meeting/stt.js';
-import * as audio from './meeting/audio.js';
-import { createRecorder } from './meeting/recorder.js';
-import { createMeetingReportService } from './meeting/reportService.js';
-import { createSessionManager } from './meeting/sessionManager.js';
 
 /**
  * Wire application services and deployment metadata once at startup.
@@ -44,17 +38,6 @@ export function createAppContext(config) {
     apiKey: config.llmApiKey,
   });
   const helperService = createHelperService({ llmClient, directory });
-  const reportService = createMeetingReportService({ llmClient });
-  const transcribeClient = createTranscribeClient({ region: config.awsRegion });
-  const sessionManager = createSessionManager({
-    reportService,
-    transcribeClient,
-    audio,
-    makeRecorder: ({ tmpDir }) => createRecorder({ tmpDir }),
-    poster: async () => {}, // real poster injected by the adapter via setPoster()
-    maxRecordingMs: config.maxRecordingMs,
-    tmpRoot: os.tmpdir(),
-  });
   return {
     directory,
     docClient,
@@ -66,7 +49,6 @@ export function createAppContext(config) {
     docService,
     llmClient,
     helperService,
-    sessionManager,
     discordGuildId: config.discordGuildId ?? null,
   };
 }
