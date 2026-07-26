@@ -163,6 +163,10 @@ test('a throwing meetingClient.stop clears the session (subsequent start succeed
   const result = await surface.stop('g1');
   assert.deepEqual(result, { status: 'error' });
 
+  // stream.close() must still run (in the finally) even though
+  // meetingClient.stop() threw, so the WS is never left orphaned.
+  assert.equal(fakes.closeCalls.length, 1);
+
   // session should be cleared: a fresh start for the same guild succeeds
   const second = surface.start({ guildId: 'g1', voiceChannel, textChannel });
   assert.equal(second.status, 'recording');

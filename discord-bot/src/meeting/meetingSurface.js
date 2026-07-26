@@ -65,8 +65,8 @@ export function createMeetingSurface({
     // the same guild can't double-run the teardown below.
     sessions.delete(guildId);
 
+    const { sessionId, stream, recorder, textChannel } = session;
     try {
-      const { sessionId, stream, recorder, textChannel } = session;
       // Order matters: finalize server-side (POST /stop) BEFORE closing the
       // WS. The service treats a WS disconnect with no prior /stop as an
       // abrupt-disconnect discard() (deregister + temp-file cleanup, no
@@ -74,12 +74,17 @@ export function createMeetingSurface({
       // discarded, so the subsequent /stop 404s and we lose the minutes.
       await recorder.stop();
       const report = await meetingClient.stop(sessionId);
-      await stream.close();
       await poster({ channel: textChannel, report });
       return { status: 'stopped' };
     } catch (err) {
       console.error(`meetingSurface: error stopping meeting for guild ${guildId}:`, err);
       return { status: 'error' };
+    } finally {
+      // Close regardless of outcome so a failed recorder.stop()/finalize
+      // never leaves the WS connected to the meeting service.
+      await Promise.resolve(stream.close()).catch((closeErr) => {
+        console.error(`meetingSurface: error closing stream during stop for guild ${guildId}:`, closeErr);
+      });
     }
   }
 
