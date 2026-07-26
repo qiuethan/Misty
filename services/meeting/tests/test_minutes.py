@@ -1,3 +1,4 @@
+from src.pipeline.llm_client import LlmUnavailable
 from src.pipeline.minutes import summarize_minutes
 
 
@@ -9,6 +10,11 @@ class FakeLlm:
     def chat(self, **kw):
         self.calls.append(kw)
         return self.content
+
+
+class FailingLlm:
+    def chat(self, **kw):
+        raise LlmUnavailable("boom")
 
 
 def test_parses_json():
@@ -33,5 +39,14 @@ def test_null_or_scalar_list_fields_fall_back_to_empty():
     llm = FakeLlm('{"summary":"s","decisions":null,"action_items":5}')
     m = summarize_minutes("x", llm)
     assert m.summary == "s"
+    assert m.decisions == []
+    assert m.action_items == []
+
+
+def test_degrades_to_placeholder_minutes_on_llm_outage():
+    # A transient LLM outage must not lose the whole meeting (transcript/PDF/audio
+    # still get delivered) — summarize_minutes degrades instead of propagating.
+    m = summarize_minutes("x", FailingLlm())
+    assert m.summary == "(minutes unavailable: LLM service error)"
     assert m.decisions == []
     assert m.action_items == []

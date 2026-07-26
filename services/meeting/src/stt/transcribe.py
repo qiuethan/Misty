@@ -75,7 +75,13 @@ class _Transcriber:
                 await stream.input_stream.send_audio_event(audio_chunk=chunk)
             await stream.input_stream.end_stream()
 
-        await asyncio.gather(_send_audio(), accumulator.consume())
+        consume_task = asyncio.ensure_future(accumulator.consume())
+        try:
+            await _send_audio()
+            await consume_task
+        finally:
+            if not consume_task.done():
+                consume_task.cancel()
 
         return {
             "text": " ".join(accumulator.transcript_parts),

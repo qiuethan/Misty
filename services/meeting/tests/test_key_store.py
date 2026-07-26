@@ -75,3 +75,15 @@ def test_from_config_non_list_scopes_raises():
     cfg = json.dumps([{"name": "a", "prefix": prefix, "key_hash": key_hash, "scopes": "chat"}])
     with pytest.raises(RuntimeError, match="CONSUMER_KEYS"):
         key_store_from_config(cfg)
+
+
+def test_from_config_non_array_top_level_raises():
+    # A JSON object (e.g. `{}`) would otherwise silently iterate as zero entries,
+    # yielding an empty store instead of failing fast at boot.
+    with pytest.raises(RuntimeError, match="CONSUMER_KEYS"):
+        key_store_from_config("{}")
+
+
+def test_from_config_non_object_entry_raises():
+    with pytest.raises(RuntimeError, match="CONSUMER_KEYS"):
+        key_store_from_config(json.dumps(["not-an-object"]))

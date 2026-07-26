@@ -2,6 +2,7 @@ import json
 import re
 
 from src.contracts import Minutes
+from src.pipeline.llm_client import LlmUnavailable
 
 MINUTES_SYSTEM_PROMPT = (
     "You write concise meeting minutes for a student organization. Given a "
@@ -25,12 +26,17 @@ def _extract_json(text: str):
 
 
 def summarize_minutes(transcript: str, llm_client, model=None) -> Minutes:
-    content = llm_client.chat(
-        system=MINUTES_SYSTEM_PROMPT,
-        model=model,
-        max_tokens=1500,
-        messages=[{"role": "user", "content": f"Transcript:\n\n{transcript}"}],
-    )
+    try:
+        content = llm_client.chat(
+            system=MINUTES_SYSTEM_PROMPT,
+            model=model,
+            max_tokens=1500,
+            messages=[{"role": "user", "content": f"Transcript:\n\n{transcript}"}],
+        )
+    except LlmUnavailable:
+        return Minutes(
+            summary="(minutes unavailable: LLM service error)", decisions=[], action_items=[]
+        )
     parsed = _extract_json(content)
     if not parsed or not isinstance(parsed.get("summary"), str):
         return Minutes(summary=(content or "").strip(), decisions=[], action_items=[])

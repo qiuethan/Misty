@@ -2,6 +2,7 @@
 
 import asyncio
 
+import pytest
 from amazon_transcribe.model import Alternative, Item, Result, Transcript, TranscriptEvent
 
 from src.stt.transcribe import create_transcriber
@@ -119,3 +120,60 @@ def test_transcribe_feeds_audio_and_ends_stream_and_uses_pcm_config():
     ]
     assert client.stream.input_stream.sent_chunks == [b"\x00\x01", b"\x02\x03"]
     assert client.stream.input_stream.ended is True
+
+
+class _HangingOutputStream:
+    """Never yields an event on its own — mimics a stream that would hang forever
+    once the AWS side stops receiving events (e.g. because sending failed and
+    end_stream() was never reached)."""
+
+    def __init__(self):
+        self.was_cancelled = False
+
+    def __aiter__(self):
+        return self._iter()
+
+    async def _iter(self):
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            self.was_cancelled = True
+            raise
+        yield  # pragma: no cover -- unreachable, only makes this an async generator
+
+
+class _FailingInputStream:
+    async def send_audio_event(self, audio_chunk):
+        # Yield control first so the concurrently-scheduled consumer task gets a
+        # chance to actually start running (and reach its hang point) before we
+        # fail — mirrors a real network call, which always yields.
+        await asyncio.sleep(0)
+        raise RuntimeError("network blip")
+
+    async def end_stream(self):
+        pass  # pragma: no cover -- never reached; send fails first
+
+
+class _FailingStream:
+    def __init__(self):
+        self.input_stream = _FailingInputStream()
+        self.output_stream = _HangingOutputStream()
+
+
+class _FailingClient:
+    def __init__(self):
+        self.stream = _FailingStream()
+
+    async def start_stream_transcription(self, **kwargs):
+        return self.stream
+
+
+def test_send_audio_failure_cancels_dangling_consumer_task():
+    client = _FailingClient()
+    transcriber = create_transcriber(region="us-east-1", client=client)
+
+    with pytest.raises(RuntimeError, match="network blip"):
+        asyncio.run(transcriber.transcribe(_fake_pcm_chunks(), sample_rate=16000))
+
+    # The consumer must have been cancelled rather than left dangling forever.
+    assert client.stream.output_stream.was_cancelled is True
