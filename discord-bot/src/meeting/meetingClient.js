@@ -23,7 +23,13 @@ export function createMeetingClient({ baseUrl, wsUrl, apiKey, WebSocketImpl = Ws
   }
 
   function openStream(sessionId, { guildId, onError }) {
-    const url = `${wsUrl}/meetings/${sessionId}/stream?key=${apiKey}&guild_id=${guildId}`;
+    // The API key is intentionally NOT put in the URL (query strings leak into
+    // access/proxy logs). Instead we rely on the service's first-text-frame
+    // auth fallback: connect with no `key` query param, then send exactly one
+    // text frame `{"key": "..."}` as the very first message once the socket
+    // opens, before anything else (see services/meeting's
+    // src/api/routers/meetings.py `_authenticate_ws`/`stream_meeting`).
+    const url = `${wsUrl}/meetings/${sessionId}/stream?guild_id=${encodeURIComponent(guildId)}`;
     const ws = new WebSocketImpl(url);
 
     let open = false;
@@ -32,6 +38,8 @@ export function createMeetingClient({ baseUrl, wsUrl, apiKey, WebSocketImpl = Ws
 
     const onOpen = () => {
       open = true;
+      // Auth frame MUST be sent first, before any queued control/audio frames.
+      ws.send(JSON.stringify({ key: apiKey }));
       for (const data of queue.splice(0)) ws.send(data);
     };
     const onErrorEvent = (e) => {

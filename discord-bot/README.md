@@ -200,18 +200,26 @@ All other commands are on the **stable** channel (`beta = false`), so they regis
 
 ### Meeting recording (`/record`) infra
 
-`/record` needs a few things beyond the base setup:
+As of v2, recording is split across two services: the bot only joins voice and
+streams raw Opus audio over a WebSocket to the separate `meeting` service,
+which owns decoding/mixing (ffmpeg), transcription (AWS Transcribe), minutes
+generation, and posts the results back. See
+[`docs/MEETING-RECORDING.md`](../docs/MEETING-RECORDING.md) for the full
+architecture.
 
-- **ffmpeg** on the host/image — used to mix and transcode the captured voice
-  audio. The `Dockerfile` installs it via `apt-get`; if you run the bot outside
-  Docker, install ffmpeg yourself and make sure it's on `PATH`.
-- **AWS credentials** for Amazon Transcribe (streaming transcription) — resolved
-  via the standard AWS SDK credential chain (env vars, shared config/credentials
-  file, or an instance/task role on the hosting platform). Set `AWS_REGION`
-  (defaults to `us-east-1`) and provide credentials with Transcribe access.
-- Optional tuning env vars: `MAX_RECORDING_MS` (hard cap on a single recording,
-  default 1 hour) and `RECORDING_SILENCE_MS` (silence-padding threshold used
-  when aligning per-speaker audio, default 1000ms).
+The bot itself needs only:
+
+- `MEETING_BASE_URL` — the `meeting` service's base URL (HTTP; the bot derives
+  the WebSocket URL from it).
+- `MEETING_API_KEY` — the API key the bot authenticates to the `meeting`
+  service with.
+- The `GuildVoiceStates` gateway intent and Connect permission in the voice
+  channel (already required to join voice at all).
+
+The bot does **not** need ffmpeg, AWS credentials, or `MAX_RECORDING_MS` /
+`RECORDING_SILENCE_MS` — those are requirements of the `meeting` service
+(`services/meeting`), not the bot. See `services/meeting/README.md` and its
+`.env.example` for that service's infra requirements.
 
 ## Auth layer
 

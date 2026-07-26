@@ -130,36 +130,48 @@ test('stop throws MeetingUnavailable on non-ok response and on transport error',
   await assert.rejects(() => client2.stop('sess-1'), MeetingUnavailable);
 });
 
-test('openStream connects to the correct URL with key + guild_id query params', () => {
+test('openStream connects to a URL with no key query param, only guild_id (URL-encoded)', () => {
+  const client = createMeetingClient({ baseUrl: BASE, wsUrl: WS_BASE, apiKey: KEY, WebSocketImpl: FakeWebSocket });
+  client.openStream('sess-1', { guildId: 'g 1&x' });
+  const ws = FakeWebSocket.instances.at(-1);
+  assert.equal(ws.url, `${WS_BASE}/meetings/sess-1/stream?guild_id=${encodeURIComponent('g 1&x')}`);
+  assert.doesNotMatch(ws.url, /key=/);
+});
+
+test('on open, the first frame sent is the {"key": ...} auth text frame', () => {
   const client = createMeetingClient({ baseUrl: BASE, wsUrl: WS_BASE, apiKey: KEY, WebSocketImpl: FakeWebSocket });
   client.openStream('sess-1', { guildId: 'g1' });
   const ws = FakeWebSocket.instances.at(-1);
-  assert.equal(ws.url, `${WS_BASE}/meetings/sess-1/stream?key=${KEY}&guild_id=g1`);
+  ws._open();
+  assert.equal(ws.sent.length, 1);
+  assert.equal(ws.sent[0], JSON.stringify({ key: KEY }));
 });
 
-test('sendControl sends a JSON text frame with speaker_id and display_name', () => {
+test('sendControl sends a JSON text frame with speaker_id and display_name, after the auth frame', () => {
   const client = createMeetingClient({ baseUrl: BASE, wsUrl: WS_BASE, apiKey: KEY, WebSocketImpl: FakeWebSocket });
   const stream = client.openStream('sess-1', { guildId: 'g1' });
   const ws = FakeWebSocket.instances.at(-1);
   ws._open();
   stream.sendControl({ speakerId: 'u1', displayName: 'Alice' });
-  assert.equal(ws.sent.length, 1);
-  assert.equal(ws.sent[0], JSON.stringify({ speaker_id: 'u1', display_name: 'Alice' }));
+  assert.equal(ws.sent.length, 2);
+  assert.equal(ws.sent[0], JSON.stringify({ key: KEY }));
+  assert.equal(ws.sent[1], JSON.stringify({ speaker_id: 'u1', display_name: 'Alice' }));
 });
 
-test('sendFrame sends encodeFrame bytes as a binary frame', () => {
+test('sendFrame sends encodeFrame bytes as a binary frame, after the auth frame', () => {
   const client = createMeetingClient({ baseUrl: BASE, wsUrl: WS_BASE, apiKey: KEY, WebSocketImpl: FakeWebSocket });
   const stream = client.openStream('sess-1', { guildId: 'g1' });
   const ws = FakeWebSocket.instances.at(-1);
   ws._open();
   const opus = Buffer.from([9, 9, 9]);
   stream.sendFrame('u1', 500, opus);
-  assert.equal(ws.sent.length, 1);
+  assert.equal(ws.sent.length, 2);
+  assert.equal(ws.sent[0], JSON.stringify({ key: KEY }));
   const expected = client.encodeFrame('u1', 500, opus);
-  assert.deepEqual(Buffer.from(ws.sent[0]), expected);
+  assert.deepEqual(Buffer.from(ws.sent[1]), expected);
 });
 
-test('sendFrame/sendControl before the socket is open are queued and flushed on open', () => {
+test('sendFrame/sendControl before the socket is open are queued and flushed on open, after the auth frame', () => {
   const client = createMeetingClient({ baseUrl: BASE, wsUrl: WS_BASE, apiKey: KEY, WebSocketImpl: FakeWebSocket });
   const stream = client.openStream('sess-1', { guildId: 'g1' });
   const ws = FakeWebSocket.instances.at(-1);
@@ -168,9 +180,10 @@ test('sendFrame/sendControl before the socket is open are queued and flushed on 
   stream.sendFrame('u1', 1, opus);
   assert.equal(ws.sent.length, 0); // not open yet, queued
   ws._open();
-  assert.equal(ws.sent.length, 2);
-  assert.equal(ws.sent[0], JSON.stringify({ speaker_id: 'u1', display_name: 'Alice' }));
-  assert.deepEqual(Buffer.from(ws.sent[1]), client.encodeFrame('u1', 1, opus));
+  assert.equal(ws.sent.length, 3);
+  assert.equal(ws.sent[0], JSON.stringify({ key: KEY }));
+  assert.equal(ws.sent[1], JSON.stringify({ speaker_id: 'u1', display_name: 'Alice' }));
+  assert.deepEqual(Buffer.from(ws.sent[2]), client.encodeFrame('u1', 1, opus));
 });
 
 test('close() closes the underlying socket', () => {
