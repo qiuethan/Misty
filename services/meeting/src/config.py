@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_api_key: str = ""
     request_timeout_s: float = Field(default=60.0, gt=0)
+    # Cap only (see sessions.py MeetingSession.feed) -- bounds unbounded PCM
+    # buffer growth for a single meeting. Does NOT fix the separate cost issue
+    # of transcript_view()/stop() re-transcribing the whole buffer on every
+    # poll; that's deferred to the sub-plan 3 incremental-transcription redesign.
+    max_meeting_ms: int = Field(default=14_400_000, gt=0)  # 4 hours
 
 
 @lru_cache(maxsize=1)

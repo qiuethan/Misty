@@ -3,7 +3,7 @@
 Prints the plaintext key ONCE to stdout (give it to the consumer) and the
 CONSUMER_KEYS JSON entry to stderr (add it to the service's config). No DB.
 
-USAGE: uv run meeting-keys --name <consumer> [--scopes chat ...]
+USAGE: uv run meeting-keys --name <consumer> [--scopes meetings ...]
 """
 
 import argparse
@@ -22,7 +22,7 @@ def main(argv: list[str] | None = None) -> int:
         "--scopes",
         nargs="*",
         default=[],
-        help="Scopes (default: none).",
+        help="Scopes, e.g. 'meetings' (default: none).",
     )
     args = parser.parse_args(argv)
 

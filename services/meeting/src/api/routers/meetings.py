@@ -68,6 +68,7 @@ since it involves a blocking LLM HTTP call and isn't worth paying for on an
 abrupt/dropped connection. Teardown failures are logged (not swallowed).
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -82,7 +83,7 @@ from src.api.wiring import get_session_registry
 from src.config import get_settings
 from src.contracts import StopResponse, TranscriptView
 from src.key_store import InMemoryKeyStore
-from src.sessions import SessionRegistry
+from src.sessions import SessionAlreadyExistsError, SessionRegistry
 
 router = APIRouter()
 
@@ -212,7 +213,14 @@ async def stream_meeting(
             await websocket.close(code=1008)
             return
 
-    session = registry.create(session_id, guild_id or session_id)
+    try:
+        session = registry.create(session_id, guild_id or session_id)
+    except SessionAlreadyExistsError:
+        # Fix #5: a second WS connect for an already-active session_id must not
+        # crash the handler post-accept -- close cleanly (1008) and leave the
+        # existing session untouched.
+        await websocket.close(code=1008)
+        return
     display_names: dict[str, str] = {}
 
     try:
@@ -240,7 +248,19 @@ async def stream_meeting(
                 continue
             speaker_id, ts_ms, opus_payload = frame
             display_name = display_names.get(speaker_id, speaker_id)
-            session.feed(speaker_id, display_name, opus_payload, ts_ms)
+            try:
+                # Fix #2: session.feed() decodes via a blocking ffmpeg subprocess
+                # per frame -- offload to a thread so one meeting's decode work
+                # doesn't stall the event loop for other connections.
+                # Fix #3: session.feed() raises (e.g. RuntimeError from a failed
+                # ffmpeg decode) doesn't crash the whole meeting -- only this
+                # single frame is dropped, and the receive loop continues. This
+                # is deliberately NOT `except WebSocketDisconnect` -- that must
+                # still propagate up and break the loop (handled below).
+                await asyncio.to_thread(session.feed, speaker_id, display_name, opus_payload, ts_ms)
+            except Exception as e:  # noqa: BLE001 - see comment above
+                _logger.warning("frame feed failed for %s speaker %s: %s", session_id, speaker_id, e)
+                continue
     except WebSocketDisconnect:
         pass
     finally:

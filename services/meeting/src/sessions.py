@@ -20,12 +20,16 @@ the brief. True incremental/live streaming transcription can be layered in
 during the sub-plan 3 live integration phase.
 """
 
+import asyncio
 import base64
+import logging
 import os
 import shutil
 
 from src.contracts import Segment, StopResponse
 from src.pipeline.transcript import assemble_transcript
+
+_logger = logging.getLogger("meeting.audit")
 
 
 class SessionAlreadyExistsError(ValueError):
@@ -124,8 +128,31 @@ class MeetingSession:
         self._tmp_dir = os.path.join(deps["tmp_root"], session_id)
         os.makedirs(self._tmp_dir, exist_ok=True)
         self._finalized = False
+        self._cap_hit_logged = False
 
     def feed(self, speaker_id: str, display_name: str, opus_frame_bytes: bytes, ts_ms: int) -> None:
+        # Fix #4 (cap only -- NOT a fix for the separate re-billing cost issue
+        # below): bound unbounded PCM growth by refusing to buffer audio past
+        # max_meeting_ms. This does NOT address transcript_view()/stop() still
+        # re-transcribing the WHOLE buffer on every poll (re-billing AWS on
+        # every call) -- that is a distinct cost problem whose proper fix is
+        # the incremental persistent-per-speaker-Transcribe-stream redesign
+        # scoped to sub-plan 3, not this cap.
+        max_meeting_ms = self._deps.get("max_meeting_ms")
+        if max_meeting_ms is not None:
+            elapsed_ms = (self._deps["now"]() - self._started_at).total_seconds() * 1000
+            if elapsed_ms > max_meeting_ms:
+                if not self._cap_hit_logged:
+                    self._cap_hit_logged = True
+                    _logger.warning(
+                        "session %s exceeded max_meeting_ms=%s (elapsed=%.0fms); "
+                        "dropping further audio frames",
+                        self.session_id,
+                        max_meeting_ms,
+                        elapsed_ms,
+                    )
+                return
+
         buf = self._speakers.get(speaker_id)
         if buf is None:
             pcm_path = os.path.join(self._tmp_dir, f"{speaker_id}.pcm")
@@ -147,10 +174,12 @@ class MeetingSession:
         return segments
 
     def _meta(self) -> dict:
+        elapsed_s = (self._deps["now"]() - self._started_at).total_seconds()
+        minutes = max(0, int(elapsed_s // 60))
         return {
             "title": f"Meeting {self.session_id}",
             "started_at": str(self._started_at),
-            "duration_label": "",
+            "duration_label": f"{minutes}m",
             "participants": [buf.display_name for buf in self._speakers.values()],
         }
 
@@ -163,14 +192,24 @@ class MeetingSession:
             segments.sort(key=lambda s: s.start_ms)
 
             transcript_text = assemble_transcript(segments)
-            minutes, pdf_bytes = self._deps["report_builder"](segments, self._meta())
+            # Fix #2: report_builder is sync and does a blocking LLM HTTP call
+            # (up to request_timeout_s, default 60s) plus PDF rendering. Offload
+            # to a thread so it doesn't stall the event loop for other meetings.
+            # The sync internals (llm_client/minutes/pdf) are intentionally left
+            # as-is -- thread-offloading at this async boundary is the chosen
+            # fix, not an async rewrite of those modules.
+            minutes, pdf_bytes = await asyncio.to_thread(
+                self._deps["report_builder"], segments, self._meta()
+            )
             pdf_b64 = base64.b64encode(pdf_bytes).decode("ascii")
 
             audio_b64 = None
             pcm_paths = [buf.pcm_path for buf in self._speakers.values() if buf.has_audio()]
             if pcm_paths:
                 output_path = os.path.join(self._tmp_dir, "mix.mp3")
-                mp3_bytes = self._deps["mixer"].mix(pcm_paths, output_path)
+                # Fix #2: mixer.mix() shells out to ffmpeg synchronously (subprocess.run).
+                # Offload to a thread for the same reason as report_builder above.
+                mp3_bytes = await asyncio.to_thread(self._deps["mixer"].mix, pcm_paths, output_path)
                 audio_b64 = base64.b64encode(mp3_bytes).decode("ascii")
 
             return StopResponse(

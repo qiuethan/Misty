@@ -10,6 +10,7 @@ from src.api.hashing import generate_key
 from src.api.wiring import get_session_registry
 from src.contracts import Minutes, Segment, StopResponse
 from src.key_store import InMemoryKeyStore
+from src.sessions import SessionAlreadyExistsError
 
 
 class FakeSession:
@@ -20,8 +21,11 @@ class FakeSession:
         self.stop_called = False
         self.discard_called = False
         self._segments = [Segment(speaker="alice", start_ms=0, text="hello")]
+        self.raise_on_feed_for: set[str] = set()
 
     def feed(self, speaker_id, display_name, opus_payload, ts_ms):
+        if speaker_id in self.raise_on_feed_for:
+            raise RuntimeError("simulated ffmpeg decode failure")
         self.feed_calls.append((speaker_id, display_name, opus_payload, ts_ms))
 
     async def transcript_view(self):
@@ -46,6 +50,8 @@ class FakeRegistry:
         self.created_with: list[tuple[str, str]] = []
 
     def create(self, session_id, guild_id):
+        if session_id in self.sessions:
+            raise SessionAlreadyExistsError(session_id)
         session = FakeSession(session_id, guild_id)
         self.sessions[session_id] = session
         self.created_with.append((session_id, guild_id))
@@ -197,3 +203,43 @@ def test_ws_stream_invalid_session_id_closes(client, registry, consumer_key):
         ):
             pass
     assert "bad!id" not in registry.sessions
+
+
+def test_ws_stream_duplicate_session_id_closes_1008(client, registry, consumer_key):
+    # Fix #5: a second connect for an id that already has an active session
+    # must close cleanly (1008), not crash the handler, and must leave the
+    # existing session (and its registration) untouched.
+    registry.create("dup-session", "g1")
+    existing = registry.sessions["dup-session"]
+
+    with pytest.raises(Exception):
+        with client.websocket_connect(
+            f"/meetings/dup-session/stream?key={consumer_key}&guild_id=g1"
+        ) as ws:
+            # The server accepts (key is valid) before registry.create() raises,
+            # so the close happens post-accept -- confirm it via a subsequent
+            # receive rather than expecting connect() itself to fail.
+            ws.receive_text()
+
+    assert registry.sessions["dup-session"] is existing
+    assert existing.discard_called is False
+
+
+def test_ws_stream_decode_error_drops_frame_but_keeps_session_alive(client, registry, consumer_key):
+    # Fix #3: a single frame that fails to decode (e.g. RuntimeError from
+    # ffmpeg) must not kill the whole meeting -- it's logged and dropped, and
+    # subsequent good frames are still fed.
+    with client.websocket_connect(
+        f"/meetings/decode-err-session/stream?key={consumer_key}&guild_id=g1"
+    ) as ws:
+        session = registry.sessions["decode-err-session"]
+        session.raise_on_feed_for.add("bad-speaker")
+
+        ws.send_bytes(_frame("bad-speaker", 0, b"undecodable"))
+        ws.send_bytes(_frame("good-speaker", 100, b"opus-frame-ok"))
+
+    session = registry.sessions["decode-err-session"]
+    assert session.feed_calls == [("good-speaker", "good-speaker", b"opus-frame-ok", 100)]
+    # The connection stayed alive through the bad frame and tore down normally
+    # via the disconnect path (not an unhandled-exception 1011).
+    assert session.discard_called is True

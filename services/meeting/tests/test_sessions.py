@@ -57,7 +57,7 @@ def _fake_report_builder(segments, meta):
     return minutes, pdf_bytes
 
 
-def _make_deps(tmp_root, transcribers_by_speaker, audio=None, mixer=None):
+def _make_deps(tmp_root, transcribers_by_speaker, audio=None, mixer=None, now=None):
     queue = list(transcribers_by_speaker)
 
     def make_transcriber():
@@ -69,7 +69,7 @@ def _make_deps(tmp_root, transcribers_by_speaker, audio=None, mixer=None):
         "mixer": mixer or FakeMixer(),
         "report_builder": _fake_report_builder,
         "tmp_root": tmp_root,
-        "now": lambda: datetime(2026, 7, 25, 18, 0, tzinfo=timezone.utc),
+        "now": now or (lambda: datetime(2026, 7, 25, 18, 0, tzinfo=timezone.utc)),
     }
 
 
@@ -214,6 +214,63 @@ def test_discard_cleans_up_without_running_finalize_pipeline(tmp_root):
 
     # Re-creating the same id must now succeed (fully deregistered).
     registry.create("session-discard", "guild-1")
+
+
+def test_stop_meta_duration_label_reflects_elapsed_time(tmp_root):
+    # Fix #8: duration_label must be computed from started_at -> now, not left
+    # empty.
+    clock = {"t": datetime(2026, 7, 25, 18, 0, tzinfo=timezone.utc)}
+
+    def now():
+        return clock["t"]
+
+    captured_meta = {}
+
+    def capturing_report_builder(segments, meta):
+        captured_meta.update(meta)
+        return Minutes(summary="s", decisions=[], action_items=[]), b"%PDF-fake"
+
+    deps = _make_deps(tmp_root, [], now=now)
+    deps["report_builder"] = capturing_report_builder
+    registry = SessionRegistry(deps)
+    session = registry.create("session-duration", "guild-1")
+
+    # Advance the clock by 5 minutes 30 seconds before stop().
+    clock["t"] = datetime(2026, 7, 25, 18, 5, 30, tzinfo=timezone.utc)
+    asyncio.run(session.stop())
+
+    assert captured_meta["duration_label"] == "5m"
+
+
+def test_feed_drops_frames_and_logs_once_past_max_meeting_ms(tmp_root):
+    # Fix #4: once elapsed time exceeds max_meeting_ms, further frames are
+    # dropped (not buffered) to bound unbounded PCM growth. This does NOT fix
+    # the separate transcript_view()/stop() re-billing issue (deferred to
+    # sub-plan 3) -- it only bounds memory/duration.
+    clock = {"t": datetime(2026, 7, 25, 18, 0, tzinfo=timezone.utc)}
+
+    def now():
+        return clock["t"]
+
+    audio = FakeAudio()
+    transcriber = FakeTranscriber([])
+    deps = _make_deps(tmp_root, [transcriber], audio=audio, now=now)
+    deps["max_meeting_ms"] = 60_000  # 1 minute cap
+    registry = SessionRegistry(deps)
+    session = registry.create("session-cap", "guild-1")
+
+    session.feed("alice-id", "alice", b"frame-within-cap", ts_ms=0)
+    assert len(audio.decode_calls) == 1
+
+    # Advance well past the cap.
+    clock["t"] = datetime(2026, 7, 25, 18, 2, 0, tzinfo=timezone.utc)
+    session.feed("alice-id", "alice", b"frame-past-cap", ts_ms=120_000)
+
+    # The past-cap frame was dropped: no additional decode call, and the
+    # buffer only contains the earlier, within-cap frame.
+    assert len(audio.decode_calls) == 1
+    buf = session._speakers["alice-id"]
+    assert buf.pcm_chunks == [b"frame-within-cap"]
 
 
 def test_stop_cleans_up_tmp_dir_even_on_report_builder_error(tmp_root):

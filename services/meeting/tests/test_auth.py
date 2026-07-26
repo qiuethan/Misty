@@ -59,7 +59,7 @@ def test_env_bootstrap_key_works(client, env_key):
 
 def test_consumer_key_works_and_surfaces_identity(client, store):
     plaintext, prefix, key_hash = generate_key()
-    store.add(prefix=prefix, key_hash=key_hash, name="reviewer-summaries", scopes=["chat"])
+    store.add(prefix=prefix, key_hash=key_hash, name="reviewer-summaries", scopes=["meetings"])
     resp = client.get("/_probe", headers={"X-API-Key": plaintext})
     assert resp.status_code == 200
     assert resp.json()["actor"] == "reviewer-summaries"
@@ -67,6 +67,6 @@ def test_consumer_key_works_and_surfaces_identity(client, store):
 
 def test_tampered_consumer_key_returns_401(client, store):
     plaintext, prefix, key_hash = generate_key()
-    store.add(prefix=prefix, key_hash=key_hash, name="reviewer-summaries", scopes=["chat"])
+    store.add(prefix=prefix, key_hash=key_hash, name="reviewer-summaries", scopes=["meetings"])
     tampered = plaintext[:-4] + "XXXX"
     assert client.get("/_probe", headers={"X-API-Key": tampered}).status_code == 401

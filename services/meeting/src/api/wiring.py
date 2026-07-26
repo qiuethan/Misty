@@ -80,5 +80,6 @@ def get_session_registry() -> SessionRegistry:
         "report_builder": _build_report_builder(),
         "tmp_root": tempfile.gettempdir(),
         "now": lambda: datetime.now(timezone.utc),
+        "max_meeting_ms": get_settings().max_meeting_ms,
     }
     return SessionRegistry(deps)
