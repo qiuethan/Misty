@@ -103,3 +103,20 @@ def test_opus_stream_decoder_returns_empty_bytes_for_empty_packet():
     decoder = OpusStreamDecoder()
 
     assert decoder.decode(b"") == b""
+
+
+def test_opus_stream_decoder_recovers_from_a_malformed_packet():
+    """A single malformed/corrupt Opus packet (e.g. a truncated or garbled
+    Discord frame) must not take down the speaker's whole stream: decode is
+    best-effort per packet and swallows the libopus decode error, returning
+    ``b""``. This exercises the non-empty-but-invalid path past the empty
+    guard (the empty-packet test returns before the try/except), so the
+    ``except av.error.FFmpegError`` recovery is actually covered -- and the
+    decoder keeps working for valid packets fed to it afterward.
+    """
+    decoder = OpusStreamDecoder()
+
+    assert decoder.decode(b"not a real opus packet") == b""
+
+    # The instance is still usable for real packets after a bad one.
+    assert decoder.decode(_encode_bare_opus_packet()) != b""
