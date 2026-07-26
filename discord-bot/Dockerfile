@@ -3,6 +3,9 @@ FROM node:20-slim
 WORKDIR /app
 
 # Install production dependencies against the lockfile for reproducibility.
+# ffmpeg decode/mix and the Opus/ffmpeg peer stack live in the meeting service
+# now (see services/meeting), not the bot, so no apt packages or peer-dep
+# overrides are needed here.
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 

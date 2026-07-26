@@ -9,13 +9,13 @@ from src.key_store import InMemoryKeyStore, key_store_from_config
 def test_add_and_lookup_by_prefix():
     plaintext, prefix, key_hash = generate_key()
     store = InMemoryKeyStore()
-    store.add(prefix=prefix, key_hash=key_hash, name="reviewer", scopes=["chat"])
+    store.add(prefix=prefix, key_hash=key_hash, name="reviewer", scopes=["meetings"])
 
     assert store.get_api_key_hash(prefix) == key_hash
     row = store.get_api_key_by_prefix(prefix)
     assert row is not None
     assert row.name == "reviewer"
-    assert row.scopes == ["chat"]
+    assert row.scopes == ["meetings"]
     assert row.active is True
     assert row.revoked_at is None
     # hash verifies against the plaintext

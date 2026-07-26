@@ -186,7 +186,40 @@ and skips them.
 - `/my-teams` (linked) — list your active memberships.
 - `/doc <add|list|show|remove>` (linked; `remove` is admin) — catalog and look up UTMIST documents and links.
 
-All commands are currently on the **stable** channel (`beta = false`), so they register globally in every server the bot is in. There are no beta commands right now.
+- `/record start` (linked, **beta**) — joins your current voice channel and starts
+  recording the meeting. `/record status` (linked, beta) — shows elapsed recording
+  time. `/record stop` (linked, beta) — ends the recording and, within roughly
+  30–60s, posts a `meeting-minutes.pdf` (summary, decisions, action items,
+  full transcript) and `meeting-audio.mp3` back into the text channel. No audio
+  or transcript is persisted — temp files are cleaned up after posting.
+
+`/record` is currently on the **beta** channel, so it's only registered in the
+testing guild (`DISCORD_GUILD_ID`); it is not yet available in production servers.
+
+All other commands are on the **stable** channel (`beta = false`), so they register globally in every server the bot is in.
+
+### Meeting recording (`/record`) infra
+
+As of v2, recording is split across two services: the bot only joins voice and
+streams raw Opus audio over a WebSocket to the separate `meeting` service,
+which owns decoding/mixing (ffmpeg), transcription (AWS Transcribe), minutes
+generation, and posts the results back. See
+[`docs/MEETING-RECORDING.md`](../docs/MEETING-RECORDING.md) for the full
+architecture.
+
+The bot itself needs only:
+
+- `MEETING_BASE_URL` — the `meeting` service's base URL (HTTP; the bot derives
+  the WebSocket URL from it).
+- `MEETING_API_KEY` — the API key the bot authenticates to the `meeting`
+  service with.
+- The `GuildVoiceStates` gateway intent and Connect permission in the voice
+  channel (already required to join voice at all).
+
+The bot does **not** need ffmpeg, AWS credentials, or `MAX_RECORDING_MS` /
+`RECORDING_SILENCE_MS` — those are requirements of the `meeting` service
+(`services/meeting`), not the bot. See `services/meeting/README.md` and its
+`.env.example` for that service's infra requirements.
 
 ## Auth layer
 

@@ -30,5 +30,12 @@ export function loadConfig(env = process.env) {
     llmApiKey: env.LLM_API_KEY,
     verificationBaseUrl: env.VERIFICATION_BASE_URL.replace(/\/+$/, ''),
     verificationApiKey: env.VERIFICATION_API_KEY,
+    meetingBaseUrl: env.MEETING_BASE_URL ? env.MEETING_BASE_URL.replace(/\/+$/, '') : undefined,
+    meetingApiKey: env.MEETING_API_KEY || undefined,
+    meetingWsUrl:
+      env.MEETING_WS_URL ||
+      (env.MEETING_BASE_URL
+        ? env.MEETING_BASE_URL.replace(/\/+$/, '').replace(/^http(s?):\/\//, (_m, s) => (s ? 'wss://' : 'ws://'))
+        : undefined),
   };
 }
