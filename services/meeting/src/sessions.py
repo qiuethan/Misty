@@ -91,10 +91,15 @@ async def _achunks(chunks: list[bytes]):
 
 
 class _SpeakerBuffer:
-    def __init__(self, display_name: str, pcm_path: str, transcriber):
+    def __init__(self, display_name: str, pcm_path: str, transcriber, decoder):
         self.display_name = display_name
         self.pcm_path = pcm_path
         self.transcriber = transcriber
+        # Opus decode is STATEFUL per stream (packet-loss concealment,
+        # internal decoder history) -- this speaker's own decoder instance
+        # must be fed only this speaker's packets, in order, for the life of
+        # the session. See src/audio/decoder.py's OpusStreamDecoder docstring.
+        self.decoder = decoder
         self.pcm_chunks: list[bytes] = []
         # Absolute meeting-relative ts_ms of this speaker's FIRST fed frame. AWS
         # Transcribe's word start_ms values are relative to the start of this
@@ -188,19 +193,27 @@ class MeetingSession:
                     )
                 return
 
-        # ffmpeg decode is CPU work with no shared-state touch -- do it OUTSIDE
-        # the lock so it doesn't block readers any longer than necessary.
-        pcm = self._deps["audio"].decode(opus_frame_bytes)
-
+        # Get-or-create this speaker's buffer (and its OWN stateful Opus
+        # decoder) under the lock -- creation touches shared state
+        # (self._speakers).
         with self._lock:
             buf = self._speakers.get(speaker_id)
             if buf is None:
                 pcm_path = os.path.join(self._tmp_dir, f"{_safe_filename_component(speaker_id)}.pcm")
                 transcriber = self._deps["make_transcriber"]()
-                buf = _SpeakerBuffer(display_name, pcm_path, transcriber)
+                decoder = self._deps["audio"].make_decoder()
+                buf = _SpeakerBuffer(display_name, pcm_path, transcriber, decoder)
                 self._speakers[speaker_id] = buf
             else:
                 buf.display_name = display_name
+
+        # Opus decode is CPU work with no shared-state touch (each speaker's
+        # decoder is only ever driven by this speaker's own feed() calls) --
+        # do it OUTSIDE the lock so it doesn't block readers any longer than
+        # necessary.
+        pcm = buf.decoder.decode(opus_frame_bytes)
+
+        with self._lock:
             buf.append(pcm, ts_ms)
 
     async def transcript_view(self) -> list[Segment]:

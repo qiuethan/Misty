@@ -14,16 +14,30 @@ from src.contracts import Minutes
 from src.sessions import SessionAlreadyExistsError, SessionRegistry, words_to_segments
 
 
+class _FakeDecoder:
+    """Pass-through per-speaker 'decoder': in these tests the opus_frame_bytes
+    IS the pcm payload, so we can assert routing without any real Opus decode.
+    Records into the FakeAudio-shared ``decode_calls`` list so tests can
+    assert call order across speakers (each speaker gets its OWN instance, as
+    make_decoder() is a factory, but they all log to the same list)."""
+
+    def __init__(self, decode_calls: list[bytes]):
+        self._decode_calls = decode_calls
+
+    def decode(self, opus_frame_bytes: bytes) -> bytes:
+        self._decode_calls.append(opus_frame_bytes)
+        return opus_frame_bytes
+
+
 class FakeAudio:
-    """Pass-through 'decoder': in these tests the opus_frame_bytes IS the pcm payload,
-    so we can assert routing without any real ffmpeg/opus decode."""
+    """Factory for per-speaker fake decoders (mirrors the real
+    ``AudioAdapter.make_decoder()`` contract)."""
 
     def __init__(self):
         self.decode_calls = []
 
-    def decode(self, opus_frame_bytes: bytes) -> bytes:
-        self.decode_calls.append(opus_frame_bytes)
-        return opus_frame_bytes
+    def make_decoder(self) -> _FakeDecoder:
+        return _FakeDecoder(self.decode_calls)
 
 
 class FakeTranscriber:

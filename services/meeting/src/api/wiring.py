@@ -12,7 +12,7 @@ import tempfile
 from datetime import datetime, timezone
 from functools import lru_cache
 
-from src.audio.decoder import opus_to_pcm16k_args, run_ffmpeg
+from src.audio.decoder import OpusStreamDecoder, run_ffmpeg
 from src.audio.mixer import mix_to_mp3_args
 from src.config import get_settings
 from src.pipeline.llm_client import LlmClient
@@ -24,19 +24,20 @@ from src.stt.transcribe import create_transcriber
 
 
 class AudioAdapter:
-    """Decodes one Opus frame into 16 kHz mono s16le PCM via an ffmpeg subprocess.
+    """Factory for per-speaker, stateful Opus decoders.
 
-    NOTE (live-perf/correctness, sub-plan 3 item): this spawns one ffmpeg
-    process per fed frame (each fed frame is ~20ms of Opus from the bot).
-    That's acceptable for this task but is not batched -- buffering raw Opus
-    and decoding once per speaker per flush is a follow-up optimization.
-    Independent-frame Opus decode (no shared demuxer state across frames) may
-    also need to be verified against the bot's actual Opus packet framing
-    during live integration (see decoder.py's docstring on the same topic).
+    Discord voice delivers bare Opus packets (no container/demuxer framing),
+    and Opus decode carries state across packets -- so decoding can't be a
+    single stateless ``decode(frame)`` call shared across speakers (that was
+    the live-integration bug: ffmpeg has no demuxer for standalone Opus
+    packets, and failed with exit 234 against real Discord audio). Instead,
+    each speaker gets its OWN ``OpusStreamDecoder`` instance (see
+    ``make_decoder``), created once in ``_SpeakerBuffer.__init__`` and fed
+    that speaker's packets in order for the life of the session.
     """
 
-    def decode(self, frame: bytes) -> bytes:
-        return run_ffmpeg(opus_to_pcm16k_args(), input_bytes=frame)
+    def make_decoder(self) -> OpusStreamDecoder:
+        return OpusStreamDecoder()
 
 
 class MixerAdapter:
