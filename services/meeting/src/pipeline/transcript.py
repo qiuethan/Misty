@@ -1,6 +1,8 @@
 def format_timestamp(ms: int) -> str:
     total = max(0, ms // 1000)
-    return f"{total // 60:02d}:{total % 60:02d}"
+    hours, rem = divmod(total, 3600)
+    minutes, seconds = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
 
 
 def _get(seg, key):

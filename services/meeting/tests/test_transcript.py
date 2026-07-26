@@ -6,6 +6,10 @@ def test_format_timestamp():
     assert format_timestamp(65000) == "01:05"
 
 
+def test_format_timestamp_hour_rollover():
+    assert format_timestamp(3_725_000) == "01:02:05"
+
+
 def test_assemble_sorts_and_formats():
     segs = [
         {"speaker": "bob", "start_ms": 2000, "text": "hi"},

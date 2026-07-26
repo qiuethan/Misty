@@ -48,6 +48,8 @@ def verify_production_secrets(settings: Settings | None = None) -> None:
         insecure.append("AWS_REGION")
     if not settings.llm_base_url:
         insecure.append("LLM_BASE_URL")
+    if not settings.llm_api_key:
+        insecure.append("LLM_API_KEY")
     if insecure:
         raise RuntimeError(
             f"Refusing to start in meeting_env={settings.meeting_env!r}: "
