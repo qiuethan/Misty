@@ -243,7 +243,10 @@ class MeetingSession:
         with self._lock:
             participants = [buf.display_name for buf in self._speakers.values()]
         return {
-            "title": f"Meeting {self.session_id}",
+            # No code-invented title: the meeting title is LLM-generated (see
+            # minutes.summarize_minutes / Minutes.title). Left blank so the PDF
+            # falls back to a clean default only if the LLM produced none.
+            "title": "",
             "started_at": str(self._started_at),
             "duration_label": f"{minutes}m",
             "participants": participants,
