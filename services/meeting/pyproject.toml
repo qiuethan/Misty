@@ -23,6 +23,7 @@ dependencies = [
     "fpdf2>=2.7",
     "httpx>=0.27",
     "platform-auth",
+    "av>=12",
 ]
 
 [project.optional-dependencies]
