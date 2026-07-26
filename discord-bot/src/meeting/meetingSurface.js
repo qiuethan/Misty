@@ -45,6 +45,7 @@ export function createMeetingSurface({
       stream,
       recorder,
       textChannel,
+      voiceChannel,
       startedAt: now(),
     });
 
@@ -55,6 +56,19 @@ export function createMeetingSurface({
     const session = sessions.get(guildId);
     if (!session) return { status: 'not-recording' };
     return { status: 'recording', elapsedMs: now() - session.startedAt };
+  }
+
+  // A snapshot of the guild's active recording, or null: its `sessionId` and
+  // the (opaque) `voiceChannel` being recorded. The Discord adapter uses this to
+  // auto-stop when the channel empties. Both fields come from the single session
+  // source of truth so they can't drift; the channel is treated opaquely so this
+  // module stays free of any discord.js dependency. The `sessionId` lets the
+  // adapter bind a scheduled auto-stop to a SPECIFIC recording, so a timer from
+  // an already-ended session can never terminate a later one in the same guild.
+  function activeSession(guildId) {
+    const session = sessions.get(guildId);
+    if (!session) return null;
+    return { sessionId: session.sessionId, voiceChannel: session.voiceChannel };
   }
 
   async function stop(guildId) {
@@ -88,5 +102,5 @@ export function createMeetingSurface({
     }
   }
 
-  return { start, status, stop };
+  return { start, status, stop, activeSession };
 }

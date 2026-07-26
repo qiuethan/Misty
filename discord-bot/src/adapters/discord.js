@@ -259,11 +259,42 @@ export function makeAttachmentPoster() {
 // equivalent on other surfaces, so it bypasses dispatch()/the router entirely
 // and talks straight to appContext.meetingSurface. commands/record.js exists
 // solely for slash-command registration metadata.
-async function handleRecordInteraction(interaction, appContext) {
+async function handleRecordInteraction(interaction, appContext, recordCommand) {
   const subcommand = interaction.options.getSubcommand(false);
   await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
 
   const reply = (content) => interaction.editReply({ content }).catch((e) => console.error('record reply failed:', e.message));
+
+  // `/record` bypasses the neutral dispatch, which is where the Policy
+  // Enforcement Point normally lives -- so re-run authenticate -> authorize
+  // here. Resolve the SAME policy the router would (per-subcommand auth, else
+  // command auth, fail-secure to 'linked') from the command metadata rather
+  // than hardcoding it, so the two can't drift if record.js is ever retightened.
+  // `start` inherits 'linked' (recording consumes resources); `status`/`stop`
+  // are declared 'public' so a directory outage can't strand a live recording.
+  const activeSub = recordCommand?.subcommands?.find((s) => s.name === subcommand);
+  const rawAuth = activeSub?.auth ?? recordCommand?.auth;
+  const policy = (typeof rawAuth === 'function' ? rawAuth(interaction) : rawAuth) ?? 'linked';
+
+  if (policy !== 'public') {
+    let principal;
+    try {
+      principal = await resolvePrincipal(appContext.directory, interaction.user.id);
+    } catch (e) {
+      if (e instanceof DirectoryUnavailable) {
+        await reply(authMessages.unavailable().content);
+        return;
+      }
+      console.error('record auth lookup failed:', e.message);
+      await reply(authMessages.internalError().content);
+      return;
+    }
+    const decision = authorize(policy, principal);
+    if (!decision.ok) {
+      await reply(authMessages.denied(decision.reason).content);
+      return;
+    }
+  }
 
   if (subcommand === 'start') {
     const voiceChannel = interaction.member?.voice?.channel;
@@ -314,6 +345,89 @@ async function handleRecordInteraction(interaction, appContext) {
   await reply('Unknown /record subcommand.');
 }
 
+export const AUTO_STOP_GRACE_MS = 20_000;
+
+// Count the non-bot members currently in a (recorded) voice channel. The
+// recorder bot is in the channel too, so it's filtered out.
+//
+// Caveat: `channel.members` is derived by discord.js from the voice-state cache,
+// and each entry needs a resolved `GuildMember`. The bot runs without the
+// privileged `GuildMembers` intent (see index.js), so it relies on the member
+// object carried on each VOICE_STATE_UPDATE payload. In normal operation that
+// keeps voice participants cached; only a custom member sweeper (we configure
+// none) could evict a still-present member and undercount. Acceptable given the
+// grace-timer re-check below.
+function humansIn(voiceChannel) {
+  if (!voiceChannel) return 0;
+  return [...voiceChannel.members.values()].filter((m) => !m.user?.bot).length;
+}
+
+// Auto-stop: end a recording when everyone leaves its voice channel. Rather than
+// finalizing on the raw "last member left" event (which a transient client blip
+// or a voice-region failover would trigger, irreversibly terminating a live
+// meeting), we DEBOUNCE: when the recorded channel goes empty we schedule a stop
+// after a grace period, and cancel it if a human is back when any later event
+// arrives OR if they're back at fire time (re-check).
+//
+// Each pending timer is bound to the SPECIFIC recording (its `sessionId`) that
+// scheduled it. That matters because a guild can record again immediately: if a
+// timer scheduled for session A were keyed only by guild, a manual /record stop
+// of A followed by a new recording B could let A's stale timer terminate B early
+// (and A's still-pending timer would suppress scheduling B's own). Binding to
+// sessionId means B always schedules its own full-grace timer, and a timer from
+// an ended session no-ops at fire time. Idempotent with `/record stop`.
+//
+// Injectable timers keep it unit-testable. Returns the voiceStateUpdate handler.
+export function createAutoStop({
+  meetingSurface,
+  graceMs = AUTO_STOP_GRACE_MS,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+} = {}) {
+  const pending = new Map(); // guildId -> { handle, sessionId }
+
+  const cancel = (guildId) => {
+    const entry = pending.get(guildId);
+    if (entry) {
+      clearTimer(entry.handle);
+      pending.delete(guildId);
+    }
+  };
+
+  return function onVoiceStateUpdate(oldState, newState) {
+    const guildId = (oldState?.guild ?? newState?.guild)?.id;
+    if (!guildId) return;
+
+    const session = meetingSurface?.activeSession?.(guildId);
+    // Not recording (or session already torn down): drop any pending stop.
+    if (!session) return cancel(guildId);
+    // Someone is (still/again) present: cancel a pending stop, nothing to do.
+    if (humansIn(session.voiceChannel) > 0) return cancel(guildId);
+
+    const existing = pending.get(guildId);
+    if (existing) {
+      // Already scheduled for THIS recording -> don't stack a second timer.
+      if (existing.sessionId === session.sessionId) return;
+      // Stale timer from a previous recording in this guild -> replace it.
+      clearTimer(existing.handle);
+      pending.delete(guildId);
+    }
+
+    const { sessionId } = session;
+    const handle = setTimer(() => {
+      pending.delete(guildId);
+      // Re-check at fire time: only stop if it's STILL the same recording and
+      // STILL empty (the meeting may have ended, or a human returned).
+      const current = meetingSurface?.activeSession?.(guildId);
+      if (!current || current.sessionId !== sessionId || humansIn(current.voiceChannel) > 0) return;
+      Promise.resolve(meetingSurface.stop(guildId)).catch((err) =>
+        console.error(`auto-stop failed for guild ${guildId}:`, err?.message ?? err));
+    }, graceMs);
+    handle?.unref?.(); // don't keep the process alive on the grace timer alone
+    pending.set(guildId, { handle, sessionId });
+  };
+}
+
 export function wireDiscordClient(client, { commands, appContext }) {
   client.on('interactionCreate', async (interaction) => {
     // Autocomplete interactions are a separate path: they CANNOT be deferred and
@@ -339,7 +453,7 @@ export function wireDiscordClient(client, { commands, appContext }) {
     // command/router contract stays surface-agnostic.
     if (interaction.commandName === 'record') {
       try {
-        await handleRecordInteraction(interaction, appContext);
+        await handleRecordInteraction(interaction, appContext, commands.get('record'));
       } catch (err) {
         console.error('Unhandled /record error:', err);
       }
@@ -377,6 +491,16 @@ export function wireDiscordClient(client, { commands, appContext }) {
       await handleMention(message, { appContext, botId });
     } catch (err) {
       console.error('Unhandled mention error:', err);
+    }
+  });
+
+  // Auto-stop a recording when everyone leaves its voice channel (debounced).
+  const onVoiceStateUpdate = createAutoStop({ meetingSurface: appContext.meetingSurface });
+  client.on('voiceStateUpdate', (oldState, newState) => {
+    try {
+      onVoiceStateUpdate(oldState, newState);
+    } catch (err) {
+      console.error('voiceStateUpdate handler error:', err?.message ?? err);
     }
   });
 }

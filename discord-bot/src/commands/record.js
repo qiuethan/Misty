@@ -20,17 +20,27 @@ export default defineCommand({
   options: [],
   subcommands: [
     {
+      // Inherits the command-level 'linked' policy: starting a recording
+      // consumes resources (a voice connection + a live meeting session), so it
+      // must be authenticated.
       name: 'start',
       description: 'Start recording the voice channel you are in',
       handler: unreachable,
     },
     {
+      // Read-only, resolved from local session state (no directory call), so a
+      // directory outage must not break it -> 'public'.
       name: 'status',
+      auth: 'public',
       description: 'Check whether a recording is in progress',
       handler: unreachable,
     },
     {
+      // De-escalating: stopping a recording bounds resource/memory use, so it
+      // must NOT be gated behind a check that can fail-closed during a directory
+      // outage (that would strand a running recording) -> 'public'.
       name: 'stop',
+      auth: 'public',
       description: 'Stop recording and post the meeting minutes',
       handler: unreachable,
     },
