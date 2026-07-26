@@ -74,3 +74,11 @@ test('poster never throws even when every send rejects', async () => {
     poster({ channel, report: { pdf_b64: Buffer.from('x').toString('base64') } }),
   );
 });
+
+test('poster never throws when the report is malformed (pdf_b64 missing)', async () => {
+  const poster = makeAttachmentPoster();
+  const channel = fakeChannel();
+  await assert.doesNotReject(() => poster({ channel, report: {} }));
+  // No send should have succeeded since attachment construction failed.
+  assert.equal(channel.calls.length, 0);
+});

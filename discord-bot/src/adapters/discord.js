@@ -235,18 +235,21 @@ export async function handleMention(message, { appContext, botId }) {
 // posting the PDF alone.
 export function makeAttachmentPoster() {
   return async ({ channel, report }) => {
-    const files = [
-      new AttachmentBuilder(Buffer.from(report.pdf_b64, 'base64'), { name: 'meeting-minutes.pdf' }),
-    ];
-    if (report.audio_b64) {
-      files.push(new AttachmentBuilder(Buffer.from(report.audio_b64, 'base64'), { name: 'meeting-audio.mp3' }));
-    }
     try {
-      await channel.send({ content: '📄 Meeting minutes', files });
-    } catch {
-      await channel
-        .send({ content: '📄 Meeting minutes (audio too large to attach)', files: [files[0]] })
-        .catch(() => {});
+      const pdfFile = new AttachmentBuilder(Buffer.from(report.pdf_b64, 'base64'), { name: 'meeting-minutes.pdf' });
+      const files = [pdfFile];
+      if (report.audio_b64) {
+        files.push(new AttachmentBuilder(Buffer.from(report.audio_b64, 'base64'), { name: 'meeting-audio.mp3' }));
+      }
+      try {
+        await channel.send({ content: '📄 Meeting minutes', files });
+      } catch {
+        await channel
+          .send({ content: '📄 Meeting minutes (audio too large to attach)', files: [pdfFile] })
+          .catch(() => {});
+      }
+    } catch (e) {
+      console.error('meeting attachment poster failed:', e.message);
     }
   };
 }
