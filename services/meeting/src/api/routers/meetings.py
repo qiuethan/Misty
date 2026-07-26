@@ -60,15 +60,16 @@ Disconnect
 ----------
 If the client disconnects (or the connection errors) without the consumer
 having called ``POST /meetings/{session_id}/stop`` first, the server tears
-the session down itself by calling ``session.stop()`` -- the only teardown
-``MeetingSession`` exposes, so this also runs the full finalize pipeline
-(transcription flush, minutes, PDF, audio mix) on an abrupt disconnect. A
-lighter "just delete the temp dir and deregister" teardown would require a
-change to ``sessions.py`` (out of this task's scope) -- flagged as a
-live-verify/UX item, not solved here.
+the session down itself by calling ``session.discard()`` -- a lightweight
+teardown that only deletes the session's temp dir and deregisters it. It
+deliberately does NOT run the finalize pipeline (transcription flush,
+minutes, PDF, audio mix); that only happens for an explicit ``stop()`` call,
+since it involves a blocking LLM HTTP call and isn't worth paying for on an
+abrupt/dropped connection. Teardown failures are logged (not swallowed).
 """
 
 import json
+import logging
 import re
 import secrets
 
@@ -84,6 +85,8 @@ from src.key_store import InMemoryKeyStore
 from src.sessions import SessionRegistry
 
 router = APIRouter()
+
+_logger = logging.getLogger("meeting.audit")
 
 # Single scope covering all meeting endpoints (HTTP + WS). This service has one
 # internal consumer class (the Discord bot) so a single scope is a deliberate
@@ -191,17 +194,20 @@ async def stream_meeting(
     else:
         # Fallback: accept, then require the first text frame to be the key.
         await websocket.accept()
-        try:
-            first = await websocket.receive_text()
-        except WebSocketDisconnect:
-            return
         resolved_key = None
         try:
+            first = await websocket.receive_text()
             payload = json.loads(first)
             if isinstance(payload, dict):
                 resolved_key = payload.get("key")
-        except (ValueError, TypeError):
-            resolved_key = None
+        except WebSocketDisconnect:
+            return
+        except Exception:  # noqa: BLE001 - any failure to get a valid text key
+            # (malformed JSON, a binary frame first -- Starlette's receive_text
+            # raises KeyError on those -- or anything else) means auth fails;
+            # close cleanly rather than let an unhandled exception escape.
+            await websocket.close(code=1008)
+            return
         if not _authenticate_ws(resolved_key, store, MEETINGS_SCOPE):
             await websocket.close(code=1008)
             return
@@ -240,8 +246,10 @@ async def stream_meeting(
     finally:
         # If the consumer already called POST /stop, sessions.py's stop() has
         # deregistered the session -- registry.get returns None and we skip.
+        # Otherwise this is an abrupt disconnect: use the lightweight discard()
+        # (temp dir cleanup + deregister only), NOT the full stop() pipeline.
         if registry.get(session_id) is not None:
             try:
-                await session.stop()
-            except Exception:  # noqa: BLE001 - best-effort teardown on disconnect
-                pass
+                session.discard()
+            except Exception as e:  # noqa: BLE001 - log, don't crash teardown
+                _logger.warning("ws disconnect teardown failed for %s: %s", session_id, e)

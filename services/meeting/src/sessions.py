@@ -96,6 +96,7 @@ class MeetingSession:
         self._speakers: dict[str, _SpeakerBuffer] = {}
         self._tmp_dir = os.path.join(deps["tmp_root"], session_id)
         os.makedirs(self._tmp_dir, exist_ok=True)
+        self._finalized = False
 
     def feed(self, speaker_id: str, display_name: str, opus_frame_bytes: bytes, ts_ms: int) -> None:
         buf = self._speakers.get(speaker_id)
@@ -152,8 +153,26 @@ class MeetingSession:
                 audio_b64=audio_b64,
             )
         finally:
-            shutil.rmtree(self._tmp_dir, ignore_errors=True)
-            self._on_finalize(self.session_id)
+            self._cleanup()
+
+    def discard(self) -> None:
+        """Lightweight teardown for abrupt disconnects (e.g. WS drop without a
+        preceding ``POST /stop``): delete the session's temp dir and deregister
+        it from the registry. Deliberately does NOT transcribe/summarize/build a
+        PDF/mix audio -- those are only worth paying for when a consumer
+        actually wants the finalized meeting artifacts via ``stop()``.
+
+        Idempotent: safe to call more than once, and safe to call after
+        ``stop()`` has already run (both funnel through the same cleanup).
+        """
+        self._cleanup()
+
+    def _cleanup(self) -> None:
+        if self._finalized:
+            return
+        self._finalized = True
+        shutil.rmtree(self._tmp_dir, ignore_errors=True)
+        self._on_finalize(self.session_id)
 
 
 class SessionRegistry:

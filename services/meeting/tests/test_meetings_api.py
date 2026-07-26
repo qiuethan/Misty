@@ -18,6 +18,7 @@ class FakeSession:
         self.guild_id = guild_id
         self.feed_calls: list[tuple[str, str, bytes, int]] = []
         self.stop_called = False
+        self.discard_called = False
         self._segments = [Segment(speaker="alice", start_ms=0, text="hello")]
 
     def feed(self, speaker_id, display_name, opus_payload, ts_ms):
@@ -34,6 +35,9 @@ class FakeSession:
             pdf_b64="ZmFrZQ==",
             audio_b64=None,
         )
+
+    def discard(self):
+        self.discard_called = True
 
 
 class FakeRegistry:
@@ -169,8 +173,21 @@ def test_ws_stream_authenticates_and_feeds_decoded_frames(client, registry, cons
         ("alice-id", "Alice", b"opus-frame-1", 0),
         ("bob-id", "bob-id", b"opus-frame-2", 100),
     ]
-    # Disconnect without POST /stop -- the WS handler must tear the session down.
-    assert session.stop_called is True
+    # Disconnect without POST /stop -- the WS handler must tear the session down
+    # via the lightweight discard(), NOT the full stop() pipeline.
+    assert session.discard_called is True
+    assert session.stop_called is False
+
+
+def test_ws_stream_fallback_auth_binary_first_frame_closes_cleanly(client, registry):
+    # No ?key= query param -> fallback path expects a text frame with the key
+    # first. A binary frame instead must close cleanly (1008), not crash the
+    # handler with an unhandled KeyError from Starlette's receive_text().
+    with pytest.raises(Exception):
+        with client.websocket_connect("/meetings/s1/stream?guild_id=g1") as ws:
+            ws.send_bytes(_frame("alice-id", 0, b"opus-frame"))
+            ws.receive_text()
+    assert "s1" not in registry.sessions
 
 
 def test_ws_stream_invalid_session_id_closes(client, registry, consumer_key):

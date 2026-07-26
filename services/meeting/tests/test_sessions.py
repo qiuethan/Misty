@@ -174,6 +174,35 @@ def test_stop_skips_audio_when_no_tracks(tmp_root):
     assert result.transcript == ""
 
 
+def test_discard_cleans_up_without_running_finalize_pipeline(tmp_root):
+    alice_words = [{"text": "hello", "start_ms": 0}]
+    transcriber = FakeTranscriber(alice_words)
+    audio = FakeAudio()
+    mixer = FakeMixer()
+    deps = _make_deps(tmp_root, [transcriber], audio=audio, mixer=mixer)
+    registry = SessionRegistry(deps)
+
+    session = registry.create("session-discard", "guild-1")
+    session.feed("alice-id", "alice", b"alice-frame-1", ts_ms=0)
+
+    session.discard()
+
+    # Cleanup happened: tmp dir gone, deregistered from the registry.
+    session_tmp_dir = os.path.join(tmp_root, "session-discard")
+    assert not os.path.exists(session_tmp_dir)
+    assert registry.get("session-discard") is None
+
+    # The full finalize pipeline (transcribe/report_builder/mix) must NOT run.
+    assert transcriber.calls == 0
+    assert mixer.calls == []
+
+    # Idempotent: calling discard() again must not raise.
+    session.discard()
+
+    # Re-creating the same id must now succeed (fully deregistered).
+    registry.create("session-discard", "guild-1")
+
+
 def test_stop_cleans_up_tmp_dir_even_on_report_builder_error(tmp_root):
     def boom(segments, meta):
         raise RuntimeError("report builder exploded")
