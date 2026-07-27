@@ -11,6 +11,19 @@ _logger = logging.getLogger(__name__)
 # minutes were routinely truncated mid-JSON.
 MINUTES_MAX_TOKENS = 4000
 
+# Salvage tries checkpoints newest-first, and each attempt costs a json.loads
+# over a growing prefix -- so an unsalvageable fragment would otherwise walk
+# every one, quadratically. A usable recovery point is essentially always within
+# a few checkpoints of the truncation, and the response is untrusted input from
+# a network service, so cap the search.
+_MAX_SALVAGE_ATTEMPTS = 64
+
+# A bracket followed by a quoted key/element. Deliberately narrow: it should
+# catch a JSON fragment wrapped in a fence or introduced by a lead-in sentence
+# ("Here are the minutes:\n{\"title\"...") without misfiring on ordinary prose,
+# which rarely contains `{"`.
+_JSON_ISH = re.compile(r'[\{\[]\s*"')
+
 MINUTES_SYSTEM_PROMPT = (
     "You write concise meeting minutes for a student organization. Given a "
     "timestamped transcript, respond with ONLY a JSON object of shape "
@@ -40,8 +53,10 @@ def _salvage_truncated(cand: str):
 
     Two kinds of recovery point, tried in that order:
 
-    1. **Clean boundaries** -- a value has just finished. Preferred, because
-       everything recovered is complete: no half-written action item.
+    1. **Clean boundaries** -- a value has just finished. Preferred, because a
+       recovered top-level string is always complete. (A boundary can still
+       land inside a NESTED object and keep a partial one; harmless under the
+       string[] schema this prompt asks for, but not a guarantee.)
     2. **Inside a string** -- close the string where it was cut. Only used when
        no clean boundary yields a summary, i.e. the truncation landed in the
        summary itself, where a partial sentence beats losing it entirely.
@@ -79,13 +94,14 @@ def _salvage_truncated(cand: str):
         return value if isinstance(value, dict) else None
 
     best = None
-    for cut, closers in reversed(clean):
-        parsed = _parse(cand[:cut].rstrip().rstrip(","), closers)
+    for cut, closers in reversed(clean[-_MAX_SALVAGE_ATTEMPTS:]):
+        parsed = _parse(cand[:cut], closers)
         if parsed is None:
             continue
         if isinstance(parsed.get("summary"), str):
             return parsed
-        best = best or parsed
+        if best is None:
+            best = parsed
 
     if in_string:
         # Close the string exactly where it was cut, dropping a dangling escape
@@ -94,7 +110,8 @@ def _salvage_truncated(cand: str):
         parsed = _parse(head, '"' + "".join(reversed(stack)))
         if parsed is not None and isinstance(parsed.get("summary"), str):
             return parsed
-        best = best or parsed
+        if best is None:
+            best = parsed
 
     return best
 
@@ -109,7 +126,17 @@ def _extract_json(text: str):
             pass
     if i == -1:
         return None
-    return _salvage_truncated(cand[i:])
+    salvaged = _salvage_truncated(cand[i:])
+    if salvaged is not None:
+        # A salvaged response is a LOSSY success: whatever the model wrote after
+        # the truncation is gone, so the PDF can look authoritative while a
+        # decision it actually made is missing. Say so.
+        _logger.warning(
+            "salvaged truncated minutes JSON from a %s-char response; "
+            "content after the truncation point is lost",
+            len(cand),
+        )
+    return salvaged
 
 
 def summarize_minutes(transcript: str, llm_client, model=None) -> Minutes:
@@ -132,7 +159,12 @@ def summarize_minutes(transcript: str, llm_client, model=None) -> Minutes:
         # fragment, which is unreadable in the PDF and used to be what a reader
         # actually saw when the response was truncated.
         fallback = (content or "").strip()
-        if fallback.startswith("{") or fallback.startswith("["):
+        # Check the UNWRAPPED candidate: a truncated response never closes its
+        # fence, so a bare startswith("{") misses ```json blocks and "Here are
+        # the minutes:" lead-ins -- the two commonest shapes -- and the raw
+        # fragment reaches the reader anyway.
+        unwrapped = _candidate(fallback).lstrip()
+        if unwrapped.startswith(("{", "[")) or _JSON_ISH.search(fallback):
             _logger.warning(
                 "could not parse or salvage minutes JSON (%s chars); "
                 "returning a placeholder summary",
