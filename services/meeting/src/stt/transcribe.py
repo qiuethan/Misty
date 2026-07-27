@@ -120,6 +120,9 @@ class _StreamingTranscription:
         and raising here would propagate into the WS ingest loop.
         """
         if self._closing or self._loop is None or self._queue is None:
+            # Silent until now: a frame landing in the closing window just
+            # vanished, which is exactly the "transcript cut off" symptom.
+            _logger.debug("dropping %s bytes of audio: stream is closing", len(pcm))
             return
         try:
             self._loop.call_soon_threadsafe(self._queue.put_nowait, pcm)
@@ -151,32 +154,53 @@ class _StreamingTranscription:
         so this can yield more than the last ``words()`` did."""
         self._closing = True
         await self._await_task()
-        if self._queue is not None:
+        if self._queue is not None and self._loop is not None:
             # Enqueue the sentinel through the SAME call_soon_threadsafe path
             # send() uses. send() defers its enqueue to the next loop iteration,
-            # so a direct put_nowait() here would overtake audio already handed
-            # to send() but not yet queued -- the pump would end the stream and
-            # that audio would land in a queue nobody reads. In production that
-            # is the end of every meeting: the ingest worker thread delivers the
+            # so a direct put_nowait() here would overtake audio whose send()
+            # has already returned -- the pump would end the stream and that
+            # audio would land in a queue nobody reads. In production that is
+            # the end of every meeting: the ingest worker thread delivers the
             # last frames and POST /stop arrives right behind them, so the
             # transcript cuts off before the last thing anyone said.
-            if self._loop is not None:
-                flushed = self._loop.create_future()
+            #
+            # The guarantee is precisely "audio whose send() has RETURNED", not
+            # "audio handed to send()": a call that has passed the _closing
+            # check but not yet reached call_soon_threadsafe can still lose its
+            # frame. That residue is at most one in-flight feed(), because
+            # MeetingSession._stopping stops accepting frames the moment /stop
+            # begins.
+            enqueued = self._loop.create_future()
 
-                def _enqueue_sentinel() -> None:
+            def _enqueue_sentinel() -> None:
+                ok = True
+                try:
                     self._queue.put_nowait(None)
-                    if not flushed.done():
-                        flushed.set_result(None)
+                except Exception:  # noqa: BLE001 -- reported via the future below
+                    ok = False
+                finally:
+                    # Always resolve. Otherwise aclose() waits forever and takes
+                    # the whole meeting finalize with it -- MeetingSession.stop()
+                    # has no timeout of its own.
+                    if not enqueued.done():
+                        enqueued.set_result(ok)
 
-                self._loop.call_soon_threadsafe(_enqueue_sentinel)
-                await flushed
-            else:
-                self._queue.put_nowait(None)
+            self._loop.call_soon_threadsafe(_enqueue_sentinel)
+            if not await enqueued:
+                # The pump can never be told to stop, so waiting on it below
+                # would hang. Tear it down instead and keep what was finalized.
+                _logger.warning("could not signal end-of-audio; aborting the stream")
+                self.abort()
         if self._task is not None:
             try:
                 await self._task
             except asyncio.CancelledError:
-                pass  # abort() raced this close; keep whatever was finalized
+                # Only swallow when it is the PUMP that was cancelled (abort()
+                # raced this close). If aclose() itself is being cancelled --
+                # e.g. a caller wrapped it in wait_for -- re-raise: swallowing
+                # makes a timed-out close look like a successful one.
+                if not (self._aborted and self._task.cancelled()):
+                    raise
             except Exception as exc:  # noqa: BLE001 -- finalize must not raise
                 _logger.warning("transcription stream ended with an error: %s", exc)
         return list(self._words)

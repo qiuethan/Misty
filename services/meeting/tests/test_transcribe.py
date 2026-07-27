@@ -559,8 +559,10 @@ def test_audio_sent_just_before_close_is_not_jumped_by_the_sentinel():
             stream.send(b"LAST2" * 128)
             handed_off.set()
 
-        threading.Thread(target=worker).start()
+        thread = threading.Thread(target=worker)
+        thread.start()
         handed_off.wait(5)
+        thread.join(5)
 
         # ...and /stop lands immediately behind them.
         await stream.aclose()
@@ -569,5 +571,34 @@ def test_audio_sent_just_before_close_is_not_jumped_by_the_sentinel():
         assert b"LAST1" in delivered and b"LAST2" in delivered, (
             f"the end of the meeting was dropped; AWS only got {delivered}"
         )
+
+    asyncio.run(scenario())
+
+
+def test_aclose_returns_even_if_the_sentinel_enqueue_raises():
+    """`aclose()` waits on a future that the sentinel callback resolves. If that
+    callback raises, the loop swallows the exception and the future is never
+    resolved -- so `/stop` waits forever, wedging the whole meeting finalize
+    (it runs inside `MeetingSession.stop`'s gather, which has no timeout of its
+    own). Resolving in a `finally` keeps a broken enqueue recoverable."""
+
+    async def scenario():
+        client = _LiveClient()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
+        stream.send(b"\x00" * 640)
+        await drain(stream)
+
+        class _ExplodingQueue:
+            def put_nowait(self, item):
+                raise RuntimeError("queue is broken")
+
+            def empty(self):
+                return True
+
+        stream._queue = _ExplodingQueue()
+
+        # Must return rather than hang; words finalized before the break survive.
+        await asyncio.wait_for(stream.aclose(), 5)
 
     asyncio.run(scenario())
