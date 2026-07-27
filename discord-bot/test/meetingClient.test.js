@@ -109,7 +109,7 @@ test('getTranscript throws MeetingUnavailable when fetch throws', async () => {
 });
 
 test('stop POSTs the stop endpoint with X-API-Key and returns parsed JSON', async () => {
-  const body = { transcript: 't', minutes: 'm', pdf_b64: 'p', audio_b64: 'a' };
+  const body = { transcript: 't', minutes: 'm', pdf_b64: 'p' };
   const fetchImpl = fakeFetch([{ status: 200, body }]);
   const client = createMeetingClient({ baseUrl: BASE, wsUrl: WS_BASE, apiKey: KEY, fetchImpl });
   const res = await client.stop('sess-1');

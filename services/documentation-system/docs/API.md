@@ -37,7 +37,8 @@ Two kinds of key are accepted:
 
 | Scope | Grants |
 |-------|--------|
-| `docs:read` | All read endpoints (`GET`) |
+| `docs:read` | Read endpoints (`GET`) — but see visibility below: **alone, it returns nothing** |
+| `docs:read:all` | Read endpoints, bypassing per-doc visibility (sees every doc) |
 | `docs:write` | All mutating endpoints (`POST`, `PATCH`, `DELETE`) |
 | `admin` | Wildcard — satisfies any scope check |
 
@@ -51,6 +52,45 @@ the audit log is always the authenticated key's own name — a caller cannot cla
 someone else. Name your keys after the consumer (e.g. `discord-bot`) so the audit trail
 is meaningful.
 
+### Visibility and `X-On-Behalf-Of`
+
+Docs are **not all world-readable to any valid key.** Every read is evaluated against an
+*actor context*, and the caller chooses which one by how it authenticates:
+
+| Request | Actor context | Sees |
+|---|---|---|
+| `docs:read:all` (or `admin`) key, no `X-On-Behalf-Of` | **SEE_ALL** | every doc |
+| `docs:read` key, no `X-On-Behalf-Of` | **DENY** | **nothing** — an empty list, and `404` on every id |
+| Any read-scoped key **+** `X-On-Behalf-Of: <person-uuid>` | that person | only what that person may see |
+
+The `DENY` row is the surprising one and it is deliberate: a plain `docs:read` key has no
+identity of its own, so it has no basis to see anything. A consumer like the Discord bot is
+expected to pass `X-On-Behalf-Of` with the id of the member who ran the command.
+
+**What a person can see** (`contracts/visibility.py` — the single definition; the
+in-memory adapter calls it directly and the Postgres adapter compiles the same rule to
+SQL, kept in lockstep by parity tests):
+
+1. they personally own it (`owning_person_id` matches), **or**
+2. they're an active member of the owning team (`owning_team_id` ∈ their team ids), **or**
+3. the doc carries a matching grant — `org` (everyone), `person` (that person), or
+   `team` (a team they're on).
+
+Team membership is resolved live from the directory. **If the directory is unreachable,
+the actor's team set is treated as empty** — a partial fail-closed: personally-owned and
+`org`-granted docs still resolve, team-granted ones are withheld rather than leaked.
+
+**Invisible docs return `404`, not `403`**, on every route that takes a `{doc_id}` —
+including the write routes. Distinguishing the two would leak the existence of a doc the
+caller isn't allowed to know about.
+
+`X-On-Behalf-Of` must be a valid person UUID; a malformed value is `400`, and a caller
+lacking a read scope is `403`. Neither falls through to `SEE_ALL`.
+
+> On **write** routes, a request with *no* `X-On-Behalf-Of` gets `SEE_ALL` — holding a
+> `docs:write` key is itself the trust boundary. Supply the header and writes are
+> additionally constrained to what that person can see.
+
 ## Endpoints at a glance
 
 | Method | Path | Scope | Purpose |
@@ -61,6 +101,8 @@ is meaningful.
 | `PATCH` | `/docs/{id}` | `docs:write` | Update a doc |
 | `POST` | `/docs/{id}/tags` | `docs:write` | Add a tag |
 | `DELETE` | `/docs/{id}/tags/{tag}` | `docs:write` | Remove a tag |
+| `POST` | `/docs/{id}/grants` | `docs:write` | Grant visibility to a person / team / the org |
+| `DELETE` | `/docs/{id}/grants` | `docs:write` | Revoke a grant |
 | `POST` | `/docs/{id}/refetch` | `docs:write` | Re-run the content fetch |
 | `GET` | `/sources` | `docs:read` | List source kinds |
 | `GET` | `/sources/{id}` | `docs:read` | Get one source |
@@ -85,8 +127,19 @@ Every doc-returning endpoint responds with this object:
 | `fetched_at` | datetime \| null | When the snapshot was last taken |
 | `active` | bool | `false` = soft-deleted |
 | `tags` | string[] | Lowercased, trimmed |
+| `grants` | DocGrant[] | Who can see this doc beyond its owners — see below |
 | `created_at` / `updated_at` | datetime | |
 | `created_by` / `updated_by` | string | Attested actor |
+
+A **`DocGrant`**:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `grantee_type` | `"person"` \| `"team"` \| `"org"` | |
+| `grantee_id` | UUID \| null | Required for `person`/`team`; **must be null** for `org` |
+| `grantee_label` | string \| null | Resolved from the directory at the API layer |
+| `created_at` | datetime | |
+| `created_by` | string | Attested actor |
 
 ---
 
@@ -186,6 +239,11 @@ List docs. Scope: `docs:read`. All filters are optional query params and combine
 Returns a JSON array of `Doc` objects in a deterministic order. There is no pagination —
 the full matching set is returned (adequate for the current catalog size).
 
+**Visibility is applied on top of these filters**, so the result is what the *actor* may
+see AND matches the filters. A plain `docs:read` key with no `X-On-Behalf-Of` gets an
+empty array no matter what it filters on — see
+[Visibility and `X-On-Behalf-Of`](#visibility-and-x-on-behalf-of).
+
 ---
 
 ## `GET /docs/{id}` — get one
@@ -193,7 +251,8 @@ the full matching set is returned (adequate for the current catalog size).
 Fetch a single doc by id. Scope: `docs:read`.
 
 - **200** with the `Doc`.
-- **404** if no such doc (`{"detail": "doc not found"}`).
+- **404** if no such doc — **or** if it exists but isn't visible to the acting person
+  (`{"detail": "doc not found"}`). The two are deliberately indistinguishable.
 
 **Label backfill on read:** if an owner id is present but its label is still null (because
 the directory was down at ingest), this endpoint attempts to resolve the label now and
@@ -242,6 +301,53 @@ Adding a tag that already exists is a no-op (idempotent). Returns the updated `D
 Scope: `docs:write`. The `{tag}` path segment is lowercased and trimmed before matching.
 Removing a tag that isn't present is a no-op. Returns the updated `Doc` (**200**), or
 **404** if the doc doesn't exist.
+
+---
+
+## `POST /docs/{id}/grants` — grant visibility
+
+Scope: `docs:write`. Makes a doc visible to a person, a team, or the whole org, beyond
+whoever owns it. **Idempotent** — re-granting the same grantee is a no-op, not an error.
+
+```bash
+# Share with one team
+curl -X POST http://localhost:8001/docs/<id>/grants \
+  -H "X-API-Key: doc_ab12cd34_<secret>" -H "Content-Type: application/json" \
+  -d '{"grantee_type": "team", "grantee_id": "3f1c…"}'
+
+# Share with everyone in the org — note: NO grantee_id
+curl -X POST http://localhost:8001/docs/<id>/grants \
+  -H "X-API-Key: doc_ab12cd34_<secret>" -H "Content-Type: application/json" \
+  -d '{"grantee_type": "org"}'
+```
+
+### Request body (`DocGrantInput`)
+
+| Field | Type | Required | Notes |
+|-------|------|:---:|-------|
+| `grantee_type` | `"person"` \| `"team"` \| `"org"` | ✅ | |
+| `grantee_id` | UUID | conditional | **Required** for `person` and `team`; must be **omitted/null** for `org` |
+
+The shape rule is enforced by a validator, so `{"grantee_type": "org", "grantee_id": "…"}`
+and `{"grantee_type": "team"}` are both **422**.
+
+### Status codes
+
+| Status | Meaning |
+|--------|---------|
+| **200 OK** | Granted (or already granted); returns the updated `Doc` |
+| **404 Not Found** | No such doc — **or** the doc exists but isn't visible to the acting person |
+| **422 Unprocessable Entity** | `grantee_id` present/absent contrary to `grantee_type` |
+| **401 / 403** | Auth failure / missing scope |
+
+## `DELETE /docs/{id}/grants` — revoke a grant
+
+Scope: `docs:write`. Same request body as `POST`; the grantee is identified in the **body**,
+not the path (an `org` grant has no id to put there). Removing a grant that isn't present
+is a no-op. Returns the updated `Doc`.
+
+Revoking never removes *ownership*-based visibility — an owner keeps access regardless of
+grants.
 
 ---
 

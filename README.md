@@ -22,7 +22,7 @@ UTMIST is a student org with rotating leadership and mixed technical fluency. Ev
 - **`/team`** — look up, create, rename, add/remove members, and view rosters (subcommands: `create`, `list`, `rename`, `add`, `remove`, `roster`). Reads are public; writes are admin-only.
 - **`/my-teams`** — list your active memberships. Requires you to be linked.
 - **`/doc`** — catalog and browse links (subcommands: `add`, `list`, `show`, `remove`), backed by documentation-system. Reads are public; writes are admin-only. Team-owner field has slug autocomplete.
-- **`/record`** — record the voice channel you're in and get meeting minutes back (subcommands: `start`, `status`, `stop`). On `stop`, posts a `meeting-minutes.pdf` (summary, decisions, action items, transcript) plus `meeting-audio.mp3` into the channel; nothing is persisted server-side. Requires you to be linked.
+- **`/record`** — record the voice channel you're in and get meeting minutes back (subcommands: `start`, `status`, `stop`). Recording ends on `/record stop` **or automatically once everyone leaves the voice channel** (with a 4h backstop). On stop, the bot posts a branded `meeting-minutes.pdf` (LLM-generated title, summary, decisions, action items, full transcript) into the channel, @-mentioning whoever started the recording. Audio is never returned or persisted — it streams straight to AWS as transcription input and is never written to disk. `start` requires you to be linked; `status`/`stop` are public so a directory outage can't strand a running recording.
 - **`/help`** — list the commands you can use, or show details for one. Public.
 
 There are currently no beta commands.
@@ -36,16 +36,21 @@ There are currently no beta commands.
 
 Every domain has a first-class HTTP API — build your own dashboard, sync job, or automation on top:
 
-- **[team-tracking](services/team-tracking/README.md)** — 23 endpoints across `people`, `teams`, `role_kinds`, `team_memberships`, `providers`, `person_identifiers`, `api_keys`. Full point-in-time roster queries. Scoped API keys, per-request audit log. **Actively consumed** by the Discord bot in production.
+- **[team-tracking](services/team-tracking/README.md)** — 26 endpoints across `people`, `teams`, `role_kinds`, `team_memberships`, `providers`, `person_identifiers`, `api_keys`. Full point-in-time roster queries. Scoped API keys, per-request audit log. **Actively consumed** by the Discord bot in production.
 - **[documentation-system](services/documentation-system/README.md)** — endpoints over `docs` and `sources`; ingest a URL and it's normalized, dedup'd, fetched (title + snapshot for supported sources), and owner-validated against team-tracking. Ownership degrades gracefully if the directory is unreachable. **Consumed** by the Discord bot's `/doc` command group (`add`, `list`, `show`, `remove`).
 
-Both APIs speak OpenAPI. Point Swagger UI or codegen at them.
+Every service speaks OpenAPI. Point Swagger UI or codegen at them. (`meeting`'s WebSocket route isn't representable in OpenAPI — its wire format is documented in [`services/meeting/README.md`](services/meeting/README.md).)
+
+The other three are internal-facing: **[llm](services/llm/README.md)** (`POST /chat` over Bedrock, `chat` scope), **[verification](services/verification/README.md)** (request/confirm an email code, `verification:write` scope), and **[meeting](services/meeting/README.md)** (live transcription → minutes, `meetings` scope).
 
 ### As an operator
 
 - **Deploy is `git push`.** Merge to `staging` → Railway rebuilds and deploys staging automatically. Promote via a `staging → main` PR for production. No separate CD system.
 - **Roll back is `git revert`** + push. If a migration went with it, `railway run … alembic downgrade -1` reverses the schema.
-- **Manage API keys** via the `team-tracking-keys` / `doc-keys` CLIs — scoped, revocable, per-consumer, argon2-hashed at rest.
+- **Manage API keys.** Three different storage models, by design:
+  - **team-tracking, documentation-system** — issued into an `api_keys` table via the `team-tracking-keys` / `doc-keys` CLIs. Scoped, revocable, per-consumer, argon2-hashed at rest.
+  - **llm, meeting** — no key table. `llm-keys` / `meeting-keys` *print* a key plus a JSON entry you paste into that service's `CONSUMER_KEYS` variable; adding or revoking one is a redeploy.
+  - **verification** — no per-consumer keys at all. Only the bootstrap `API_KEY` env var authenticates, since its single consumer is the bot.
 
 ---
 
@@ -61,19 +66,23 @@ Both APIs speak OpenAPI. Point Swagger UI or codegen at them.
 | [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend + a browser-based "web playground" for iterating on commands without a Discord token | **Deployed** (staging + prod). All slash commands are stable and registered globally; 0 beta. |
 | Search / retrieval | Full-text + semantic search over the catalog's snapshots | Deferred (not built) |
 
-**How they relate.** team-tracking is the foundation — everything else references it. documentation-system validates every doc's owner against team-tracking. The discord-bot's commands read/write the directory over HTTP. Each service owns its own database; they never share tables.
+**How they relate.** team-tracking is the foundation — everything else references it. documentation-system validates every doc's owner against team-tracking, and asks it which teams a person is on to decide which docs that person may see. The discord-bot is the only consumer-facing surface and fans out to every service. `meeting` calls `llm` for minutes — the only service-to-service dependency outside the catalog → directory pair. No service shares tables with another; the three that have a database each own it outright, and `llm`/`meeting` have none.
 
 ```
-                          validates owner ids +
-                          resolves labels over HTTP
-  documentation-system  ───────────────────────────▶   team-tracking
-   (docs catalog)                                        (directory / source of truth)
-        ▲                                                        ▲
-        │ degrades gracefully                                    │
-        │ if the directory is down ◀─────────────────────────────┘
-                                                                 │  slash commands
-                                                        discord-bot
-                                                        (Discord ↔ directory)
+  documentation-system ──validates owner ids──▶ team-tracking
+   (docs catalog)         resolves team ids     (directory / source of truth)
+        ▲                                              ▲
+        │ degrades gracefully if the directory is down  │
+        │                                               │
+        │  /doc                                         │  /link /whoami /team /seed
+        └───────────────── discord-bot ─────────────────┘
+                            │        │
+              /link,        │        │  /record
+              /add-email    │        │
+                    ▼       ▼        ▼
+               verification      meeting ──/chat──▶ llm ──▶ Bedrock
+               (email codes)    (transcript,        (stateless
+                                 minutes, PDF)       proxy)
 ```
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the cross-service data flow.
@@ -88,13 +97,15 @@ UTMIST-Prototypes/
 ├── pyproject.toml                     Root uv workspace (members: services/*, packages/*)
 ├── uv.lock                            Single lockfile for the whole workspace
 ├── docs/
-│   ├── DEVELOPMENT.md                Developer onboarding — clone to first PR
+│   ├── DEVELOPMENT.md                 Developer onboarding — clone to first PR
 │   ├── ARCHITECTURE.md                Cross-service architecture — how the pieces fit
+│   ├── MEETING-RECORDING.md           How /record splits across the bot + meeting service
 │   ├── RAILWAY-DEPLOYMENT.md          Deploy runbook (Railway + Neon setup, key provisioning)
-│   └── DEPLOYMENT-HISTORY.md          Design decisions + lessons learned
+│   ├── DEPLOYMENT-HISTORY.md          Design decisions, lessons learned, release log
+│   └── SECURITY-REVIEW-2026-07-13.md  Security review + what it changed
 │
-├── services/                          HTTP source-of-truth services (each in its own folder)
-│   ├── team-tracking/                 Directory service
+├── services/                          HTTP services (each in its own folder)
+│   ├── team-tracking/                 Directory service — port 8000, own Postgres
 │   │   ├── README.md                  Overview + quick start
 │   │   ├── src/                       FastAPI + SQLAlchemy Core
 │   │   ├── contracts/                 Pydantic types + Protocols (framework-free boundary)
@@ -103,7 +114,11 @@ UTMIST-Prototypes/
 │   │   ├── Dockerfile, railway.json   Production image + Railway config
 │   │   └── docs/                      API.md, ARCHITECTURE.md, DEPLOYMENT.md, CONTRIBUTING.md
 │   │
-│   └── documentation-system/          Catalog service (same shape as team-tracking)
+│   ├── documentation-system/          Catalog service — 8001, own Postgres (same shape)
+│   ├── verification/                  Email one-time codes — 8003, own Postgres
+│   ├── llm/                           Bedrock /chat proxy — 8002, NO database
+│   └── meeting/                       Live meeting transcription — 8004, NO database,
+│                                       stateful (in-memory sessions)
 │
 ├── packages/
 │   └── auth/                          platform_auth — shared API-key auth lib (argon2 hashing,
@@ -120,11 +135,14 @@ UTMIST-Prototypes/
 │   └── provision-directory-key.sh     Mint + wire scoped API keys per environment
 │
 └── .github/workflows/
-    ├── ci.yml                         Tests + lint + Docker builds on every PR
-    └── main-source-guard.yml          Enforces "PRs to main come from staging"
+    ├── ci.yml                         Tests + lint + Docker builds on every PR (9 jobs)
+    ├── main-source-guard.yml          Enforces "PRs to main come from staging"
+    ├── pr-zone-check.yml              Warns on PRs spanning multiple CODEOWNERS zones
+    ├── discord-pr-notify.yml          Posts to Discord when a PR needs review
+    └── blocked-ready-automation.yml   Syncs blocked/ready issue labels
 ```
 
-Each service is self-contained: its own database, its own tests, its own docs. Dependencies are managed as one uv workspace rooted at this repo's `pyproject.toml`/`uv.lock`, and team-tracking and documentation-system now share one leaf, `packages/auth` (`platform_auth`), for API-key auth — a shared *library* dependency, not a dependency between the two services, which remain independent of each other. Add a new source-of-truth service by dropping it in `services/` following the same shape.
+Each service is self-contained: its own tests, its own docs, and its own database *if it needs one* — `llm` and `meeting` deliberately have none. Dependencies are managed as one uv workspace rooted at this repo's `pyproject.toml`/`uv.lock`, and all five services share one leaf, `packages/auth` (`platform_auth`), for API-key auth — a shared *library* dependency, not a dependency between services, which remain independent of each other. Add a new service by dropping it in `services/` following the same shape (and adding its CI job in the same PR).
 
 ---
 
@@ -134,23 +152,28 @@ New here? Start with the **[developer onboarding guide](docs/DEVELOPMENT.md)** �
 
 Nothing to bootstrap at the root — stand up only what you need:
 
-- **Directory API** — [`services/team-tracking/README.md` → Quick start](services/team-tracking/README.md#quick-start). Port **8000**.
-- **Catalog API** — [`services/documentation-system/README.md` → Quick start](services/documentation-system/README.md#quick-start). Port **8001**; its Postgres on **5434** (chosen to coexist with team-tracking's dev Postgres on 5433).
+- **Directory API** — [`services/team-tracking/README.md` → Quick start](services/team-tracking/README.md#quick-start). Port **8000**, Postgres **5433**.
+- **Catalog API** — [`services/documentation-system/README.md` → Quick start](services/documentation-system/README.md#quick-start). Port **8001**, Postgres **5434**.
+- **LLM API** — [`services/llm/README.md`](services/llm/README.md). Port **8002**, no database, no Docker.
+- **Verification API** — [`services/verification/README.md`](services/verification/README.md). Port **8003**, Postgres **5434**. Defaults to `EMAIL_BACKEND=fake`, so no mail credentials are needed locally.
+- **Meeting API** — [`services/meeting/README.md`](services/meeting/README.md). Port **8004**, no database, no Docker.
 - **Discord bot** — [`discord-bot/README.md`](discord-bot/README.md). Two modes:
   - `npm start` — real Discord surface (needs a bot token).
-  - `npm run dev:web` — browser-based playground on `http://localhost:3001`, no Discord token needed. Orchestrates its own scratch team-tracking + ephemeral DB, so it's fully self-contained for hacking on commands.
+  - `npm run dev:web` — browser-based playground on `http://localhost:3001`, no Discord token needed. Orchestrates its own scratch team-tracking + ephemeral DB, so it's fully self-contained for hacking on commands. Note that `/record` has no playground equivalent — voice capture needs the real Discord surface.
 
-For catalog-with-real-ownership-validation, run team-tracking first and point the catalog's `DIRECTORY_*` config at it.
+> ⚠️ **documentation-system and verification both bind host port 5434** for their dev Postgres, so they can't run locally at the same time as configured. Remap one (`-p 5435:5432`) and update its `DATABASE_URL`. Deployments are unaffected — each has its own Neon project.
+
+For catalog-with-real-ownership-validation, run team-tracking first and point the catalog's `DIRECTORY_*` config at it. For `/record`, start `llm` before `meeting` — `meeting` calls it for minutes and refuses to boot without `LLM_BASE_URL` outside `local`.
 
 ---
 
 ## Working conventions
 
-Both APIs are built the same way on purpose — learning one gives you 80% of the other:
+All five services are built the same way on purpose — learning one gives you 80% of the others. (`llm` and `meeting` follow every convention below *except* the storage/migration ones: they own no database.)
 
 - **`contracts/` Protocol boundary.** Each service has a `contracts/` package of Pydantic domain types plus `Protocol` interfaces. Application code depends on the Protocols, never on a concrete implementation.
 - **Swappable storage adapters.** `InMemoryStorageAdapter` for fast tests, `PostgresStorageAdapter` for real runs — both satisfy the same Protocol. Tests use in-memory; a small integration test suite gates the Postgres adapter too.
-- **Scoped API-key auth.** Every request carries `X-API-Key`. Keys are argon2-hashed in the DB with a set of per-resource scopes (`people:read`, `teams:write`, etc.). This machinery is implemented once in the shared [`packages/auth`](packages/auth) (`platform_auth`) library and consumed by each service through a thin shim (`src/api/auth.py`, `hashing.py`, `middleware.py`) that binds its own key prefix and config.
+- **Scoped API-key auth.** Every request carries `X-API-Key`. Keys are argon2-hashed with a set of per-resource scopes (`people:read`, `teams:write`, `chat`, `meetings`, etc.). This machinery is implemented once in the shared [`packages/auth`](packages/auth) (`platform_auth`) library and consumed by all five services through a thin shim (`src/api/auth.py`, `hashing.py`, `middleware.py`) that binds its own key prefix and config. The three DB-backed services store keys in an `api_keys` table and mint them via a CLI; `llm` and `meeting` seed them from a `CONSUMER_KEYS` JSON env var instead, so rotating one there is a redeploy.
 - **Attested actor.** The `created_by`/`updated_by` on every audit field is the authenticated key's own name — a caller can't claim to be someone else.
 - **Per-request audit log.** Middleware emits one JSON line per request with the resolved actor, endpoint, status, and duration.
 - **Alembic migrations.** Schema changes are versioned; migrations run as Railway's `preDeployCommand` on every deploy.
@@ -171,7 +194,7 @@ Depending on what you're here to do:
 - [`docs/DEPLOYMENT-HISTORY.md`](docs/DEPLOYMENT-HISTORY.md) — why the platform is deployed the way it is, and the non-obvious lessons.
 
 **Building against the APIs**
-- [`services/team-tracking/docs/API.md`](services/team-tracking/docs/API.md) — all 23 endpoints with request/response shapes.
+- [`services/team-tracking/docs/API.md`](services/team-tracking/docs/API.md) — all 26 endpoints with request/response shapes.
 - [`services/documentation-system/docs/API.md`](services/documentation-system/docs/API.md) — ingest, retrieve, and update the catalog.
 
 **Contributing code**

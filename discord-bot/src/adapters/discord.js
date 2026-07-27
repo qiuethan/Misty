@@ -121,29 +121,35 @@ export function stripLeadingMention(content, botId) {
   return trimmed;
 }
 
-// Chronological array of fetched messages -> neutral /chat messages array.
-// bot -> assistant, everyone else -> user; strip a leading mention from user
-// turns; drop empties; collapse consecutive same-role turns (join with \n);
-// drop leading assistant turns. Bedrock Converse needs strict user/assistant
-// alternation starting with a user turn.
-export function threadHistoryToMessages(fetched, botId) {
-  const mapped = fetched
-    .map((m) => {
-      const role = m.author?.id === botId ? 'assistant' : 'user';
-      const raw = m.content ?? '';
-      const content = role === 'user' ? stripLeadingMention(raw, botId) : raw;
-      return { role, content: content.trim() };
-    })
-    .filter((m) => m.content.length > 0);
+// Nickname when the member is resolved, else the global/user name — the label a
+// human would recognize, and the fallback when the directory can't identify them.
+function authorLabel(message) {
+  return message.member?.displayName ?? message.author?.globalName ?? message.author?.username ?? '';
+}
 
-  const collapsed = [];
-  for (const m of mapped) {
-    const last = collapsed[collapsed.length - 1];
-    if (last && last.role === m.role) last.content += `\n${m.content}`;
-    else collapsed.push({ ...m });
-  }
-  while (collapsed.length && collapsed[0].role === 'assistant') collapsed.shift();
-  return collapsed;
+// Chronological array of fetched messages -> neutral turns carrying author
+// metadata. bot -> assistant, everyone else -> user; strip a leading mention
+// from user turns; drop empties; drop leading assistant turns.
+//
+// Same-role turns are deliberately NOT collapsed here: adjacent user messages
+// can come from different people, and each needs its own identity tag. The
+// service merges them once they're rendered.
+export function threadHistoryToTurns(fetched, botId) {
+  return fetched
+    .map((m) => {
+      const isBot = m.author?.id === botId;
+      const raw = m.content ?? '';
+      const text = (isBot ? raw : stripLeadingMention(raw, botId)).trim();
+      if (isBot) return { role: 'assistant', text };
+      return { role: 'user', text, authorId: m.author?.id, authorName: authorLabel(m) };
+    })
+    .filter((t) => t.text.length > 0)
+    .reduce((turns, t) => {
+      // Leading assistant turns carry no question to answer.
+      if (!turns.length && t.role === 'assistant') return turns;
+      turns.push(t);
+      return turns;
+    }, []);
 }
 
 export function chunkForDiscord(text) {
@@ -159,7 +165,7 @@ export function chunkForDiscord(text) {
   return chunks;
 }
 
-const HISTORY_LIMIT = 20;
+const HISTORY_LIMIT = 100; // Discord's messages.fetch maximum; no pagination
 const LINK_PROMPT = 'You need to link your account first. Run `/link` to identify yourself, then try again.';
 const VERIFY_UNAVAILABLE = "I can't verify you right now — the directory is unavailable. Please try again shortly.";
 const LLM_UNAVAILABLE = "I'm having trouble reaching the assistant right now — please try again shortly.";
@@ -189,7 +195,7 @@ export async function handleMention(message, { appContext, botId }) {
   }
 
   let target;
-  let messages;
+  let turns;
   try {
     if (message.channel.isThread()) {
       target = message.channel;
@@ -197,22 +203,27 @@ export async function handleMention(message, { appContext, botId }) {
       const ordered = [...fetched.values()].sort(
         (a, b) => (a.createdTimestamp ?? 0) - (b.createdTimestamp ?? 0),
       );
-      messages = threadHistoryToMessages(ordered, botId);
+      turns = threadHistoryToTurns(ordered, botId);
     } else {
       target = await message.startThread({ name: question.slice(0, 100) });
-      messages = [{ role: 'user', content: question }];
+      turns = [{
+        role: 'user',
+        text: question,
+        authorId: message.author?.id,
+        authorName: authorLabel(message),
+      }];
     }
   } catch (e) {
     console.error('thread create/fetch failed:', e.message);
     await message.reply(THREAD_UNAVAILABLE).catch(() => {});
     return;
   }
-  if (!messages.length) return;
+  if (!turns.length) return;
 
   await target.sendTyping().catch(() => {});
   let content;
   try {
-    ({ content } = await appContext.helperService.answer({ messages, principal }));
+    ({ content } = await appContext.helperService.answer({ turns, principal }));
   } catch (err) {
     console.error('helper answer failed:', err.message);
     await target.send(LLM_UNAVAILABLE).catch(() => {});
@@ -227,27 +238,26 @@ export async function handleMention(message, { appContext, botId }) {
   }
 }
 
-// Base64-decodes the report produced by the meeting service into Discord
-// attachments and posts them to the meeting's text channel. Never throws —
-// meetingSurface.stop() awaits this and a poster failure must not prevent the
-// session from being torn down. If the full post (including audio) fails —
-// e.g. the audio is too large for Discord's attachment limit — fall back to
-// posting the PDF alone.
+// Base64-decodes the report produced by the meeting service into a Discord
+// attachment and posts it to the meeting's text channel, @-mentioning whoever
+// started the recording so they're notified the minutes are ready. Never
+// throws — meetingSurface.stop() awaits this and a poster failure must not
+// prevent the session from being torn down.
+//
+// Only the minutes PDF is posted. The meeting service no longer returns mixed
+// audio at all (see services/meeting's StopResponse), so there's no second
+// attachment and no oversized-payload fallback to make.
 export function makeAttachmentPoster() {
-  return async ({ channel, report }) => {
+  return async ({ channel, report, requesterId }) => {
     try {
       const pdfFile = new AttachmentBuilder(Buffer.from(report.pdf_b64, 'base64'), { name: 'meeting-minutes.pdf' });
-      const files = [pdfFile];
-      if (report.audio_b64) {
-        files.push(new AttachmentBuilder(Buffer.from(report.audio_b64, 'base64'), { name: 'meeting-audio.mp3' }));
-      }
-      try {
-        await channel.send({ content: '📄 Meeting minutes', files });
-      } catch {
-        await channel
-          .send({ content: '📄 Meeting minutes (audio too large to attach)', files: [pdfFile] })
-          .catch(() => {});
-      }
+      // No requesterId (e.g. a recording started before this field existed, or
+      // any path that couldn't resolve one) => post unaddressed rather than
+      // dropping the minutes.
+      const content = requesterId ? `<@${requesterId}> 📄 Meeting minutes` : '📄 Meeting minutes';
+      await channel.send({ content, files: [pdfFile] }).catch((e) => {
+        console.error('meeting minutes post failed:', e.message);
+      });
     } catch (e) {
       console.error('meeting attachment poster failed:', e.message);
     }
@@ -308,6 +318,9 @@ async function handleRecordInteraction(interaction, appContext, recordCommand) {
         guildId: interaction.guildId,
         voiceChannel,
         textChannel: interaction.channel,
+        // Remembered for the whole session so the minutes @-mention whoever
+        // started the recording, even when auto-stop ends it.
+        requesterId: interaction.user.id,
       });
     } catch (e) {
       console.error('meetingSurface.start failed:', e.message);

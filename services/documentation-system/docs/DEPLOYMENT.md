@@ -55,12 +55,25 @@ Schema is managed by Alembic (`migrations/`). Alembic reads the same
 `DATABASE_URL` the app uses — `migrations/env.py` pulls it from
 `src.config.get_settings()`, one source of truth.
 
-Two migrations ship today:
+Four migrations ship today:
 
 - **`001_initial_schema`** — creates `sources`, `docs`, `doc_tags`, `api_keys`
   and their indexes.
 - **`002_seed_sources`** — seeds the eight built-in sources (`web`, `github`,
   `gdrive`, `gdocs`, `gsheets`, `gslides`, `notion`, `youtube`).
+- **`003_doc_grants`** — adds the `doc_grants` table behind per-doc visibility,
+  with the grantee-shape CHECK and both uniqueness constraints (including the
+  partial index that catches duplicate `org` grants, which the plain unique
+  constraint can't because `grantee_id` is NULL there).
+- **`004_docs_url_unique_active`** — enforces the dedup invariant at the DB level
+  with a partial unique index on `url_normalized WHERE active`.
+
+> **`004` is a data migration, not just a schema one.** It first collapses any
+> pre-existing duplicate active rows for the same `url_normalized` (keeping the
+> earliest by `created_at`, id as tiebreak) and only *then* creates the index —
+> creating the index first would fail on dirty data. Expect it to modify rows,
+> and take a Neon branch snapshot before running it on an environment whose data
+> you care about.
 
 **On Railway,** migrations run automatically via `railway.json`'s
 `preDeployCommand: "alembic upgrade head"` before every deploy — idempotent,

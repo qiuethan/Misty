@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   startsWithBotMention,
   stripLeadingMention,
-  threadHistoryToMessages,
+  threadHistoryToTurns,
   chunkForDiscord,
   handleMention,
   wireDiscordClient,
@@ -26,29 +26,32 @@ test('stripLeadingMention removes the leading ping and following whitespace', ()
   assert.equal(stripLeadingMention('no mention here', BOT), 'no mention here');
 });
 
-test('threadHistoryToMessages maps roles, collapses same-role, drops leading assistant', () => {
+test('threadHistoryToTurns maps roles, keeps speakers separate, drops leading assistant', () => {
   const fetched = [
-    { author: { id: BOT }, content: 'Hi! How can I help?' }, // leading assistant → dropped
-    { author: { id: '1' }, content: `<@${BOT}> question one` }, // user (mention stripped)
-    { author: { id: '2' }, content: 'and also this' }, // another human → same role, collapse
-    { author: { id: BOT }, content: 'answer part 1' },
-    { author: { id: BOT }, content: 'answer part 2' }, // collapse assistant
-    { author: { id: '1' }, content: `<@${BOT}> follow up` },
+    { author: { id: BOT, username: 'misty' }, content: 'Hi! How can I help?' }, // leading assistant → dropped
+    { author: { id: '1', username: 'alexx' }, content: `<@${BOT}> question one` }, // mention stripped
+    { author: { id: '2', username: 'bobl' }, content: 'and also this' }, // different human → own turn
+    { author: { id: BOT, username: 'misty' }, content: 'answer part 1' },
+    { author: { id: BOT, username: 'misty' }, content: 'answer part 2' },
+    { author: { id: '1', username: 'alexx' }, member: { displayName: 'Alex Q' }, content: `<@${BOT}> follow up` },
   ];
-  const msgs = threadHistoryToMessages(fetched, BOT);
-  assert.deepEqual(msgs, [
-    { role: 'user', content: 'question one\nand also this' },
-    { role: 'assistant', content: 'answer part 1\nanswer part 2' },
-    { role: 'user', content: 'follow up' },
+  assert.deepEqual(threadHistoryToTurns(fetched, BOT), [
+    { role: 'user', text: 'question one', authorId: '1', authorName: 'alexx' },
+    { role: 'user', text: 'and also this', authorId: '2', authorName: 'bobl' },
+    { role: 'assistant', text: 'answer part 1' },
+    { role: 'assistant', text: 'answer part 2' },
+    { role: 'user', text: 'follow up', authorId: '1', authorName: 'Alex Q' }, // nickname wins
   ]);
 });
 
-test('threadHistoryToMessages drops empty turns', () => {
+test('threadHistoryToTurns drops empty turns', () => {
   const fetched = [
-    { author: { id: '1' }, content: `<@${BOT}>` }, // only a ping → empty after strip → dropped
-    { author: { id: '1' }, content: 'real question' },
+    { author: { id: '1', username: 'alexx' }, content: `<@${BOT}>` }, // only a ping → empty → dropped
+    { author: { id: '1', username: 'alexx' }, content: 'real question' },
   ];
-  assert.deepEqual(threadHistoryToMessages(fetched, BOT), [{ role: 'user', content: 'real question' }]);
+  assert.deepEqual(threadHistoryToTurns(fetched, BOT), [
+    { role: 'user', text: 'real question', authorId: '1', authorName: 'alexx' },
+  ]);
 });
 
 test('chunkForDiscord splits on newline boundaries under 2000 chars', () => {
@@ -74,20 +77,22 @@ const BOT_ID = '999';
 // Fake channel/thread: records sent messages + typing; can be a thread or not.
 function fakeChannel({ isThread = false, history = [] } = {}) {
   const sent = [];
+  const fetched = [];
   return {
     sent,
+    fetched, // args of each messages.fetch call
     typing: 0,
     isThread: () => isThread,
     async send(content) { sent.push(content); },
     async sendTyping() { this.typing += 1; },
-    messages: { fetch: async () => ({ values: () => history }) },
+    messages: { fetch: async (opts) => { fetched.push(opts); return { values: () => history }; } },
   };
 }
 
-function fakeMessage({ content, authorId = '1', channel, thread }) {
+function fakeMessage({ content, authorId = '1', authorName = 'alexx', channel, thread }) {
   return {
     content,
-    author: { id: authorId, bot: false },
+    author: { id: authorId, bot: false, username: authorName },
     channel,
     reply: async (c) => { (channel.replies ??= []).push(c); },
     startThread: async () => thread,
@@ -114,16 +119,47 @@ test('handleMention in a channel: opens a thread and posts the answer', async ()
 
 test('handleMention in a thread: replays history and posts in the thread', async () => {
   let seen;
-  const answer = async ({ messages }) => { seen = messages; return { content: 'reply' }; };
+  const answer = async ({ turns }) => { seen = turns; return { content: 'reply' }; };
   const history = [
-    { author: { id: BOT_ID }, content: 'earlier answer' },
-    { author: { id: '1' }, content: `<@${BOT_ID}> follow up` },
+    { author: { id: BOT_ID, username: 'misty' }, content: 'earlier answer' },
+    { author: { id: '1', username: 'alexx' }, content: `<@${BOT_ID}> follow up` },
   ];
   const thread = fakeChannel({ isThread: true, history });
   const message = fakeMessage({ content: `<@${BOT_ID}> follow up`, channel: thread });
   await handleMention(message, { appContext: ctx({ answer }), botId: BOT_ID });
   assert.deepEqual(thread.sent, ['reply']);
-  assert.deepEqual(seen, [{ role: 'assistant', content: 'earlier answer' }, { role: 'user', content: 'follow up' }].filter((m) => m.role === 'user'));
+  assert.deepEqual(seen, [{ role: 'user', text: 'follow up', authorId: '1', authorName: 'alexx' }]);
+});
+
+test('handleMention in a thread: every speaker reaches the service separately attributed', async () => {
+  let seen;
+  const answer = async ({ turns }) => { seen = turns; return { content: 'reply' }; };
+  const history = [
+    { author: { id: '1', username: 'alexx' }, content: `<@${BOT_ID}> how do I get repo access?` },
+    { author: { id: BOT_ID, username: 'misty' }, content: 'Ask Infra.' },
+    { author: { id: '2', username: 'bobl' }, content: 'seconded' },
+    { author: { id: '3', username: 'cara' }, content: `<@${BOT_ID}> what about mine?` },
+  ];
+  const thread = fakeChannel({ isThread: true, history });
+  const message = fakeMessage({ content: `<@${BOT_ID}> what about mine?`, authorId: '3', authorName: 'cara', channel: thread });
+  await handleMention(message, { appContext: ctx({ answer }), botId: BOT_ID });
+  assert.deepEqual(thread.fetched, [{ limit: 100 }], 'fetches Discord\'s single-call maximum');
+  assert.deepEqual(seen.map((t) => [t.role, t.authorId]), [
+    ['user', '1'],
+    ['assistant', undefined],
+    ['user', '2'],
+    ['user', '3'],
+  ]);
+});
+
+test('handleMention in a channel: the opening turn carries the asker identity', async () => {
+  let seen;
+  const answer = async ({ turns }) => { seen = turns; return { content: 'the answer' }; };
+  const thread = fakeChannel({ isThread: true });
+  const channel = fakeChannel({ isThread: false });
+  const message = fakeMessage({ content: `<@${BOT_ID}> how do I link?`, authorId: '7', authorName: 'dee', channel, thread });
+  await handleMention(message, { appContext: ctx({ answer }), botId: BOT_ID });
+  assert.deepEqual(seen, [{ role: 'user', text: 'how do I link?', authorId: '7', authorName: 'dee' }]);
 });
 
 test('handleMention: unlinked author gets the link prompt, no thread', async () => {

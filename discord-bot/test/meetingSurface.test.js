@@ -30,7 +30,7 @@ function makeFakes({ stopImpl, posterImpl } = {}) {
       callOrder.push('client.stop');
       stopCalls.push(sessionId);
       if (stopImpl) return stopImpl(sessionId);
-      return { transcript: 't', minutes: 'm', pdf_b64: 'p', audio_b64: 'a' };
+      return { transcript: 't', minutes: 'm', pdf_b64: 'p' };
     },
   };
 
@@ -116,7 +116,7 @@ test('stop calls recorder.stop, stream.close, meetingClient.stop, then poster wi
 
   const voiceChannel = { id: 'vc1' };
   const textChannel = { id: 'tc1' };
-  surface.start({ guildId: 'g1', voiceChannel, textChannel });
+  surface.start({ guildId: 'g1', voiceChannel, textChannel, requesterId: 'u-99' });
 
   const result = await surface.stop('g1');
 
@@ -126,11 +126,14 @@ test('stop calls recorder.stop, stream.close, meetingClient.stop, then poster wi
   assert.deepEqual(fakes.stopCalls, ['sess-1']);
   assert.equal(fakes.posterCalls.length, 1);
   assert.equal(fakes.posterCalls[0].channel, textChannel);
+  // Whoever ran `/record start` is carried through the session so the poster
+  // can @-mention them -- including when the stop came from auto-stop rather
+  // than from a `/record stop` interaction.
+  assert.equal(fakes.posterCalls[0].requesterId, 'u-99');
   assert.deepEqual(fakes.posterCalls[0].report, {
     transcript: 't',
     minutes: 'm',
     pdf_b64: 'p',
-    audio_b64: 'a',
   });
   // Critical ordering: meetingClient.stop (finalize server-side) MUST happen
   // before stream.close() -- closing the WS first races the session into

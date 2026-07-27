@@ -142,7 +142,8 @@ changes. So a doc ingested during a directory outage heals itself on the next re
 
 ## Data model
 
-Four tables (`src/storage/schema.py`, created by migration `001`, seeded by `002`):
+Five tables (`src/storage/schema.py`; `001` creates the first four, `002` seeds sources,
+`003` adds `doc_grants`, `004` hardens dedup):
 
 ### `sources`
 
@@ -156,6 +157,34 @@ The catalog itself. Key columns: `url`, `url_normalized` (indexed dedup key), `t
 `source_id` (FK → `sources.id`, defaults `'web'`), `description`, the two
 `owning_*_id` / `owning_*_label` pairs, `content_snapshot`, `fetched_at`, and `active`
 (the soft-delete flag). Indexed on `url_normalized`, both owner ids, and `source_id`.
+
+Migration `004` adds a **partial unique index** on `url_normalized WHERE active`, so
+dedup is enforced by the database rather than only by ingest's read-then-write. The
+`WHERE active` qualifier is what makes it workable: a soft-deleted doc doesn't block
+re-cataloguing the same URL later.
+
+### `doc_grants`
+
+Who may see a doc, beyond its owners (migration `003`). One row per grant:
+`doc_id` (FK → `docs.id`, `ON DELETE CASCADE`), `grantee_type` (`person` / `team` /
+`org`), `grantee_id` (UUID, **null for `org`**), plus `created_at` / `created_by`.
+
+Three constraints carry the invariants, and the third is the non-obvious one:
+
+- `ck_doc_grants_grantee_shape` — a CHECK enforcing that `org` grants have a null
+  `grantee_id` while `person`/`team` grants have a non-null one. The same rule is
+  validated in `contracts/types.py`, so a bad shape is a 422 long before it reaches the DB;
+  the CHECK is the backstop.
+- `uq_doc_grants_grantee` — unique on (`doc_id`, `grantee_type`, `grantee_id`), which is
+  what makes `add_grant` idempotent.
+- `uq_doc_grants_org` — a *partial* unique index on `doc_id WHERE grantee_type = 'org'`.
+  It exists because the constraint above **cannot** catch duplicate org grants: their
+  `grantee_id` is NULL, and in SQL `NULL != NULL`, so two identical org rows don't collide.
+  Without this index, "share with the org" twice would insert two rows.
+
+Grantee ids are **not** foreign keys — the people and teams they point at live in
+team-tracking's database, which this service never touches directly. Labels are resolved
+over HTTP at the API layer and never stored on the grant.
 
 ### `doc_tags`
 
@@ -204,6 +233,65 @@ unchanged by this move:
 - **`middleware.py`** (shim) — `AuditLogMiddleware` emits one structured JSON log line per
   request (method, path, status, duration, resolved key name, remote IP), reading the
   `request.state.auth_key` that auth stamped. It never fails the request.
+
+## Visibility: the second authorization layer
+
+Scopes answer "may this key call this endpoint." Visibility answers "which *rows* may it
+see." They compose: a request must pass both.
+
+**One definition, two implementations.** `contracts/visibility.py` holds `doc_visible()`
+— a pure function over (actor context, owning ids, grants). The in-memory adapter calls
+it directly; the Postgres adapter compiles the *same* rule into SQL so filtering happens
+in the database rather than in Python over a full table scan. That's a genuine duplication
+of logic, and it's held in lockstep by parity tests (`tests/test_visibility.py` plus the
+adapter parity suite). **If you change the rule, change both and extend those tests** —
+this is the file where a divergence becomes a silent data leak.
+
+**The actor context** is one of three things (`src/api/authz.py` builds it):
+
+| Context | When | Meaning |
+|---|---|---|
+| `SEE_ALL` | a `docs:read:all`/`admin` key with no `X-On-Behalf-Of`; or *any* write key with no `X-On-Behalf-Of` | every doc |
+| `DENY` | a plain `docs:read` key with no `X-On-Behalf-Of` | **no docs at all** |
+| `Actor(person_id, team_ids)` | `X-On-Behalf-Of: <uuid>` present | that person's view |
+
+`DENY` is the design's sharpest edge and it's deliberate: a bare `docs:read` key carries
+no identity, so it has no principled basis for seeing anything. Consumers are expected to
+say *who* they're acting for. The read path additionally **requires** a read scope even
+when acting on behalf of someone — least privilege, so a write-only key can't read through
+the on-behalf-of door.
+
+An `Actor` sees a doc if they own it personally, are on the owning team, or a grant
+matches (`org` / their `person` id / one of their teams).
+
+**Team ids are resolved live** from the directory (`get_active_team_ids`). If the
+directory is unreachable the set is treated as **empty** rather than failing the request —
+a partial fail-closed. Personally-owned and `org`-granted docs still resolve; team-granted
+ones are withheld. Withholding is the safe direction: an outage can hide a doc, never
+expose one.
+
+**Invisible reads 404, they don't 403.** `get_visible_doc_or_404` is applied on read *and*
+write routes alike, so a caller can't probe for the existence of a doc they may not see by
+watching status codes.
+
+## SSRF protection in the web fetcher
+
+Ingest fetches arbitrary caller-supplied URLs, which is a textbook SSRF sink: without a
+guard, `POST /docs` becomes a proxy for reaching Railway's private network or a cloud
+metadata endpoint.
+
+The guard (`src/fetch/web.py`) resolves the hostname first and **pins the connection to
+the validated IP**, so httpx never re-resolves the name — closing the DNS-rebinding window
+between "we checked the name" and "we opened the socket". It rejects private, loopback,
+link-local, and **carrier-grade-NAT** (`100.64.0.0/10`) ranges — that last one matters
+because Python's `ipaddress.is_private` doesn't cover RFC 6598. Auto-redirects are
+disabled: each hop is validated and followed manually up to a cap, so a public URL that
+302s to `169.254.169.254` is still blocked. Resolver failures are errors, not passes, and
+malformed URLs (or a malformed redirect `Location`) surface as ordinary `FetchError`s
+rather than 500s.
+
+Note what this is *not*: there's no hostname allowlist. Any public URL is fetchable by
+design — the catalog's job is cataloguing the open web.
 
 ## Wiring: `src/api/deps.py`
 

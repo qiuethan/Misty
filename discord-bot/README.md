@@ -186,12 +186,22 @@ and skips them.
 - `/my-teams` (linked) — list your active memberships.
 - `/doc <add|list|show|remove>` (linked; `remove` is admin) — catalog and look up UTMIST documents and links.
 
-- `/record start` (linked) — joins your current voice channel and starts
-  recording the meeting. `/record status` (linked) — shows elapsed recording
-  time. `/record stop` (linked) — ends the recording and, within roughly
-  30–60s, posts a `meeting-minutes.pdf` (summary, decisions, action items,
-  full transcript) and `meeting-audio.mp3` back into the text channel. No audio
-  or transcript is persisted — temp files are cleaned up after posting.
+- `/record start` (**linked**) — joins your current voice channel and starts
+  recording the meeting. `/record status` (**public**) — shows elapsed recording
+  time. `/record stop` (**public**) — ends the recording and, within roughly
+  30–60s, posts a branded `meeting-minutes.pdf` (LLM-generated title, summary,
+  decisions, action items, full transcript) back into the text channel,
+  @-mentioning whoever started the recording. Recording also stops
+  **automatically** once everyone leaves the voice channel (after a short grace
+  period), with a 4h hard backstop. The meeting service persists nothing: it
+  streams audio straight to AWS and never writes audio or transcript to disk.
+  The posted PDF does contain the full transcript, and that lives in Discord
+  like any other attachment.
+
+  > `start` is gated at `'linked'` because it consumes a voice connection and a
+  > live session; `status`/`stop` are deliberately `'public'` so a directory
+  > outage can't strand a running recording. See
+  > [`docs/MEETING-RECORDING.md` → Authorization](../docs/MEETING-RECORDING.md).
 
 Every command is on the **stable** channel (`beta = false`), so they all register
 globally in every server the bot is in. There are currently no beta commands.
@@ -206,8 +216,8 @@ globally in every server the bot is in. There are currently no beta commands.
 
 As of v2, recording is split across two services: the bot only joins voice and
 streams raw Opus audio over a WebSocket to the separate `meeting` service,
-which owns decoding/mixing (ffmpeg), transcription (AWS Transcribe), minutes
-generation, and posts the results back. See
+which owns Opus decoding, transcription (AWS Transcribe), and minutes
+generation, and returns the resulting PDF for the bot to post. See
 [`docs/MEETING-RECORDING.md`](../docs/MEETING-RECORDING.md) for the full
 architecture.
 
