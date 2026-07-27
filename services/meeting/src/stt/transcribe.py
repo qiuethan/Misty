@@ -152,7 +152,26 @@ class _StreamingTranscription:
         self._closing = True
         await self._await_task()
         if self._queue is not None:
-            self._queue.put_nowait(None)  # sentinel: no more audio
+            # Enqueue the sentinel through the SAME call_soon_threadsafe path
+            # send() uses. send() defers its enqueue to the next loop iteration,
+            # so a direct put_nowait() here would overtake audio already handed
+            # to send() but not yet queued -- the pump would end the stream and
+            # that audio would land in a queue nobody reads. In production that
+            # is the end of every meeting: the ingest worker thread delivers the
+            # last frames and POST /stop arrives right behind them, so the
+            # transcript cuts off before the last thing anyone said.
+            if self._loop is not None:
+                flushed = self._loop.create_future()
+
+                def _enqueue_sentinel() -> None:
+                    self._queue.put_nowait(None)
+                    if not flushed.done():
+                        flushed.set_result(None)
+
+                self._loop.call_soon_threadsafe(_enqueue_sentinel)
+                await flushed
+            else:
+                self._queue.put_nowait(None)
         if self._task is not None:
             try:
                 await self._task

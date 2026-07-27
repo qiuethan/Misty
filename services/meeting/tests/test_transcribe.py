@@ -530,3 +530,44 @@ def test_aclose_gives_up_on_a_stream_that_never_closes():
         ]
 
     asyncio.run(scenario())
+
+
+def test_audio_sent_just_before_close_is_not_jumped_by_the_sentinel():
+    """`send()` hands audio to the loop via `call_soon_threadsafe`, so the
+    enqueue is DEFERRED. If `aclose()` enqueues its sentinel directly it
+    overtakes that pending audio: the pump ends the stream, and the audio then
+    lands in a queue nobody reads.
+
+    In production this is the end of every meeting -- the WS ingest worker
+    thread delivers the last frames and `POST /stop` arrives right behind them
+    -- so the symptom is a transcript that cuts off before the last thing
+    anyone said."""
+    import threading
+
+    async def scenario():
+        client = _LiveClient()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
+        stream.send(b"early" * 128)
+        await drain(stream)
+
+        # Final frames arrive from the ingest worker thread...
+        handed_off = threading.Event()
+
+        def worker():
+            stream.send(b"LAST1" * 128)
+            stream.send(b"LAST2" * 128)
+            handed_off.set()
+
+        threading.Thread(target=worker).start()
+        handed_off.wait(5)
+
+        # ...and /stop lands immediately behind them.
+        await stream.aclose()
+
+        delivered = [bytes(c)[:5] for st in client.streams for c in st.input_stream.sent_chunks]
+        assert b"LAST1" in delivered and b"LAST2" in delivered, (
+            f"the end of the meeting was dropped; AWS only got {delivered}"
+        )
+
+    asyncio.run(scenario())
