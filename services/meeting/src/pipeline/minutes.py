@@ -22,7 +22,28 @@ _MAX_SALVAGE_ATTEMPTS = 64
 # catch a JSON fragment wrapped in a fence or introduced by a lead-in sentence
 # ("Here are the minutes:\n{\"title\"...") without misfiring on ordinary prose,
 # which rarely contains `{"`.
-_JSON_ISH = re.compile(r'[\{\[]\s*"')
+# How much lead-in prose may precede the object in a "Here are the minutes:\n{...}"
+# style response before we stop believing it is a JSON response at all.
+_MAX_JSON_LEAD_IN = 80
+
+
+def _looks_like_json_response(text: str) -> bool:
+    """Is this the model ATTEMPTING a JSON response, as opposed to prose?
+
+    Matters because the two are handled oppositely: an unparseable JSON attempt
+    must become a placeholder (never a raw fragment in the PDF), while prose is
+    used as the summary verbatim. Searching for `{"` anywhere gets this wrong --
+    a meeting about prompts or schemas legitimately quotes JSON in its summary,
+    and that summary would be thrown away.
+
+    So: the candidate must START with a bracket, or be preceded only by a short
+    lead-in that reads like an introduction ("Here are the minutes:").
+    """
+    cand = _candidate(text).lstrip()
+    if cand.startswith(("{", "[")):
+        return True
+    head, brace, _ = cand.partition("{")
+    return bool(brace) and len(head) <= _MAX_JSON_LEAD_IN and head.strip().endswith(":")
 
 MINUTES_SYSTEM_PROMPT = (
     "You write concise meeting minutes for a student organization. Given a "
@@ -39,7 +60,13 @@ def _candidate(text: str) -> str:
     """The JSON-looking region of a model response, unwrapped from any fence."""
     t = (text or "").strip()
     fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", t, re.I)
-    return fenced.group(1).strip() if fenced else t
+    if fenced:
+        return fenced.group(1).strip()
+    # A TRUNCATED response never emits the closing fence, so also strip a
+    # dangling opener -- otherwise the fragment reads as prose and reaches the
+    # PDF raw, which is the whole thing we are trying to prevent.
+    opener = re.match(r"```[a-zA-Z]*[ \t]*\r?\n?", t)
+    return t[opener.end() :].strip() if opener else t
 
 
 def _salvage_truncated(cand: str):
@@ -65,6 +92,12 @@ def _salvage_truncated(cand: str):
     in_string = False
     escaped = False
     clean: list[tuple[int, str]] = []
+    # Checkpoints at ROOT depth -- the ones that yield the top-level object with
+    # complete fields. Tried in addition to the newest overall, so malformed
+    # nesting cannot exhaust the budget and bury a recoverable summary. Several
+    # are kept because a root-depth checkpoint lands on a KEY as often as a
+    # value, and a key alone never parses.
+    top_level: list[tuple[int, str]] = []
 
     for idx, ch in enumerate(cand):
         if in_string:
@@ -74,7 +107,10 @@ def _salvage_truncated(cand: str):
                 escaped = True
             elif ch == '"':
                 in_string = False
-                clean.append((idx + 1, "".join(reversed(stack))))
+                checkpoint = (idx + 1, "".join(reversed(stack)))
+                clean.append(checkpoint)
+                if len(stack) == 1:
+                    top_level.append(checkpoint)
             continue
 
         if ch == '"':
@@ -84,7 +120,10 @@ def _salvage_truncated(cand: str):
         elif ch in "}]":
             if stack:
                 stack.pop()
-            clean.append((idx + 1, "".join(reversed(stack))))
+            checkpoint = (idx + 1, "".join(reversed(stack)))
+            clean.append(checkpoint)
+            if len(stack) == 1:
+                top_level.append(checkpoint)
 
     def _parse(head: str, closers: str):
         try:
@@ -93,8 +132,13 @@ def _salvage_truncated(cand: str):
             return None
         return value if isinstance(value, dict) else None
 
+    attempts = list(reversed(clean[-_MAX_SALVAGE_ATTEMPTS:]))
+    for checkpoint in reversed(top_level[-_MAX_SALVAGE_ATTEMPTS:]):
+        if checkpoint not in attempts:
+            attempts.append(checkpoint)
+
     best = None
-    for cut, closers in reversed(clean[-_MAX_SALVAGE_ATTEMPTS:]):
+    for cut, closers in attempts:
         parsed = _parse(cand[:cut], closers)
         if parsed is None:
             continue
@@ -139,6 +183,18 @@ def _extract_json(text: str):
     return salvaged
 
 
+def _string_items(raw) -> list[str]:
+    """Keep only genuine strings. A salvaged nested object would otherwise be
+    rendered with str() -- putting a Python dict repr into the PDF as if it were
+    a real decision or action item."""
+    if not isinstance(raw, list):
+        return []
+    items = [x for x in raw if isinstance(x, str)]
+    if len(items) != len(raw):
+        _logger.warning("dropped %s non-string minutes list item(s)", len(raw) - len(items))
+    return items
+
+
 def summarize_minutes(transcript: str, llm_client, model=None) -> Minutes:
     try:
         content = llm_client.chat(
@@ -152,7 +208,7 @@ def summarize_minutes(transcript: str, llm_client, model=None) -> Minutes:
         return Minutes(
             summary="(minutes unavailable: LLM service error)", decisions=[], action_items=[]
         )
-    parsed = _extract_json(content)
+    parsed = _extract_json(content) if _looks_like_json_response(content) else None
     if not parsed:
         # The model wrote prose instead of JSON, or the response was too mangled
         # to salvage. Use it as the summary -- but never a raw JSON fragment,
@@ -162,8 +218,7 @@ def summarize_minutes(transcript: str, llm_client, model=None) -> Minutes:
         # Check the UNWRAPPED candidate plus a JSON shape signal: a truncated
         # response never closes its fence, so a bare startswith("{") misses
         # ```json blocks and "Here are the minutes:" lead-ins.
-        unwrapped = _candidate(fallback).lstrip()
-        if unwrapped.startswith(("{", "[")) or _JSON_ISH.search(fallback):
+        if _looks_like_json_response(fallback):
             _logger.warning(
                 "could not parse or salvage minutes JSON (%s chars); "
                 "returning a placeholder summary",
@@ -186,6 +241,6 @@ def summarize_minutes(transcript: str, llm_client, model=None) -> Minutes:
     return Minutes(
         title=str(raw_title).strip()[:120] if isinstance(raw_title, str) else "",
         summary=summary,
-        decisions=[str(x) for x in raw_decisions] if isinstance(raw_decisions, list) else [],
-        action_items=[str(x) for x in raw_action_items] if isinstance(raw_action_items, list) else [],
+        decisions=_string_items(raw_decisions),
+        action_items=_string_items(raw_action_items),
     )

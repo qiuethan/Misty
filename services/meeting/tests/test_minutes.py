@@ -192,3 +192,36 @@ def test_keeps_salvaged_fields_when_the_summary_never_arrived():
     # silently pretend the meeting had no decisions.
     assert "unavailable" in m.summary.lower()
     assert "{" not in m.summary
+
+
+def test_prose_that_merely_mentions_json_is_kept_as_the_summary():
+    """The raw-JSON guard must not fire on a meeting that *talks about* JSON.
+    This org's meetings are about prompts, schemas and APIs, so a summary
+    quoting `{"role":"assistant"}` is ordinary content, not a malformed
+    response -- replacing it with a placeholder loses a perfectly good summary."""
+    prose = (
+        'We compared {"role":"assistant"} and {"role":"user"} examples, '
+        "then agreed to ship Friday."
+    )
+    m = summarize_minutes("x", FakeLlm(prose))
+
+    assert m.summary == prose
+
+
+def test_cap_never_hides_the_last_recoverable_top_level_value():
+    """Attempts are capped to bound cost, but nested junk must not eat the whole
+    budget: a top-level `summary` that is plainly recoverable has to survive
+    however much malformed nesting follows it."""
+    payload = '{"summary":"s","action_items":[{' + ",".join(f'"k{i}"' for i in range(70))
+
+    m = summarize_minutes("x", FakeLlm(payload))
+
+    assert m.summary == "s"
+
+
+def test_non_string_list_entries_are_dropped_not_stringified():
+    """A salvaged nested object used to be rendered with `str()`, putting a
+    Python dict repr into the PDF as if it were a real action item."""
+    m = summarize_minutes("x", FakeLlm('{"summary":"x","decisions":[{"a":"b","c":"d'))
+
+    assert m.decisions == [], f"got a stringified object: {m.decisions}"
