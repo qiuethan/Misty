@@ -6,7 +6,7 @@ Feature owner: Misty #92. Related: [platform ARCHITECTURE](ARCHITECTURE.md), [`s
 
 ## What it does
 
-A **linked** member (identity resolved via the directory — see "Authorization" below) runs `/record start` in a Discord voice channel. The bot joins, and as people talk it streams their audio to the `meeting` service, which transcribes each speaker live into a rolling transcript. Recording ends on `/record stop` **or automatically when everyone leaves the voice channel** (the bot ends the meeting once no non-bot member remains). On stop the service turns the transcript into minutes (via the `llm` service), renders a PDF, mixes the audio, and hands it back; the bot posts the **PDF + audio** to the text channel. Nothing is persisted — the transcript lives in memory for the meeting and is discarded after the report is returned.
+A **linked** member (identity resolved via the directory — see "Authorization" below) runs `/record start` in a Discord voice channel. The bot joins, and as people talk it streams their audio to the `meeting` service, which transcribes each speaker live into a rolling transcript. Recording ends on `/record stop` **or automatically when everyone leaves the voice channel** (the bot ends the meeting once no non-bot member remains). On stop the service turns the transcript into minutes (via the `llm` service), renders a PDF, and hands it back; the bot posts the **PDF** to the text channel, @-mentioning whoever started the recording. Nothing is persisted — the transcript lives in memory for the meeting and is discarded after the report is returned.
 
 ## The boundary, and the one constraint that forces it
 
@@ -14,38 +14,38 @@ There is exactly one hard constraint, and it determines the whole design:
 
 > **Voice capture is physically bound to the bot.** `@discordjs/voice` joins and receives voice through the bot's own Discord gateway connection (`guild.voiceAdapterCreator`). Nothing outside the bot process can receive that audio.
 
-Everything *downstream* of capture — transcription, minutes, PDF, audio mixing — is ordinary stateful work with no Discord dependency. So the split is:
+Everything *downstream* of capture — transcription, minutes, PDF — is ordinary stateful work with no Discord dependency. So the split is:
 
 | | **`discord-bot`** — the *voice surface* | **`meeting` service** — stateful processing |
 |---|---|---|
-| **Owns** | Voice receive, the `/record` lifecycle, streaming audio up, posting results | Live transcription, the rolling transcript, minutes, PDF, audio mix |
-| **Must not** | transcribe, summarize, render, or run ffmpeg | touch Discord |
-| **Deps** | `@discordjs/voice`, `libsodium-wrappers` (RTP decrypt), `ws` | `amazon-transcribe` (streaming), ffmpeg, `fpdf2`, `httpx`, `platform_auth` |
+| **Owns** | Voice receive, the `/record` lifecycle, streaming audio up, posting results | Live transcription, the rolling transcript, minutes, PDF |
+| **Must not** | transcribe, summarize, or render | touch Discord |
+| **Deps** | `@discordjs/voice`, `libsodium-wrappers` (RTP decrypt), `ws` | `amazon-transcribe` (streaming), PyAV (Opus decode), `fpdf2`, `httpx`, `platform_auth` |
 
-The bot deliberately carries **no processing dependencies** (no `@aws-sdk`, no `pdfkit`, no ffmpeg) — it forwards Opus and posts what the service returns.
+The bot deliberately carries **no processing dependencies** (no `@aws-sdk`, no `pdfkit`) — it forwards Opus and posts what the service returns.
 
 ## Why the `meeting` service is *stateful*
 
-Every other backend service (`team-tracking`, `documentation-system`, `llm`, `verification`) is a stateless source-of-truth: a request goes in, a response comes out, nothing is held between calls. `meeting` is the deliberate exception. **Live transcription requires *something* to hold the rolling transcript across the life of a meeting**, and the bot is the wrong place (we're keeping it lean and processing-free). So the service keeps an **in-memory registry of active meeting sessions**, each holding its per-speaker buffered audio and the growing rolling transcript, re-transcribed from the buffer as needed (see "Live" below). This is a considered trade, not an accident — it's the price of "ask Misty during the meeting" being possible at all. Persistent per-speaker Transcribe streams (incremental, not re-transcribed) are a deferred optimization — see "Known limitations" below.
+Every other backend service (`team-tracking`, `documentation-system`, `llm`, `verification`) is a stateless source-of-truth: a request goes in, a response comes out, nothing is held between calls. `meeting` is the deliberate exception. **Live transcription requires *something* to hold the rolling transcript across the life of a meeting**, and the bot is the wrong place (we're keeping it lean and processing-free). So the service keeps an **in-memory registry of active meeting sessions**, each holding one live Transcribe stream per speaker plus the growing rolling transcript those streams produce (see "Live" below). This is a considered trade, not an accident — it's the price of "ask Misty during the meeting" being possible at all. The audio itself is *not* held: each chunk goes straight to AWS and is dropped.
 
-State is still **ephemeral**: a session exists only while its meeting is live, and `POST /stop` (or an abrupt WebSocket disconnect) tears it down and deletes its temp files. Nothing reaches a database or object store.
+State is still **ephemeral**: a session exists only while its meeting is live, and `POST /stop` (or an abrupt WebSocket disconnect) tears it down and closes its Transcribe streams. Nothing is written to disk, and nothing reaches a database or object store.
 
 ## Data flow
 
 ```text
 Discord voice  ──Opus──▶  bot recorder ──sendFrame──▶  meetingClient (WS) ══▶  meeting service
                                                                                   │
-                                                     per-speaker AWS Transcribe (buffered re-transcription)
+                                                     per-speaker AWS Transcribe (persistent streams)
                                                                                   │
    /record stop ──POST /stop──────────────────────────────────────────────────▶  finalize:
                                                                     transcript → llm service → minutes
-                                                                    → fpdf2 PDF → ffmpeg mix → MP3
-   channel.send(PDF + MP3)  ◀────────────── {pdf_b64, audio_b64, transcript, minutes} ◀──
+                                                                    → fpdf2 PDF
+   channel.send(@requester + PDF) ◀──────── {pdf_b64, transcript, minutes} ◀──
 ```
 
-**Live:** the bot's recorder taps each speaker's raw Opus packets and forwards them (untouched, no decode) over one WebSocket. The service decodes/resamples each speaker's audio into a **per-speaker buffer** and transcribes those buffers via AWS Transcribe streaming to build the rolling transcript. (Current implementation: the whole buffer is re-transcribed on each poll/stop; **persistent incremental per-speaker streams** — transcribing continuously without re-sending finalized audio — are a deferred optimization, see "Known limitations".) `GET /meetings/{id}/transcript` exposes the transcript at any time — the hook that makes in-meeting "ask Misty" a fast-follow (the Q&A feature itself is not built yet).
+**Live:** the bot's recorder taps each speaker's raw Opus packets and forwards them (untouched, no decode) over one WebSocket. The service decodes/resamples each speaker's audio and pushes it into that speaker's **persistent AWS Transcribe stream**, held open for the whole meeting. Audio is sent once and never replayed, so `GET /transcript` is a free read of what has finalized so far — it makes no AWS call and costs nothing to poll. `GET /meetings/{id}/transcript` exposes the transcript at any time — the hook that makes in-meeting "ask Misty" a fast-follow (the Q&A feature itself is not built yet).
 
-**Stop:** `POST /meetings/{id}/stop` transcribes the final per-speaker buffers, assembles the transcript, calls the `llm` service for minutes, renders the PDF, mixes the per-speaker audio to MP3, returns them base64-encoded, and discards the session.
+**Stop:** `POST /meetings/{id}/stop` closes each speaker's Transcribe stream (concurrently, so latency is one flush and not N), assembles the transcript, calls the `llm` service for minutes, renders the PDF, returns it base64-encoded, and discards the session.
 
 **Timeline correctness:** each forwarded frame carries `ts_ms` = milliseconds since the meeting started. AWS Transcribe reports word times relative to *each speaker's own* audio, so the service anchors every speaker's words by that speaker's first `ts_ms`. Without this, a person who joins the conversation late would sort to the *top* of the merged transcript. (This exact bug was caught in review — `ts_ms` must always be sent and honored.)
 
@@ -57,7 +57,7 @@ The bot's `meetingClient.encodeFrame` and the service's `_parse_frame` are inver
 - **Binary audio frame:** `[2-byte big-endian speaker_id length][speaker_id UTF-8][8-byte big-endian ts_ms][raw Opus payload]`
 - **Control frame (text/JSON):** `{"speaker_id": "...", "display_name": "..."}` — registers the display name shown for a speaker.
 - **Auth:** the `platform_auth` consumer key — on the WS as the first text frame `{"key": "…"}` (or a `?key=` query param; both server-supported), and on `GET /transcript` / `POST /stop` as the `X-API-Key` header. The `meetings` scope is required.
-- **`POST /stop` response:** `{ transcript, minutes, pdf_b64, audio_b64 }` (PDF + MP3 base64-encoded).
+- **`POST /stop` response:** `{ transcript, minutes, pdf_b64 }` (PDF base64-encoded). The bot posts it @-mentioning whoever ran `/record start` — including on the auto-stop path, where there is no interaction to read the requester off.
 
 ## The "separate surface" in the bot
 
@@ -78,12 +78,13 @@ If `start` is ever silently downgraded to public, any guild member could drive l
 
 ## Deployment
 
-`meeting` is a private Railway service (`meeting.railway.internal:<PORT>`), like the other services: `platform_auth` consumer keys, `/health`, Dockerfile build (ffmpeg installed in the image), GitHub-connected auto-deploy on push to `staging`. It needs AWS credentials (Transcribe, via the standard chain), an `llm` consumer key (for minutes), and its own `CONSUMER_KEYS` set. The bot gets a `meeting` consumer key (`MEETING_API_KEY`) and `MEETING_BASE_URL=http://meeting.railway.internal:<PORT>`; the WebSocket rides Railway's private network. If `MEETING_BASE_URL` is unset the bot boots fine and `/record` reports "not configured" — the feature degrades gracefully.
+`meeting` is a private Railway service (`meeting.railway.internal:<PORT>`), like the other services: `platform_auth` consumer keys, `/health`, Dockerfile build (no ffmpeg binary — PyAV bundles its own), GitHub-connected auto-deploy on push to `staging`. It needs AWS credentials (Transcribe, via the standard chain), an `llm` consumer key (for minutes), and its own `CONSUMER_KEYS` set. The bot gets a `meeting` consumer key (`MEETING_API_KEY`) and `MEETING_BASE_URL=http://meeting.railway.internal:<PORT>`; the WebSocket rides Railway's private network. If `MEETING_BASE_URL` is unset the bot boots fine and `/record` reports "not configured" — the feature degrades gracefully.
 
 ## Known limitations & live-verify items
 
-- **Transcription re-billing + in-memory buffering:** the current session model re-transcribes the whole buffer on every `/transcript` poll and at stop, which re-bills AWS, and it holds every meeting's PCM in memory for the meeting's life. The intended fix is a persistent per-speaker Transcribe stream fed incrementally (finalized words never re-sent) — Misty #121. Meanwhile the normal end is `/record stop` or auto-stop-on-empty, with a **4h `max_meeting_ms` backstop** that drops further audio past the cap so a forgotten/marathon meeting can't grow memory without bound. Set `MAX_MEETING_MS` to another value, or `None`, to change or disable the backstop.
-- **Opus decode assumption:** the service decodes forwarded Discord Opus with a specific ffmpeg input (`-f data -c:a libopus`); this needs live confirmation against the real byte stream (fallback: Ogg-wrapped input).
-- **Per-frame decode cost:** one ffmpeg invocation per ~20 ms Opus frame — fine for small meetings; batch before decode if it bites.
+- **Concurrent stream limits:** one open Transcribe stream per active speaker, held for the whole meeting — a 10-person call is 10 concurrent streams. Confirm the account's concurrent-stream quota before a large meeting; exceeding it surfaces as a `meeting.audit` warning and that speaker retries, then drops out.
+- **AWS session restarts:** Transcribe ends a session on its own (idle timeout, 4h cap). The wrapper reopens on the next audio and offsets the new session's word times by the audio already delivered — unit-tested against a fake, not yet observed against a real timeout.
+- **Speaker-timeline anchoring:** a speaker's stream carries only the frames they spoke, so word times are mapped onto meeting time via anchors recorded at each detected silence. The 200 ms tolerance is reasoned from Discord's ~20 ms cadence, not measured live.
+- **Meeting length backstop:** the normal end is `/record stop` or auto-stop-on-empty, with a **4h `max_meeting_ms` backstop** so a forgotten meeting can't run indefinitely. Set `MAX_MEETING_MS` to another value, or `None`, to change or disable it.
 - **Concurrency:** one AWS Transcribe stream per active speaker; watch the account's concurrent-stream limit.
 - **Not built yet:** the in-meeting `/ask` Q&A feature (only the `GET /transcript` hook it will use).
