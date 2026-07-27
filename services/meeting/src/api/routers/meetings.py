@@ -21,9 +21,8 @@ Connect
   ``SessionRegistry.create``. If omitted, ``session_id`` is used as the
   guild_id (explicit fallback -- this task does not implement sourcing
   guild_id from a control message; see task report for rationale).
-- ``session_id`` must match ``^[A-Za-z0-9_-]{1,64}$`` (it is used to build a
-  filesystem path in ``sessions.py``) -- otherwise the connection is refused
-  with close code 1008 before any session is created.
+- ``session_id`` must match ``^[A-Za-z0-9_-]{1,64}$`` -- otherwise the
+  connection is refused with close code 1008 before any session is created.
 
 Once authenticated, two kinds of application messages are accepted:
 
@@ -48,22 +47,19 @@ Once authenticated, two kinds of application messages are accepted:
    ``display_name`` is whatever was last registered for that speaker_id (or
    the speaker_id itself if never registered).
 
-   NOTE (flagged for live-verify, sub-plan 3): ``session.feed`` decodes each
-   frame via a fresh ffmpeg subprocess (see ``wiring.AudioAdapter``). That is
-   one ffmpeg process per ~20ms Opus frame -- correct but not batched.
-   Batching (buffer raw Opus per speaker, decode once per flush) is a
-   follow-up perf item, as is confirming live that the bot's Opus byte stream
-   is header-less raw frames (matching ``decoder.opus_to_pcm16k_args``'s
-   documented assumption) rather than Ogg-wrapped.
+   ``session.feed`` decodes each frame in-process with that speaker's own
+   stateful ``OpusStreamDecoder`` (see ``wiring.AudioAdapter`` and
+   ``audio/decoder.py``) -- no subprocess per frame. The decoded PCM is
+   buffered in memory only; nothing is written to disk.
 
 Disconnect
 ----------
 If the client disconnects (or the connection errors) without the consumer
 having called ``POST /meetings/{session_id}/stop`` first, the server tears
 the session down itself by calling ``session.discard()`` -- a lightweight
-teardown that only deletes the session's temp dir and deregisters it. It
+teardown that only drops the buffered audio and deregisters the session. It
 deliberately does NOT run the finalize pipeline (transcription flush,
-minutes, PDF, audio mix); that only happens for an explicit ``stop()`` call,
+minutes, PDF); that only happens for an explicit ``stop()`` call,
 since it involves a blocking LLM HTTP call and isn't worth paying for on an
 abrupt/dropped connection. Teardown failures are logged (not swallowed).
 """
@@ -249,12 +245,12 @@ async def stream_meeting(
             speaker_id, ts_ms, opus_payload = frame
             display_name = display_names.get(speaker_id, speaker_id)
             try:
-                # Fix #2: session.feed() decodes via a blocking ffmpeg subprocess
-                # per frame -- offload to a thread so one meeting's decode work
-                # doesn't stall the event loop for other connections.
-                # Fix #3: session.feed() raises (e.g. RuntimeError from a failed
-                # ffmpeg decode) doesn't crash the whole meeting -- only this
-                # single frame is dropped, and the receive loop continues. This
+                # Fix #2: session.feed() does blocking CPU work (Opus decode)
+                # -- offload to a thread so one meeting's decode work doesn't
+                # stall the event loop for other connections.
+                # Fix #3: a raising session.feed() doesn't crash the whole
+                # meeting -- only this single frame is dropped and the receive
+                # loop continues. This
                 # is deliberately NOT `except WebSocketDisconnect` -- that must
                 # still propagate up and break the loop (handled below).
                 await asyncio.to_thread(session.feed, speaker_id, display_name, opus_payload, ts_ms)
@@ -267,7 +263,7 @@ async def stream_meeting(
         # If the consumer already called POST /stop, sessions.py's stop() has
         # deregistered the session -- registry.get returns None and we skip.
         # Otherwise this is an abrupt disconnect: use the lightweight discard()
-        # (temp dir cleanup + deregister only), NOT the full stop() pipeline.
+        # (drop buffers + deregister only), NOT the full stop() pipeline.
         if registry.get(session_id) is not None:
             try:
                 session.discard()

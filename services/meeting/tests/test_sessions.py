@@ -1,17 +1,21 @@
 """Tests for the stateful session registry + meeting lifecycle, using fakes only
-(no real ffmpeg/AWS/network)."""
+(no real AWS/network). The session layer touches no filesystem at all, so
+these need no temp dirs."""
 
 import asyncio
-import os
-import shutil
-import tempfile
+import sys
 import threading
 from datetime import datetime, timezone
 
 import pytest
 
 from src.contracts import Minutes
-from src.sessions import SessionAlreadyExistsError, SessionRegistry, words_to_segments
+from src.sessions import (
+    _PCM_BYTES_PER_MS,
+    SessionAlreadyExistsError,
+    SessionRegistry,
+    words_to_segments,
+)
 
 
 class _FakeDecoder:
@@ -40,30 +44,38 @@ class FakeAudio:
         return _FakeDecoder(self.decode_calls)
 
 
-class FakeTranscriber:
-    """Canned transcriber: returns a fixed word list regardless of input, but drains
-    the pcm_chunks async iterable to prove the routing/buffering plumbing works."""
+class FakeTranscriptionStream:
+    """Stand-in for ONE speaker's persistent Transcribe stream.
 
-    def __init__(self, words):
-        self._words = words
-        self.calls = 0
-        self.last_chunks = None
+    Mirrors the real contract in src/stt/transcribe.py: audio is pushed in with
+    ``send()`` as it arrives and is never replayed, finalized words are readable
+    at any time via ``words()``, and the stream is closed exactly once (either
+    ``aclose()`` for a real finalize or ``abort()`` for an abrupt teardown)."""
 
-    async def transcribe(self, pcm_chunks, sample_rate=16000):
-        chunks = [c async for c in pcm_chunks]
-        self.last_chunks = chunks
-        self.calls += 1
-        return {"text": " ".join(w["text"] for w in self._words), "words": self._words}
+    def __init__(self, words=None):
+        self._words = list(words or [])
+        self.sent: list[bytes] = []
+        self.started = False
+        self.aclosed = False
+        self.aborted = False
 
+    def start(self, loop=None) -> None:
+        self.started = True
 
-class FakeMixer:
-    def __init__(self, mp3_bytes=b"ID3-fake-mp3-bytes"):
-        self._mp3_bytes = mp3_bytes
-        self.calls = []
+    def send(self, pcm: bytes) -> None:
+        assert self.started, "audio sent before the stream was started"
+        assert not (self.aclosed or self.aborted), "audio sent after the stream was closed"
+        self.sent.append(pcm)
 
-    def mix(self, input_paths, output_path):
-        self.calls.append((list(input_paths), output_path))
-        return self._mp3_bytes
+    def words(self) -> list[dict]:
+        return list(self._words)
+
+    async def aclose(self) -> list[dict]:
+        self.aclosed = True
+        return list(self._words)
+
+    def abort(self) -> None:
+        self.aborted = True
 
 
 def _fake_report_builder(segments, meta):
@@ -72,27 +84,18 @@ def _fake_report_builder(segments, meta):
     return minutes, pdf_bytes
 
 
-def _make_deps(tmp_root, transcribers_by_speaker, audio=None, mixer=None, now=None):
-    queue = list(transcribers_by_speaker)
+def _make_deps(streams_by_speaker, audio=None, now=None):
+    queue = list(streams_by_speaker)
 
-    def make_transcriber():
+    def make_transcription_stream():
         return queue.pop(0)
 
     return {
-        "make_transcriber": make_transcriber,
+        "make_transcription_stream": make_transcription_stream,
         "audio": audio or FakeAudio(),
-        "mixer": mixer or FakeMixer(),
         "report_builder": _fake_report_builder,
-        "tmp_root": tmp_root,
         "now": now or (lambda: datetime(2026, 7, 25, 18, 0, tzinfo=timezone.utc)),
     }
-
-
-@pytest.fixture
-def tmp_root():
-    d = tempfile.mkdtemp(prefix="meeting-sessions-test-")
-    yield d
-    shutil.rmtree(d, ignore_errors=True)
 
 
 def test_words_to_segments_splits_on_gap_over_3s():
@@ -118,15 +121,15 @@ def test_words_to_segments_keeps_close_words_in_one_segment():
     assert segments[0].text == "hello there"
 
 
-def test_create_rejects_duplicate_session_id(tmp_root):
-    registry = SessionRegistry(_make_deps(tmp_root, []))
+def test_create_rejects_duplicate_session_id():
+    registry = SessionRegistry(_make_deps([]))
     registry.create("s1", "g1")
 
     with pytest.raises(SessionAlreadyExistsError):
         registry.create("s1", "g1")
 
 
-def test_feed_and_transcript_view_merge_chronologically_across_speakers(tmp_root):
+def test_feed_and_transcript_view_merge_chronologically_across_speakers():
     # Both speakers' Transcribe output starts near 0 -- this is realistic: AWS
     # Transcribe's word start_ms is relative to the start of each speaker's OWN
     # concatenated PCM buffer, not to the meeting. Bob's FIRST fed frame has
@@ -142,24 +145,29 @@ def test_feed_and_transcript_view_merge_chronologically_across_speakers(tmp_root
         {"text": "hi", "start_ms": 0},
         {"text": "friend", "start_ms": 100},
     ]
-    alice_transcriber = FakeTranscriber(alice_words)
-    bob_transcriber = FakeTranscriber(bob_words)
+    alice_stream = FakeTranscriptionStream(alice_words)
+    bob_stream = FakeTranscriptionStream(bob_words)
     audio = FakeAudio()
-    deps = _make_deps(tmp_root, [alice_transcriber, bob_transcriber], audio=audio)
+    deps = _make_deps([alice_stream, bob_stream], audio=audio)
     registry = SessionRegistry(deps)
 
+    # Frames are sized like real ones (20ms of 16 kHz mono s16le = 640 bytes),
+    # since buffer->meeting time anchoring is derived from buffered PCM length.
+    def frame(label: str) -> bytes:
+        return label.encode().ljust(_PCM_BYTES_PER_MS * 20, b"\x00")
+
     session = registry.create("session-1", "guild-1")
-    session.feed("alice-id", "alice", b"alice-frame-1", ts_ms=0)
-    session.feed("bob-id", "bob", b"bob-frame-1", ts_ms=30000)
-    session.feed("alice-id", "alice", b"alice-frame-2", ts_ms=500)
-    session.feed("bob-id", "bob", b"bob-frame-2", ts_ms=30100)
+    session.feed("alice-id", "alice", frame("alice-frame-1"), ts_ms=0)
+    session.feed("bob-id", "bob", frame("bob-frame-1"), ts_ms=30000)
+    session.feed("alice-id", "alice", frame("alice-frame-2"), ts_ms=500)
+    session.feed("bob-id", "bob", frame("bob-frame-2"), ts_ms=30100)
 
     # Routing: decode was called once per fed frame.
     assert audio.decode_calls == [
-        b"alice-frame-1",
-        b"bob-frame-1",
-        b"alice-frame-2",
-        b"bob-frame-2",
+        frame("alice-frame-1"),
+        frame("bob-frame-1"),
+        frame("alice-frame-2"),
+        frame("bob-frame-2"),
     ]
 
     view = asyncio.run(session.transcript_view())
@@ -180,34 +188,297 @@ def test_feed_and_transcript_view_merge_chronologically_across_speakers(tmp_root
     import base64
 
     assert base64.b64decode(result.pdf_b64)[:4] == b"%PDF"
-    assert result.audio_b64 is not None
-    assert base64.b64decode(result.audio_b64) == b"ID3-fake-mp3-bytes"
 
-    # Cleanup: the session's temp dir must be removed, and it must be deregistered.
-    session_tmp_dir = os.path.join(tmp_root, "session-1")
-    assert not os.path.exists(session_tmp_dir)
+    # Cleanup: the session must be deregistered and its buffers dropped.
     assert registry.get("session-1") is None
+    assert session._speakers == {}
     # Re-creating the same id must now succeed (fully deregistered).
     registry.create("session-1", "guild-1")
 
 
-def test_stop_skips_audio_when_no_tracks(tmp_root):
-    deps = _make_deps(tmp_root, [])
+def _pcm(ms: int, fill: bytes = b"\x00") -> bytes:
+    """`ms` milliseconds of fake 16 kHz mono s16le PCM (32 bytes per ms)."""
+    return fill * (32 * ms)
+
+
+def test_words_after_a_mid_meeting_silence_anchor_to_wall_clock():
+    """A speaker's PCM buffer holds ONLY the frames they spoke -- silence is
+    never buffered -- so AWS Transcribe's buffer-relative word start_ms
+    under-counts every real gap. Anchoring on the speaker's FIRST frame alone
+    fixes only their first word; a speaker who goes quiet mid-meeting and then
+    resumes must have their later words anchored to the wall-clock ts_ms of
+    the frame that resumed, not to their compressed buffer timeline."""
+    words = [
+        {"text": "opening", "start_ms": 0},
+        # Buffer-relative: the second utterance starts right after the first
+        # 1000ms of speech, because the 59s of silence between them was never
+        # written to the buffer.
+        {"text": "closing", "start_ms": 1000},
+    ]
+    stream = FakeTranscriptionStream(words)
+    deps = _make_deps([stream])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-gap", "guild-1")
+
+    # Alice speaks for 1s at the top of the meeting...
+    session.feed("alice-id", "alice", _pcm(1000), ts_ms=0)
+    # ...then says nothing for a minute and speaks again at t=60s.
+    session.feed("alice-id", "alice", _pcm(1000), ts_ms=60_000)
+
+    view = asyncio.run(session.transcript_view())
+
+    # "closing" must land at ~60s (its real wall-clock time), NOT at 1000ms.
+    # And because the gap is now visible, it must be its OWN segment rather
+    # than being glued onto "opening" by the 3s-gap rule.
+    assert [(s.speaker, s.start_ms, s.text) for s in view] == [
+        ("alice", 0, "opening"),
+        ("alice", 60_000, "closing"),
+    ]
+
+
+def test_continuous_speech_does_not_create_spurious_anchors():
+    """Back-to-back frames (ordinary continuous speech, plus a little network
+    jitter) must NOT be treated as a silence gap -- otherwise every frame
+    would re-anchor and the mapped timeline would stretch."""
+    words = [{"text": "one", "start_ms": 0}, {"text": "two", "start_ms": 20}]
+    stream = FakeTranscriptionStream(words)
+    deps = _make_deps([stream])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-continuous", "guild-1")
+
+    # Five 20ms frames arriving ~20ms apart, with a few ms of jitter.
+    for i, ts in enumerate([0, 21, 39, 62, 80]):
+        session.feed("alice-id", "alice", _pcm(20), ts_ms=ts)
+
+    view = asyncio.run(session.transcript_view())
+
+    # One anchor only -> buffer-relative times pass through unshifted.
+    assert [(s.start_ms, s.text) for s in view] == [(0, "one two")]
+
+
+def test_audio_is_streamed_once_and_never_replayed_across_polls():
+    """The whole point of the persistent per-speaker stream: each chunk of PCM
+    is handed to Transcribe exactly once, as it arrives.
+
+    The previous design re-ran transcription over the ENTIRE buffer on every
+    ``transcript_view()`` call, so a meeting polled k times re-sent roughly k/2
+    copies of its own audio -- AWS billing that grows with the SQUARE of meeting
+    length. Polling must now be free."""
+    stream = FakeTranscriptionStream([{"text": "hi", "start_ms": 0}])
+    deps = _make_deps([stream])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-stream", "guild-1")
+
+    first, second = _pcm(20, b"\x01"), _pcm(20, b"\x02")
+    session.feed("alice-id", "alice", first, ts_ms=0)
+    asyncio.run(session.transcript_view())
+    asyncio.run(session.transcript_view())
+    session.feed("alice-id", "alice", second, ts_ms=20)
+    asyncio.run(session.transcript_view())
+
+    # Three polls, two frames: each frame sent exactly once regardless of polls.
+    assert stream.sent == [first, second]
+
+
+def test_transcript_view_reads_accumulated_words_without_closing_the_stream():
+    """Polling is a read of what the live stream has finalized so far -- it must
+    not end the stream, or the speaker would stop being transcribed."""
+    stream = FakeTranscriptionStream([{"text": "rolling", "start_ms": 0}])
+    deps = _make_deps([stream])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-poll", "guild-1")
+    session.feed("alice-id", "alice", _pcm(20), ts_ms=0)
+
+    view = asyncio.run(session.transcript_view())
+
+    assert [(s.speaker, s.text) for s in view] == [("alice", "rolling")]
+    assert stream.aclosed is False
+    assert stream.aborted is False
+
+
+def test_stop_closes_each_stream_and_uses_its_final_words():
+    """stop() must flush and close the stream (so AWS emits any last finalized
+    results) and build the transcript from what comes back."""
+    stream = FakeTranscriptionStream([{"text": "final", "start_ms": 0}])
+    deps = _make_deps([stream])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-final", "guild-1")
+    session.feed("alice-id", "alice", _pcm(20), ts_ms=0)
+
+    result = asyncio.run(session.stop())
+
+    assert stream.aclosed is True
+    assert result.transcript == "[00:00] alice: final"
+
+
+def test_pcm_is_not_retained_after_being_streamed():
+    """With no replay there is nothing to keep the audio for. Retaining it would
+    reinstate the old O(meeting duration) memory growth for no benefit."""
+    stream = FakeTranscriptionStream([])
+    deps = _make_deps([stream])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-nomem", "guild-1")
+
+    for i in range(50):
+        session.feed("alice-id", "alice", _pcm(20), ts_ms=i * 20)
+
+    buf = session._speakers["alice-id"]
+    assert not hasattr(buf, "pcm_chunks"), "audio must not be buffered for replay"
+    # The byte COUNT is still tracked -- anchoring needs it.
+    assert buf.buffered_ms == 50 * 20
+
+
+def test_empty_decodes_do_not_anchor_or_shift_the_timeline():
+    """A DTX/malformed packet decodes to b"" (see decoder.decode's error path).
+    It advances the buffer by nothing, so it must not record an anchor either:
+    anchoring on it would attribute the start of the NEXT real audio to the
+    dud frame's timestamp instead of its own."""
+    words = [{"text": "after", "start_ms": 0}]
+    stream = FakeTranscriptionStream(words)
+    deps = _make_deps([stream])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-dtx", "guild-1")
+
+    # A dud frame lands first, a full second before any real audio.
+    session.feed("alice-id", "alice", b"", ts_ms=0)
+    session.feed("alice-id", "alice", _pcm(20), ts_ms=1000)
+
+    buf = session._speakers["alice-id"]
+    assert buf.anchors == [(0, 1000)], "the dud frame must not create an anchor"
+
+    view = asyncio.run(session.transcript_view())
+    assert [(s.start_ms, s.text) for s in view] == [(1000, "after")]
+
+
+def test_buffer_timebase_does_not_accumulate_per_chunk_rounding():
+    """Buffer position must be tracked in BYTES and converted once, not summed
+    from per-chunk truncated milliseconds. Chunks whose length isn't a whole
+    number of ms are legal (the resampler emits variable sizes), and flooring
+    each one independently accumulates a monotonic undercount that eventually
+    manufactures a false silence gap mid-speech."""
+    stream = FakeTranscriptionStream([])
+    deps = _make_deps([stream])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-rounding", "guild-1")
+
+    # 100 chunks of 48 bytes = 1.5ms each. Truncating each to 1ms loses 50ms
+    # in total; tracking bytes keeps the exact 150ms.
+    for i in range(100):
+        session.feed("alice-id", "alice", b"\x00" * 48, ts_ms=i)
+
+    buf = session._speakers["alice-id"]
+    assert buf.buffered_ms == 150
+
+
+def test_feed_is_rejected_once_stop_has_begun():
+    """stop() snapshots each speaker's buffer, then awaits transcription and
+    report generation. The WS ingest loop is still live during that window (the
+    bot only closes the socket AFTER /stop returns), so a late frame could be
+    appended to a buffer that has already been transcribed -- silently dropped
+    from the transcript, then discarded by cleanup. Ingest must be quiesced the
+    moment finalization starts, so a late frame is refused outright rather than
+    accepted-then-lost."""
+    # Observed INSIDE the stop window -- checking after stop() returns would be
+    # vacuous, since _cleanup() clears _speakers on the way out either way.
+    accepted_during_stop = []
+
+    class FeedingStream(FakeTranscriptionStream):
+        """Simulates the WS ingest loop delivering a frame while stop() is
+        suspended awaiting aclose() -- exactly when the real one runs."""
+
+        async def aclose(self):
+            session.feed("bob-id", "bob", _pcm(20), ts_ms=5000)
+            accepted_during_stop.append("bob-id" in session._speakers)
+            return await super().aclose()
+
+    deps = _make_deps([])
+    deps["make_transcription_stream"] = lambda: FeedingStream([{"text": "hi", "start_ms": 0}])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-late-feed", "guild-1")
+    session.feed("alice-id", "alice", _pcm(20), ts_ms=0)
+
+    asyncio.run(session.stop())
+
+    assert accepted_during_stop, "the late feed never ran; test would be vacuous"
+    assert accepted_during_stop == [False], "a frame fed during stop() was accepted then lost"
+
+
+def test_session_lifecycle_never_touches_the_filesystem(monkeypatch):
+    """Per-speaker PCM is buffered in memory ONLY -- the service persists no
+    audio anywhere, so a full create -> feed -> stop cycle must open no files
+    and create no directories.
+
+    This also subsumes the old path-traversal regression test: speaker_id is
+    caller-controlled (decoded straight off the WS binary frame with no
+    validation -- see api/routers/meetings.py), and it used to be hashed
+    before being interpolated into an on-disk path. With no filesystem writes
+    at all there is no traversal surface left, and this test is what stands
+    behind that.
+
+    Note the patch list below is deliberately broad: patching ``builtins.open``
+    ALONE is not sufficient. ``io.open`` is a separate name binding to the same
+    original function, so rebinding ``builtins.open`` leaves ``io.open`` -- and
+    therefore ``pathlib.Path.open``/``write_bytes`` -- resolving to the real
+    thing. ``os.open``, ``os.mkdir`` and ``tempfile.mkdtemp`` bypass it too.
+    """
+    blocked = []
+
+    def _blocker(label):
+        def _raise(*args, **kwargs):
+            blocked.append(label)
+            raise AssertionError(f"session touched the filesystem via {label}: {args!r}")
+
+        return _raise
+
+    deps = _make_deps([FakeTranscriptionStream([{"text": "hi", "start_ms": 0}])])
+    for target in (
+        "builtins.open",
+        "io.open",
+        "os.open",
+        "os.mkdir",
+        "os.makedirs",
+        "tempfile.mkdtemp",
+        "tempfile.NamedTemporaryFile",
+    ):
+        monkeypatch.setattr(target, _blocker(target))
+
+    registry = SessionRegistry(deps)
+    session = registry.create("session-nodisk", "guild-1")
+    session.feed("../../etc/evil", "attacker", _pcm(20), ts_ms=0)
+    result = asyncio.run(session.stop())
+
+    assert result.transcript == "[00:00] attacker: hi"
+
+
+def test_stop_returns_no_audio():
+    """Meeting audio is deliberately NOT part of the finalize output: the bot
+    posts the minutes PDF only."""
+    stream = FakeTranscriptionStream([{"text": "hi", "start_ms": 0}])
+    deps = _make_deps([stream])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-noaudio", "guild-1")
+    session.feed("alice-id", "alice", _pcm(20), ts_ms=0)
+
+    result = asyncio.run(session.stop())
+
+    assert not hasattr(result, "audio_b64")
+
+
+def test_stop_with_no_tracks_returns_an_empty_transcript():
+    deps = _make_deps([])
     registry = SessionRegistry(deps)
     session = registry.create("session-empty", "guild-1")
 
     result = asyncio.run(session.stop())
 
-    assert result.audio_b64 is None
     assert result.transcript == ""
 
 
-def test_discard_cleans_up_without_running_finalize_pipeline(tmp_root):
+def test_discard_cleans_up_without_running_finalize_pipeline():
     alice_words = [{"text": "hello", "start_ms": 0}]
-    transcriber = FakeTranscriber(alice_words)
+    stream = FakeTranscriptionStream(alice_words)
     audio = FakeAudio()
-    mixer = FakeMixer()
-    deps = _make_deps(tmp_root, [transcriber], audio=audio, mixer=mixer)
+    deps = _make_deps([stream], audio=audio)
     registry = SessionRegistry(deps)
 
     session = registry.create("session-discard", "guild-1")
@@ -215,14 +486,15 @@ def test_discard_cleans_up_without_running_finalize_pipeline(tmp_root):
 
     session.discard()
 
-    # Cleanup happened: tmp dir gone, deregistered from the registry.
-    session_tmp_dir = os.path.join(tmp_root, "session-discard")
-    assert not os.path.exists(session_tmp_dir)
+    # Cleanup happened: deregistered from the registry, buffered audio dropped.
     assert registry.get("session-discard") is None
+    assert session._speakers == {}
 
-    # The full finalize pipeline (transcribe/report_builder/mix) must NOT run.
-    assert transcriber.calls == 0
-    assert mixer.calls == []
+    # The full finalize pipeline (report_builder/PDF) must NOT run -- but the
+    # speaker's Transcribe stream MUST still be torn down, or an abrupt WS drop
+    # would leak an open AWS stream for the rest of its idle timeout.
+    assert stream.aborted is True
+    assert stream.aclosed is False
 
     # Idempotent: calling discard() again must not raise.
     session.discard()
@@ -231,7 +503,7 @@ def test_discard_cleans_up_without_running_finalize_pipeline(tmp_root):
     registry.create("session-discard", "guild-1")
 
 
-def test_stop_meta_duration_label_reflects_elapsed_time(tmp_root):
+def test_stop_meta_duration_label_reflects_elapsed_time():
     # Fix #8: duration_label must be computed from started_at -> now, not left
     # empty.
     clock = {"t": datetime(2026, 7, 25, 18, 0, tzinfo=timezone.utc)}
@@ -245,7 +517,7 @@ def test_stop_meta_duration_label_reflects_elapsed_time(tmp_root):
         captured_meta.update(meta)
         return Minutes(summary="s", decisions=[], action_items=[]), b"%PDF-fake"
 
-    deps = _make_deps(tmp_root, [], now=now)
+    deps = _make_deps([], now=now)
     deps["report_builder"] = capturing_report_builder
     registry = SessionRegistry(deps)
     session = registry.create("session-duration", "guild-1")
@@ -257,19 +529,19 @@ def test_stop_meta_duration_label_reflects_elapsed_time(tmp_root):
     assert captured_meta["duration_label"] == "5m"
 
 
-def test_feed_drops_frames_and_logs_once_past_max_meeting_ms(tmp_root):
+def test_feed_drops_frames_and_logs_once_past_max_meeting_ms():
     # Fix #4: once elapsed time exceeds max_meeting_ms, further frames are
-    # dropped (not buffered) to bound unbounded PCM growth. This does NOT fix
-    # the separate transcript_view()/stop() re-billing issue (deferred to
-    # sub-plan 3) -- it only bounds memory/duration.
+    # dropped to bound how long a single meeting can run. (The separate
+    # re-billing issue this used to reference is gone: audio is now streamed
+    # once into a persistent per-speaker Transcribe stream, never replayed.)
     clock = {"t": datetime(2026, 7, 25, 18, 0, tzinfo=timezone.utc)}
 
     def now():
         return clock["t"]
 
     audio = FakeAudio()
-    transcriber = FakeTranscriber([])
-    deps = _make_deps(tmp_root, [transcriber], audio=audio, now=now)
+    stream = FakeTranscriptionStream([])
+    deps = _make_deps([stream], audio=audio, now=now)
     deps["max_meeting_ms"] = 60_000  # 1 minute cap
     registry = SessionRegistry(deps)
     session = registry.create("session-cap", "guild-1")
@@ -284,11 +556,10 @@ def test_feed_drops_frames_and_logs_once_past_max_meeting_ms(tmp_root):
     # The past-cap frame was dropped: no additional decode call, and the
     # buffer only contains the earlier, within-cap frame.
     assert len(audio.decode_calls) == 1
-    buf = session._speakers["alice-id"]
-    assert buf.pcm_chunks == [b"frame-within-cap"]
+    assert stream.sent == [b"frame-within-cap"]
 
 
-def test_feed_does_not_drop_frames_when_max_meeting_ms_is_none(tmp_root):
+def test_feed_does_not_drop_frames_when_max_meeting_ms_is_none():
     # With no cap (the default -- max_meeting_ms absent/None), a meeting runs
     # indefinitely: frames are buffered no matter how much time has elapsed,
     # well past the OLD 4h default.
@@ -298,8 +569,9 @@ def test_feed_does_not_drop_frames_when_max_meeting_ms_is_none(tmp_root):
         return clock["t"]
 
     audio = FakeAudio()
-    # One speaker ("alice-id") -> one transcriber created on her first frame.
-    deps = _make_deps(tmp_root, [FakeTranscriber([])], audio=audio, now=now)
+    # One speaker ("alice-id") -> one stream created on her first frame.
+    stream = FakeTranscriptionStream([])
+    deps = _make_deps([stream], audio=audio, now=now)
     assert deps.get("max_meeting_ms") is None  # no cap by default
     registry = SessionRegistry(deps)
     session = registry.create("session-nocap", "guild-1")
@@ -312,15 +584,14 @@ def test_feed_does_not_drop_frames_when_max_meeting_ms_is_none(tmp_root):
 
     # Both frames were buffered: nothing dropped.
     assert len(audio.decode_calls) == 2
-    buf = session._speakers["alice-id"]
-    assert buf.pcm_chunks == [b"frame-1", b"frame-2"]
+    assert stream.sent == [b"frame-1", b"frame-2"]
 
 
-def test_stop_cleans_up_tmp_dir_even_on_report_builder_error(tmp_root):
+def test_stop_deregisters_even_on_report_builder_error():
     def boom(segments, meta):
         raise RuntimeError("report builder exploded")
 
-    deps = _make_deps(tmp_root, [])
+    deps = _make_deps([])
     deps["report_builder"] = boom
     registry = SessionRegistry(deps)
     session = registry.create("session-err", "guild-1")
@@ -328,116 +599,81 @@ def test_stop_cleans_up_tmp_dir_even_on_report_builder_error(tmp_root):
     with pytest.raises(RuntimeError):
         asyncio.run(session.stop())
 
-    assert not os.path.exists(os.path.join(tmp_root, "session-err"))
     assert registry.get("session-err") is None
+    assert session._speakers == {}
 
 
-def test_feed_sanitizes_path_traversal_speaker_id(tmp_root):
-    """A malicious speaker_id (attacker/caller-controlled, decoded straight off
-    the WS binary frame with no validation upstream -- see
-    api/routers/meetings.py) must never let feed() write outside the
-    session's own tmp dir, and the sanitized on-disk filename must contain no
-    path separators."""
+def test_caller_controlled_speaker_ids_stay_plain_dict_keys():
+    """speaker_id is attacker/caller-controlled (decoded straight off the WS
+    binary frame with no validation upstream -- see api/routers/meetings.py).
+    It is now only ever used as an in-memory dict key and a display label, so
+    even hostile values are inert; see
+    test_session_lifecycle_never_touches_the_filesystem for the guarantee that
+    nothing turns one into a path again."""
     audio = FakeAudio()
     malicious_ids = ["../../etc/evil", "/abs/path/evil", "../../../../tmp/pwned"]
-    transcribers = [FakeTranscriber([]) for _ in malicious_ids]
-    deps = _make_deps(tmp_root, transcribers, audio=audio)
+    streams = [FakeTranscriptionStream([]) for _ in malicious_ids]
+    deps = _make_deps(streams, audio=audio)
     registry = SessionRegistry(deps)
     session = registry.create("session-traversal", "guild-1")
 
     for speaker_id in malicious_ids:
         session.feed(speaker_id, "display", b"frame", ts_ms=0)
 
-    session_tmp_dir = os.path.realpath(os.path.join(tmp_root, "session-traversal"))
-    for speaker_id in malicious_ids:
-        buf = session._speakers[speaker_id]
-        # The written file must stay under the session's own tmp dir.
-        real_path = os.path.realpath(buf.pcm_path)
-        assert real_path.startswith(session_tmp_dir + os.sep)
-        # The filename component itself must contain no path separators.
-        filename = os.path.basename(buf.pcm_path)
-        assert os.sep not in filename
-        assert "/" not in filename and ".." not in filename
-        assert os.path.exists(buf.pcm_path)
-
-    # Distinct raw ids must not collide onto the same sanitized filename.
-    filenames = {os.path.basename(session._speakers[sid].pcm_path) for sid in malicious_ids}
-    assert len(filenames) == len(malicious_ids)
-
-    # display_name / speaker label plumbing is untouched: raw speaker_id
-    # remains the dict key and is unaffected by path sanitization.
+    # Raw ids remain distinct dict keys, untouched and un-sanitized.
     assert set(session._speakers.keys()) == set(malicious_ids)
 
 
-def test_transcript_view_tolerates_new_speaker_added_during_iteration(tmp_root):
-    """Regression for 'dictionary changed size during iteration': feed() runs
-    synchronously (e.g. from the live WS ingest loop) and can insert a
-    brand-new speaker into self._speakers while transcript_view() is
-    suspended at an `await` mid-iteration over the existing speakers. The
-    view must snapshot before iterating so this doesn't crash, and a speaker
-    added mid-poll is simply picked up on a later call."""
-
-    class InsertingTranscriber:
-        """A fake transcriber whose transcribe() call simulates a concurrent
-        feed() for a brand-new speaker arriving mid-iteration (as would happen
-        if the live WS ingest loop ran on another asyncio task while this
-        coroutine was suspended at `await`)."""
-
-        def __init__(self, session):
-            self._session = session
-            self._did_insert = False
-
-        async def transcribe(self, pcm_chunks, sample_rate=16000):
-            _ = [c async for c in pcm_chunks]
-            if not self._did_insert:
-                self._did_insert = True
-                self._session.feed("late-speaker", "late", b"late-frame", ts_ms=0)
-            return {"text": "hi", "words": [{"text": "hi", "start_ms": 0}]}
-
-    audio = FakeAudio()
-    deps = _make_deps(tmp_root, [], audio=audio)
-    registry = SessionRegistry(deps)
-    session = registry.create("session-mutate", "guild-1")
-
-    # Install a transcriber for "alice-id" that mutates self._speakers when
-    # awaited -- reproducing the "insert during await" race feed() enables.
-    session._deps["make_transcriber"] = lambda: InsertingTranscriber(session)
-    session.feed("alice-id", "alice", b"alice-frame", ts_ms=0)
-
-    # Must not raise "RuntimeError: dictionary changed size during iteration".
-    view = asyncio.run(session.transcript_view())
-
-    # Only alice's words show up in THIS poll's view (the late speaker's
-    # buffer had no words fed into their own transcriber run this pass) --
-    # they'll appear on a subsequent poll instead. The key assertion is that
-    # iteration didn't crash, and the new speaker IS now tracked.
-    assert [(s.speaker, s.text) for s in view] == [("alice", "hi")]
-    assert "late-speaker" in session._speakers
+# NOTE: a test named test_transcript_view_tolerates_new_speaker_added_during
+# _iteration used to live here. It covered a speaker being inserted while
+# transcript_view() was SUSPENDED AT AN AWAIT mid-iteration. transcript_view()
+# no longer awaits anything -- it reads words the live stream has already
+# finalized -- so that interleaving is structurally impossible now. The
+# remaining risk (a worker-thread feed() resizing self._speakers while the
+# reader's comprehension walks it) is covered by the test below, which is
+# verified to fail if transcript_view()'s lock is removed.
 
 
-def test_feed_from_worker_thread_races_readers_without_crashing(tmp_root):
+def test_feed_from_worker_thread_races_readers_without_crashing():
     """Regression for the thread-safety follow-up: feed() runs on a WORKER
     THREAD in production (asyncio.to_thread from the WS ingest loop) while
-    _meta()/stop()'s pcm_paths comprehension run on the event-loop thread.
-    Both iterate self._speakers.values() directly (not via `list(...)` at the
-    call site), so without a lock a comprehension can observe the dict
-    resizing mid-iteration and raise "RuntimeError: dictionary changed size
-    during iteration". Hammer feed() from real background threads while
-    repeatedly calling _meta() and building pcm_paths, and assert nothing
-    crashes and every fed speaker is eventually visible."""
+    transcript_view()/_meta() run on the event-loop thread. Both iterate
+    self._speakers.values() directly, so without a lock a comprehension can
+    observe the dict resizing mid-iteration and raise "RuntimeError: dictionary
+    changed size during iteration".
+
+    The reader here drives the REAL public entry points (transcript_view() and
+    _meta()) rather than hand-reproducing their internals -- otherwise the test
+    would still pass if the locking were stripped out of transcript_view()
+    itself, which is the exact surface under test."""
     audio = FakeAudio()
-    n_speakers = 40
-    transcribers = [FakeTranscriber([]) for _ in range(n_speakers)]
-    deps = _make_deps(tmp_root, transcribers, audio=audio)
+    # Sustained insertion (not one burst) with enough speakers that a reader's
+    # comprehension is virtually always mid-iteration when the dict resizes.
+    # Verified to fail with "dictionary changed size during iteration" when the
+    # lock is removed from transcript_view(); a smaller/burstier version of this
+    # test does NOT reproduce it.
+    n_feeders, per_feeder = 4, 150
+    deps = _make_deps([], audio=audio)
+    deps["make_transcription_stream"] = lambda: FakeTranscriptionStream([])
     registry = SessionRegistry(deps)
     session = registry.create("session-race", "guild-1")
 
     errors: list[BaseException] = []
     stop_reading = False
 
-    def feed_worker(i: int) -> None:
+    # Force the GIL to hand off far more often than the 5ms default. Without
+    # this the reader's comprehension finishes inside a single scheduling slice
+    # and the race simply never interleaves, so the test passes even with the
+    # locking removed -- i.e. it would be decorative rather than a regression
+    # test. Restored in the finally below.
+    original_switch_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+
+    def feed_worker(w: int) -> None:
         try:
-            session.feed(f"speaker-{i}", f"display-{i}", f"frame-{i}".encode(), ts_ms=i)
+            for i in range(per_feeder):
+                sid = f"speaker-{w}-{i}"
+                session.feed(sid, f"display-{w}-{i}", _pcm(20), ts_ms=i)
         except BaseException as exc:  # noqa: BLE001 -- capture any race-induced crash
             errors.append(exc)
 
@@ -445,25 +681,28 @@ def test_feed_from_worker_thread_races_readers_without_crashing(tmp_root):
         try:
             while not stop_reading:
                 session._meta()
-                with session._lock:
-                    [buf.pcm_path for buf in session._speakers.values() if buf.has_audio()]
+                # The real reader path, on its own event loop (production runs
+                # it on the main loop while feed() is off on a worker thread).
+                asyncio.run(session.transcript_view())
         except BaseException as exc:  # noqa: BLE001
             errors.append(exc)
 
     reader = threading.Thread(target=read_worker)
     reader.start()
     try:
-        feeders = [threading.Thread(target=feed_worker, args=(i,)) for i in range(n_speakers)]
+        feeders = [threading.Thread(target=feed_worker, args=(w,)) for w in range(n_feeders)]
         for t in feeders:
             t.start()
         for t in feeders:
-            t.join(timeout=10)
+            t.join(timeout=30)
     finally:
         stop_reading = True
-        reader.join(timeout=10)
+        reader.join(timeout=30)
+        sys.setswitchinterval(original_switch_interval)
 
     assert errors == []
-    assert set(session._speakers.keys()) == {f"speaker-{i}" for i in range(n_speakers)}
+    expected = {f"speaker-{w}-{i}" for w in range(n_feeders) for i in range(per_feeder)}
+    assert set(session._speakers.keys()) == expected
 
     # The session must still be fully usable afterwards (lock released cleanly,
     # no deadlock left behind).
@@ -471,3 +710,39 @@ def test_feed_from_worker_thread_races_readers_without_crashing(tmp_root):
     assert isinstance(view, list)
     result = asyncio.run(session.stop())
     assert result.transcript == ""
+
+
+def test_stop_finalizes_speakers_concurrently():
+    """Each speaker's aclose() waits on AWS to flush, bounded at
+    FINAL_FLUSH_TIMEOUT_S (15s). Finalizing sequentially makes worst-case /stop
+    latency N x 15s -- a 10-speaker meeting would block for 150s, well past the
+    bot's HTTP timeout, and the minutes would be lost entirely. The per-speaker
+    work is independent, so it must overlap."""
+    delay = 0.05
+    n_speakers = 6
+
+    class SlowStream(FakeTranscriptionStream):
+        async def aclose(self):
+            await asyncio.sleep(delay)
+            return await super().aclose()
+
+    deps = _make_deps([])
+    deps["make_transcription_stream"] = lambda: SlowStream([])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-parallel", "guild-1")
+    for i in range(n_speakers):
+        session.feed(f"speaker-{i}", f"name-{i}", _pcm(20), ts_ms=i * 20)
+
+    loop = asyncio.new_event_loop()
+    try:
+        started = loop.time()
+        loop.run_until_complete(session.stop())
+        elapsed = loop.time() - started
+    finally:
+        loop.close()
+
+    # Sequential would be >= n_speakers * delay; concurrent is ~delay.
+    assert elapsed < delay * (n_speakers / 2), (
+        f"stop() took {elapsed:.3f}s for {n_speakers} speakers at {delay}s each "
+        "-- finalization is serialized"
+    )

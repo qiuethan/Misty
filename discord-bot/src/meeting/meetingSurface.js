@@ -12,7 +12,11 @@ export function createMeetingSurface({
 }) {
   const sessions = new Map();
 
-  function start({ guildId, voiceChannel, textChannel }) {
+  // `requesterId` is the Discord user id of whoever started the recording. It's
+  // stored on the session (not read off the stopping interaction) so the
+  // minutes always @-mention the person who asked for them -- including when
+  // the recording ends via auto-stop, where there's no interaction at all.
+  function start({ guildId, voiceChannel, textChannel, requesterId }) {
     if (sessions.has(guildId)) {
       return { status: 'already-recording' };
     }
@@ -46,6 +50,7 @@ export function createMeetingSurface({
       recorder,
       textChannel,
       voiceChannel,
+      requesterId,
       startedAt: now(),
     });
 
@@ -79,16 +84,16 @@ export function createMeetingSurface({
     // the same guild can't double-run the teardown below.
     sessions.delete(guildId);
 
-    const { sessionId, stream, recorder, textChannel } = session;
+    const { sessionId, stream, recorder, textChannel, requesterId } = session;
     try {
       // Order matters: finalize server-side (POST /stop) BEFORE closing the
       // WS. The service treats a WS disconnect with no prior /stop as an
-      // abrupt-disconnect discard() (deregister + temp-file cleanup, no
+      // abrupt-disconnect discard() (deregister + drop buffers, no
       // finalize) -- closing the WS first would race the session into being
       // discarded, so the subsequent /stop 404s and we lose the minutes.
       await recorder.stop();
       const report = await meetingClient.stop(sessionId);
-      await poster({ channel: textChannel, report });
+      await poster({ channel: textChannel, report, requesterId });
       return { status: 'stopped' };
     } catch (err) {
       console.error(`meetingSurface: error stopping meeting for guild ${guildId}:`, err);

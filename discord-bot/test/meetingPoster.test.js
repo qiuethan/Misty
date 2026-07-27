@@ -26,45 +26,43 @@ test('poster posts a PDF attachment decoded from pdf_b64', async () => {
   assert.ok(Buffer.from(files[0].attachment).equals(pdfBytes));
 });
 
-test('poster attaches audio as a second file when audio_b64 present', async () => {
+test('poster never attaches audio, even if the report still carries some', async () => {
   const poster = makeAttachmentPoster();
   const pdfBytes = Buffer.from('pdf-bytes');
-  const audioBytes = Buffer.from('audio-bytes');
   const channel = fakeChannel();
   await poster({
     channel,
-    report: { pdf_b64: pdfBytes.toString('base64'), audio_b64: audioBytes.toString('base64') },
+    report: {
+      pdf_b64: pdfBytes.toString('base64'),
+      audio_b64: Buffer.from('audio-bytes').toString('base64'),
+    },
   });
 
   const { files } = channel.calls[0];
-  assert.equal(files.length, 2);
+  assert.equal(files.length, 1);
   assert.equal(files[0].name, 'meeting-minutes.pdf');
-  assert.equal(files[1].name, 'meeting-audio.mp3');
-  assert.ok(Buffer.from(files[1].attachment).equals(audioBytes));
 });
 
-test('poster falls back to PDF-only when the full send rejects, and never throws', async () => {
+test('poster mentions the member who started the recording', async () => {
   const poster = makeAttachmentPoster();
-  const pdfBytes = Buffer.from('pdf-bytes');
-  const audioBytes = Buffer.from('audio-bytes');
-  const calls = [];
-  const channel = {
-    send: async (payload) => {
-      calls.push(payload);
-      if (calls.length === 1) throw new Error('payload too large');
-      return payload;
-    },
-  };
-
+  const channel = fakeChannel();
   await poster({
     channel,
-    report: { pdf_b64: pdfBytes.toString('base64'), audio_b64: audioBytes.toString('base64') },
+    report: { pdf_b64: Buffer.from('pdf').toString('base64') },
+    requesterId: '424242',
   });
 
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].files.length, 2);
-  assert.equal(calls[1].files.length, 1);
-  assert.equal(calls[1].files[0].name, 'meeting-minutes.pdf');
+  assert.equal(channel.calls.length, 1);
+  assert.match(channel.calls[0].content, /<@424242>/);
+});
+
+test('poster posts without a mention when the requester is unknown', async () => {
+  const poster = makeAttachmentPoster();
+  const channel = fakeChannel();
+  await poster({ channel, report: { pdf_b64: Buffer.from('pdf').toString('base64') } });
+
+  assert.equal(channel.calls.length, 1);
+  assert.doesNotMatch(channel.calls[0].content, /<@/);
 });
 
 test('poster never throws even when every send rejects', async () => {

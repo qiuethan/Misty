@@ -14,9 +14,10 @@ ffmpeg/libopus so it installs cleanly in ``python:3.11-slim`` with no extra
 system package): one decoder instance per speaker, fed packets in order.
 """
 
-import subprocess
-
 import av
+
+# Output format is s16 (16-bit) mono, so one sample is 2 bytes.
+_BYTES_PER_SAMPLE = 2
 
 
 class OpusStreamDecoder:
@@ -55,42 +56,14 @@ class OpusStreamDecoder:
             for out_frame in resampled if isinstance(resampled, list) else [resampled]:
                 if out_frame is None:
                     continue
-                pcm += bytes(out_frame.planes[0])
+                # Slice to the REAL sample count. ``bytes(plane)`` hands back
+                # the whole plane allocation, which FFmpeg aligns -- for a 320
+                # sample (20ms) frame that's 768 bytes instead of 640, i.e. 20%
+                # trailing padding. Splicing that in would both corrupt the
+                # audio sent to Transcribe (a ~6ms glitch every frame) and
+                # inflate the byte-derived timebase that ``sessions.py`` uses to
+                # detect silence gaps. s16 mono => 2 bytes per sample.
+                pcm += bytes(out_frame.planes[0])[: out_frame.samples * _BYTES_PER_SAMPLE]
         return bytes(pcm)
 
 
-def opus_to_pcm16k_args() -> list[str]:
-    """Unused for decode (see module docstring for why bare Opus packets can't
-    go through ffmpeg's demuxer). Kept only in case a future container-framed
-    (e.g. Ogg-wrapped) Opus input ever needs this shape again.
-    """
-    return [
-        "-f",
-        "data",
-        "-c:a",
-        "libopus",
-        "-i",
-        "pipe:0",
-        "-ar",
-        "16000",
-        "-ac",
-        "1",
-        "-f",
-        "s16le",
-        "pipe:1",
-    ]
-
-
-def run_ffmpeg(args: list[str], input_bytes: bytes | None = None) -> bytes:
-    """Run ffmpeg with `args`, feeding `input_bytes` to stdin, and return stdout.
-
-    Raises RuntimeError (with the stderr tail) if ffmpeg exits non-zero.
-
-    Still used by the mixer (``mixer.mix_to_mp3_args``) to combine the
-    per-speaker 16 kHz mono s16le PCM files into one MP3.
-    """
-    result = subprocess.run(["ffmpeg", *args], input=input_bytes, capture_output=True)
-    if result.returncode != 0:
-        stderr_tail = result.stderr[-2000:].decode("utf-8", errors="replace")
-        raise RuntimeError(f"ffmpeg failed (exit {result.returncode}): {stderr_tail}")
-    return result.stdout

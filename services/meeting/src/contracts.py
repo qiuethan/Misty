@@ -22,4 +22,3 @@ class StopResponse(BaseModel):
     transcript: str
     minutes: Minutes
     pdf_b64: str
-    audio_b64: str | None = None

@@ -190,8 +190,10 @@ and skips them.
   recording the meeting. `/record status` (linked) — shows elapsed recording
   time. `/record stop` (linked) — ends the recording and, within roughly
   30–60s, posts a `meeting-minutes.pdf` (summary, decisions, action items,
-  full transcript) and `meeting-audio.mp3` back into the text channel. No audio
-  or transcript is persisted — temp files are cleaned up after posting.
+  full transcript) back into the text channel, @-mentioning whoever started the
+  recording. The meeting service persists nothing: it streams audio straight to
+  AWS and never writes audio or transcript to disk. The posted PDF does contain
+  the full transcript, and that lives in Discord like any other attachment.
 
 Every command is on the **stable** channel (`beta = false`), so they all register
 globally in every server the bot is in. There are currently no beta commands.
@@ -206,8 +208,8 @@ globally in every server the bot is in. There are currently no beta commands.
 
 As of v2, recording is split across two services: the bot only joins voice and
 streams raw Opus audio over a WebSocket to the separate `meeting` service,
-which owns decoding/mixing (ffmpeg), transcription (AWS Transcribe), minutes
-generation, and posts the results back. See
+which owns Opus decoding, transcription (AWS Transcribe), and minutes
+generation, and returns the resulting PDF for the bot to post. See
 [`docs/MEETING-RECORDING.md`](../docs/MEETING-RECORDING.md) for the full
 architecture.
 

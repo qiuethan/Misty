@@ -1,26 +1,24 @@
 """Adapters bridging ``SessionRegistry``'s injected ``deps`` protocol to the
-real ffmpeg/AWS/LLM modules, plus the process-wide ``SessionRegistry`` FastAPI
+real Opus/AWS/LLM modules, plus the process-wide ``SessionRegistry`` FastAPI
 dependency.
 
-``src/sessions.py`` is deliberately decoupled from ffmpeg/AWS/network so it
+``src/sessions.py`` is deliberately decoupled from AWS/network so it
 unit-tests with fakes. This module is the only place that wires it to the real
-world: real ffmpeg subprocess decode/mix, a real AWS Transcribe client
-factory, and a real LLM-backed report builder (minutes + PDF).
+world: real per-speaker Opus decoders, a real AWS Transcribe client factory,
+and a real LLM-backed report builder (minutes + PDF).
 """
 
-import tempfile
 from datetime import datetime, timezone
 from functools import lru_cache
 
-from src.audio.decoder import OpusStreamDecoder, run_ffmpeg
-from src.audio.mixer import mix_to_mp3_args
+from src.audio.decoder import OpusStreamDecoder
 from src.config import get_settings
 from src.pipeline.llm_client import LlmClient
 from src.pipeline.minutes import summarize_minutes
 from src.pipeline.pdf import render_meeting_pdf
 from src.pipeline.transcript import assemble_transcript
 from src.sessions import SessionRegistry
-from src.stt.transcribe import create_transcriber
+from src.stt.transcribe import create_transcription_stream
 
 
 class AudioAdapter:
@@ -38,20 +36,6 @@ class AudioAdapter:
 
     def make_decoder(self) -> OpusStreamDecoder:
         return OpusStreamDecoder()
-
-
-class MixerAdapter:
-    """Mixes N raw PCM tracks into one MP3 via ffmpeg.
-
-    ``mix_to_mp3_args`` writes ffmpeg's output to a file path (not stdout), so
-    ``run_ffmpeg``'s returned stdout is empty here -- the mixed bytes are read
-    back from ``output_path`` after the subprocess exits successfully.
-    """
-
-    def mix(self, paths: list[str], output_path: str) -> bytes:
-        run_ffmpeg(mix_to_mp3_args(paths, output_path))
-        with open(output_path, "rb") as f:
-            return f.read()
 
 
 def _build_report_builder():
@@ -72,14 +56,14 @@ def _build_report_builder():
 @lru_cache(maxsize=1)
 def get_session_registry() -> SessionRegistry:
     """FastAPI dependency: process-wide ``SessionRegistry`` wired to real
-    ffmpeg/AWS/LLM adapters. Tests override via
+    Opus/AWS/LLM adapters. Tests override via
     ``app.dependency_overrides[get_session_registry] = lambda: fake_registry``."""
     deps = {
-        "make_transcriber": lambda: create_transcriber(get_settings().aws_region),
+        "make_transcription_stream": lambda: create_transcription_stream(
+            get_settings().aws_region
+        ),
         "audio": AudioAdapter(),
-        "mixer": MixerAdapter(),
         "report_builder": _build_report_builder(),
-        "tmp_root": tempfile.gettempdir(),
         "now": lambda: datetime.now(timezone.utc),
         "max_meeting_ms": get_settings().max_meeting_ms,
     }
