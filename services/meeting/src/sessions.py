@@ -201,7 +201,8 @@ class MeetingSession:
         self._started_at = deps["now"]()
         self._speakers: dict[str, _SpeakerBuffer] = {}
         # Guards all reads/mutations of self._speakers (dict shape) and of any
-        # individual buffer's pcm_chunks list. feed() runs synchronously on a
+        # individual buffer's mutable state (display_name, anchors,
+        # buffered_bytes). feed() runs synchronously on a
         # worker thread (via asyncio.to_thread from the WS ingest loop) while
         # transcript_view()/stop()/_meta() run on the event-loop thread -- a
         # plain dict/list is not safe under that cross-thread access pattern
@@ -237,13 +238,9 @@ class MeetingSession:
         if self._stopping:
             return
 
-        # Fix #4 (cap only -- NOT a fix for the separate re-billing cost issue
-        # below): bound unbounded PCM growth by refusing to buffer audio past
-        # max_meeting_ms. This does NOT address transcript_view()/stop() still
-        # re-transcribing the WHOLE buffer on every poll (re-billing AWS on
-        # every call) -- that is a distinct cost problem whose proper fix is
-        # the incremental persistent-per-speaker-Transcribe-stream redesign
-        # scoped to sub-plan 3, not this cap.
+        # Bound how long a single meeting can run, so a forgotten one cannot hold
+        # an AWS stream open indefinitely (Transcribe caps a session at 4h in
+        # any case). Frames past the cap are dropped, not buffered.
         max_meeting_ms = self._deps.get("max_meeting_ms")
         if max_meeting_ms is not None:
             elapsed_ms = (self._deps["now"]() - self._started_at).total_seconds() * 1000
@@ -289,10 +286,10 @@ class MeetingSession:
         # work. feed() runs synchronously on a worker thread (via
         # asyncio.to_thread from the live WS ingest loop) and can insert a
         # brand-new speaker into self._speakers, or append to an existing
-        # buffer's pcm_chunks, at any time -- including while this coroutine
+        # buffer's anchors, at any time -- including while this coroutine
         # is suspended at an `await`. Snapshotting under a short, non-async
         # lock section avoids both "dictionary changed size during iteration"
-        # and mutating the list mid-transcribe. A speaker who first appears
+        # and reading a half-updated anchor list. A speaker who first appears
         # (or speaks more) mid-poll simply shows up fully on the next poll (or
         # at stop()) instead -- an acceptable, self-correcting gap.
         with self._lock:
@@ -325,11 +322,28 @@ class MeetingSession:
             segments: list[Segment] = []
             # Same lock-scoped snapshot rationale as transcript_view() above:
             # a concurrent feed() must not mutate self._speakers or a
-            # buffer's pcm_chunks while we're suspended at the await below.
+            # buffer's anchors while we're suspended at the await below.
             with self._lock:
                 snapshot = [(buf, *buf.snapshot()) for buf in self._speakers.values()]
-            for buf, display_name, anchors in snapshot:
-                words = await buf.finalize(anchors)
+            # Finalize speakers CONCURRENTLY. Each finalize() closes an AWS
+            # stream and waits for its flush (bounded at FINAL_FLUSH_TIMEOUT_S),
+            # and the work is independent per speaker -- serializing it would
+            # make worst-case /stop latency N x that bound, which for a large
+            # meeting exceeds the bot's HTTP timeout and loses the minutes.
+            per_speaker = await asyncio.gather(
+                *(buf.finalize(anchors) for buf, _, anchors in snapshot),
+                return_exceptions=True,
+            )
+            for (buf, display_name, _anchors), words in zip(snapshot, per_speaker):
+                if isinstance(words, BaseException):
+                    # One speaker's stream failing must not lose everyone else's
+                    # transcript.
+                    _logger.warning(
+                        "finalizing speaker %s failed; their words are omitted: %s",
+                        display_name,
+                        words,
+                    )
+                    continue
                 segments.extend(words_to_segments(display_name, words))
             segments.sort(key=lambda s: s.start_ms)
 
@@ -359,8 +373,8 @@ class MeetingSession:
 
     def discard(self) -> None:
         """Lightweight teardown for abrupt disconnects (e.g. WS drop without a
-        preceding ``POST /stop``): deregister the session and drop its buffered
-        audio. Deliberately does NOT transcribe/summarize/build a PDF -- those
+        preceding ``POST /stop``): deregister the session and abort each
+        speaker's Transcribe stream. Deliberately does NOT transcribe/summarize/build a PDF -- those
         are only worth paying for when a consumer actually wants the finalized
         meeting artifacts via ``stop()``.
 

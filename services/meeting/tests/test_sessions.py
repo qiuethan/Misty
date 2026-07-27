@@ -710,3 +710,39 @@ def test_feed_from_worker_thread_races_readers_without_crashing():
     assert isinstance(view, list)
     result = asyncio.run(session.stop())
     assert result.transcript == ""
+
+
+def test_stop_finalizes_speakers_concurrently():
+    """Each speaker's aclose() waits on AWS to flush, bounded at
+    FINAL_FLUSH_TIMEOUT_S (15s). Finalizing sequentially makes worst-case /stop
+    latency N x 15s -- a 10-speaker meeting would block for 150s, well past the
+    bot's HTTP timeout, and the minutes would be lost entirely. The per-speaker
+    work is independent, so it must overlap."""
+    delay = 0.05
+    n_speakers = 6
+
+    class SlowStream(FakeTranscriptionStream):
+        async def aclose(self):
+            await asyncio.sleep(delay)
+            return await super().aclose()
+
+    deps = _make_deps([])
+    deps["make_transcription_stream"] = lambda: SlowStream([])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-parallel", "guild-1")
+    for i in range(n_speakers):
+        session.feed(f"speaker-{i}", f"name-{i}", _pcm(20), ts_ms=i * 20)
+
+    loop = asyncio.new_event_loop()
+    try:
+        started = loop.time()
+        loop.run_until_complete(session.stop())
+        elapsed = loop.time() - started
+    finally:
+        loop.close()
+
+    # Sequential would be >= n_speakers * delay; concurrent is ~delay.
+    assert elapsed < delay * (n_speakers / 2), (
+        f"stop() took {elapsed:.3f}s for {n_speakers} speakers at {delay}s each "
+        "-- finalization is serialized"
+    )

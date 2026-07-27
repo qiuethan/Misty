@@ -10,11 +10,16 @@ from src.stt.transcribe import create_transcription_stream
 class _FakeInputStream:
     """Mimics amazon_transcribe's AudioStream (input_stream)."""
 
-    def __init__(self):
+    def __init__(self, output_stream=None):
         self.sent_chunks = []
         self.ended = False
+        self._output_stream = output_stream
 
     async def send_audio_event(self, audio_chunk):
+        # The real service rejects audio once it has closed the session; a fake
+        # that silently accepts it would hide sends into a dead stream.
+        if self._output_stream is not None and self._output_stream.closed:
+            raise RuntimeError("send_audio_event on a closed stream")
         self.sent_chunks.append(audio_chunk)
 
     async def end_stream(self):
@@ -52,6 +57,29 @@ def _partial_event() -> TranscriptEvent:
 # --- persistent per-speaker streaming ---------------------------------------
 
 
+async def drain(stream, max_rounds: int = 2000):
+    """Test-only synchronisation: yield until every byte handed to ``send()``
+    has reached the fake AWS client and any emitted events have been consumed.
+
+    This lives in the test module, not on the production class, so the runtime
+    contract stays ``start/send/words/aclose/abort``. It pokes private state on
+    purpose -- that is a test's prerogative, not production API surface. The
+    round cap keeps a wedged pump from hanging the suite.
+    """
+    for _ in range(max_rounds):
+        task = stream._task
+        if task is not None and task.done():
+            return
+        caught_up = stream._queue is not None and stream._queue.empty() and (
+            stream._delivered_bytes == stream._sent_bytes
+        )
+        if caught_up:
+            await asyncio.sleep(0)  # let the output consumer run
+            if stream._queue.empty() and stream._delivered_bytes == stream._sent_bytes:
+                return
+        await asyncio.sleep(0)
+
+
 class _LiveOutputStream:
     """An output stream fed events on demand, so a test can control WHEN results
     become visible -- mimicking AWS emitting finals as the speaker talks rather
@@ -82,7 +110,7 @@ class _LiveOutputStream:
 class _LiveStream:
     def __init__(self):
         self.output_stream = _LiveOutputStream()
-        self.input_stream = _FakeInputStream()
+        self.input_stream = _FakeInputStream(self.output_stream)
         # Faithful to the real service: ending the input stream makes AWS flush
         # its remaining results and CLOSE the output stream. Without this the
         # fake would let a consumer wait on it forever, which the real one never
@@ -120,12 +148,12 @@ def test_streaming_sends_audio_once_and_exposes_words_as_they_finalize():
 
         stream.send(b"\x00" * 640)
         stream.send(b"\x01" * 640)
-        await stream.drain()
+        await drain(stream)
 
         assert stream.words() == []  # nothing finalized yet
 
         client.streams[0].output_stream.push(_final_event())
-        await stream.drain()
+        await drain(stream)
 
         # Readable mid-flight, with the stream still open.
         assert stream.words() == [
@@ -160,14 +188,14 @@ def test_streaming_reopens_after_the_aws_stream_ends_and_offsets_word_times():
 
         # 1000ms of audio through the first stream, which then ends by itself.
         stream.send(b"\x00" * (32 * 1000))
-        await stream.drain()
+        await drain(stream)
         client.streams[0].output_stream.push(_final_event())
         client.streams[0].output_stream.finish()
-        await stream.drain()
+        await drain(stream)
 
         # The speaker resumes: a second stream opens transparently.
         stream.send(b"\x02" * 640)
-        await stream.drain()
+        await drain(stream)
         client.streams[1].output_stream.push(_final_event())
         words = await stream.aclose()
 
@@ -193,7 +221,7 @@ def test_streaming_abort_is_sync_and_stops_the_stream():
         stream = create_transcription_stream(region="us-east-1", client=client)
         stream.start()
         stream.send(b"\x00" * 640)
-        await stream.drain()
+        await drain(stream)
 
         stream.abort()  # sync, no await
 
@@ -233,14 +261,14 @@ def test_streaming_survives_a_failing_stream_and_keeps_earlier_words():
         stream = create_transcription_stream(region="us-east-1", client=client)
         stream.start()
         stream.send(b"\x00" * 640)
-        await stream.drain()
+        await drain(stream)
         client.first.output_stream.push(_final_event())
-        await stream.drain()
+        await drain(stream)
         # First stream ends; reopening will raise.
         client.first.output_stream.finish()
-        await stream.drain()
+        await drain(stream)
         stream.send(b"\x01" * 640)
-        await stream.drain()
+        await drain(stream)
 
         words = await stream.aclose()
         assert words == [
@@ -261,14 +289,241 @@ def test_streaming_ignores_partial_results():
         stream = create_transcription_stream(region="us-east-1", client=client)
         stream.start()
         stream.send(b"\x00" * 640)
-        await stream.drain()
+        await drain(stream)
 
         client.streams[0].output_stream.push(_partial_event())
-        await stream.drain()
+        await drain(stream)
         assert stream.words() == [], "a partial result must not be surfaced"
 
         client.streams[0].output_stream.push(_final_event())
         words = await stream.aclose()
+        assert words == [
+            {"text": "hello", "start_ms": 100},
+            {"text": "world", "start_ms": 512},
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_pending_replay_audio_is_flushed_when_close_follows_a_restart():
+    """When AWS ends a session, a chunk pulled off the queue in that same turn
+    is carried into ``pending`` for the NEXT session. If the close sentinel is
+    what arrives next, the pump must still flush that audio rather than exiting
+    with it in hand.
+
+    Driven entirely through the public API: `send` -> AWS ends -> `send` ->
+    `aclose`, with no further audio in between."""
+
+    async def scenario():
+        client = _LiveClient()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
+        stream.send(b"a" * 640)
+        await drain(stream)
+
+        # AWS ends the session in the same turn the next chunk lands, so that
+        # chunk becomes pending replay audio...
+        client.streams[0].output_stream.finish()
+        stream.send(b"b" * 640)
+        await drain(stream)
+
+        # ...and the meeting stops before this speaker says anything more.
+        await stream.aclose()
+
+        delivered = [bytes(c) for st in client.streams for c in st.input_stream.sent_chunks]
+        assert b"b" * 640 in delivered, (
+            f"replay audio was dropped on close; delivered {[d[:1] for d in delivered]}"
+        )
+
+    asyncio.run(scenario())
+
+
+def test_abort_before_the_pump_spawns_does_not_leak_a_task():
+    """``start()`` schedules the pump via ``call_soon_threadsafe``, so there is a
+    window where ``_task`` is still None. An ``abort()`` landing in that window
+    must not let the pump spawn anyway and park forever on a queue nothing will
+    ever feed -- that leaks a task on the event loop for the life of the
+    process. Reachable on the abrupt-disconnect path."""
+
+    async def scenario():
+        stream = create_transcription_stream(region="us-east-1", client=object())
+        stream.start()
+        stream.abort()  # lands before _spawn() has run
+        for _ in range(50):
+            await asyncio.sleep(0)
+
+        assert stream.is_running() is False, "pump spawned and leaked despite abort()"
+
+    asyncio.run(scenario())
+
+
+def test_session_ending_alongside_new_audio_restarts_instead_of_dying():
+    """`asyncio.wait(FIRST_COMPLETED)` can return with BOTH the queue read and
+    the output-stream consumer done. If the queue is checked first, the pump
+    sends into a session AWS has already closed -- which raises, trips the
+    failure handler, and leaves the speaker a black hole for the REST of the
+    meeting (audio drained and discarded, one log line as the only signal).
+
+    AWS ends sessions on idle timeout, at the 4h cap, and on transient service
+    errors, so this is an ordinary occurrence, not an exotic race. The session
+    must restart and keep transcribing."""
+
+    async def scenario():
+        client = _LiveClient()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
+        stream.send(b"a" * 640)
+        await drain(stream)
+
+        # AWS ends the session in the same turn that more audio arrives.
+        client.streams[0].output_stream.finish()
+        stream.send(b"b" * 640)
+        await drain(stream)
+
+        # ...and the speaker keeps talking afterwards.
+        stream.send(b"c" * 640)
+        await drain(stream)
+
+        assert len(client.streams) == 2, (
+            f"expected a restart, got {len(client.streams)} session(s) -- "
+            "the speaker stopped being transcribed"
+        )
+        later = [bytes(c) for c in client.streams[1].input_stream.sent_chunks]
+        assert later == [b"b" * 640, b"c" * 640], (
+            f"audio after the restart never reached AWS: {[c[:1] for c in later]}"
+        )
+        await stream.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_a_transient_session_failure_does_not_disable_the_speaker():
+    """One failed session must not be terminal. Previously any exception --
+    including a single transient AWS error -- sent the pump into a drain-and-
+    discard loop for the remainder of the meeting."""
+
+    class _FlakyClient:
+        def __init__(self):
+            self.calls = 0
+            self.streams = []
+
+        async def start_stream_transcription(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("transient AWS blip")
+            stream = _LiveStream()
+            self.streams.append(stream)
+            return stream
+
+    async def scenario():
+        client = _FlakyClient()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
+        stream.send(b"a" * 640)
+        await drain(stream)
+        stream.send(b"b" * 640)
+        await drain(stream)
+
+        assert client.streams, "the pump gave up after one transient failure"
+        delivered = [bytes(c) for c in client.streams[0].input_stream.sent_chunks]
+        assert b"b" * 640 in delivered, "audio after the blip never reached AWS"
+        await stream.aclose()
+
+    asyncio.run(scenario())
+
+
+class _FlushingStream:
+    """A stream whose `end_stream()` behaves like the real service: it emits one
+    LAST final result and only then closes the output stream.
+
+    The default `_LiveStream` closes synchronously and emits nothing, which
+    silently makes aclose()'s whole reason for existing untestable."""
+
+    def __init__(self, final_event):
+        self.output_stream = _LiveOutputStream()
+        self.input_stream = _FakeInputStream(self.output_stream)
+        _end = self.input_stream.end_stream
+
+        async def end_stream():
+            await _end()
+            self.output_stream.push(final_event)
+            self.output_stream.finish()
+
+        self.input_stream.end_stream = end_stream
+
+
+def test_aclose_surfaces_finals_emitted_only_after_end_stream():
+    """Closing is what turns AWS's trailing partials into finals, so aclose()
+    can legitimately return MORE than the last words() did. Without this the
+    final utterance of every meeting would be missing from the transcript."""
+
+    async def scenario():
+        final = _final_event()
+
+        class _C:
+            def __init__(self):
+                self.streams = []
+
+            async def start_stream_transcription(self, **kwargs):
+                st = _FlushingStream(final)
+                self.streams.append(st)
+                return st
+
+        stream = create_transcription_stream(region="us-east-1", client=_C())
+        stream.start()
+        stream.send(b"\x00" * 640)
+        await drain(stream)
+
+        assert stream.words() == [], "nothing has been finalized yet"
+
+        words = await stream.aclose()
+        assert words == [
+            {"text": "hello", "start_ms": 100},
+            {"text": "world", "start_ms": 512},
+        ], "the post-end_stream flush was lost"
+
+    asyncio.run(scenario())
+
+
+def test_aclose_gives_up_on_a_stream_that_never_closes():
+    """A service that accepts end_stream() but never closes its output stream
+    must not hang finalize -- stop() would block the whole meeting, and the bot
+    would time out and lose the minutes. Words already finalized are kept."""
+
+    class _NeverClosingStream:
+        def __init__(self):
+            self.output_stream = _LiveOutputStream()
+            self.input_stream = _FakeInputStream(self.output_stream)
+            # end_stream() succeeds but the output stream is never finished.
+
+    class _C:
+        def __init__(self):
+            self.streams = []
+
+        async def start_stream_transcription(self, **kwargs):
+            st = _NeverClosingStream()
+            self.streams.append(st)
+            return st
+
+    async def scenario():
+        client = _C()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
+        stream.send(b"\x00" * 640)
+        await drain(stream)
+        client.streams[0].output_stream.push(_final_event())
+        await drain(stream)
+
+        import src.stt.transcribe as mod
+
+        original = mod.FINAL_FLUSH_TIMEOUT_S
+        mod.FINAL_FLUSH_TIMEOUT_S = 0.05  # keep the test fast
+        try:
+            words = await asyncio.wait_for(stream.aclose(), 5)
+        finally:
+            mod.FINAL_FLUSH_TIMEOUT_S = original
+
+        # Bounded, and the words finalized before the hang are preserved.
         assert words == [
             {"text": "hello", "start_ms": 100},
             {"text": "world", "start_ms": 512},

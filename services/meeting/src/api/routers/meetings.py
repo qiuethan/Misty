@@ -249,7 +249,7 @@ async def stream_meeting(
                 # -- offload to a thread so one meeting's decode work doesn't
                 # stall the event loop for other connections.
                 # Fix #3: a raising session.feed() doesn't crash the whole
-                # meeting -- only this single frame is dropped, and the receive
+                # meeting -- only this single frame is dropped and the receive
                 # loop continues. This
                 # is deliberately NOT `except WebSocketDisconnect` -- that must
                 # still propagate up and break the loop (handled below).
