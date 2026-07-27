@@ -173,3 +173,22 @@ def test_lossy_salvage_is_logged(caplog):
     assert any("salvage" in r.message.lower() for r in caplog.records), (
         f"no warning logged; records: {[r.message for r in caplog.records]}"
     )
+
+
+def test_keeps_salvaged_fields_when_the_summary_never_arrived():
+    """Salvage can return a dict with real content but no `summary` -- the model
+    got cut off before finishing that value. Discarding the whole thing throws
+    away a title and decisions it genuinely produced.
+
+    Before salvage existed this could not happen: `_extract_json` returned
+    either None or a fully valid object, so requiring `summary` was safe. It
+    isn't any more."""
+    raw = '{"title": "Q3 Roadmap Sync", "decisions": ["Ship Friday"], "summar'
+    m = summarize_minutes("x", FakeLlm(raw))
+
+    assert m.title == "Q3 Roadmap Sync"
+    assert m.decisions == ["Ship Friday"]
+    # No summary was recovered, so it must say so -- not carry raw JSON, and not
+    # silently pretend the meeting had no decisions.
+    assert "unavailable" in m.summary.lower()
+    assert "{" not in m.summary

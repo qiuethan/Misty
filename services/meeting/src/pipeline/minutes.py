@@ -153,16 +153,15 @@ def summarize_minutes(transcript: str, llm_client, model=None) -> Minutes:
             summary="(minutes unavailable: LLM service error)", decisions=[], action_items=[]
         )
     parsed = _extract_json(content)
-    if not parsed or not isinstance(parsed.get("summary"), str):
-        # Last resort: the model wrote prose instead of JSON, or the response was
-        # too mangled to salvage. Use it as the summary -- but never a raw JSON
-        # fragment, which is unreadable in the PDF and used to be what a reader
-        # actually saw when the response was truncated.
+    if not parsed:
+        # The model wrote prose instead of JSON, or the response was too mangled
+        # to salvage. Use it as the summary -- but never a raw JSON fragment,
+        # which is unreadable in the PDF and used to be exactly what a reader
+        # saw when the response was truncated.
         fallback = (content or "").strip()
-        # Check the UNWRAPPED candidate: a truncated response never closes its
-        # fence, so a bare startswith("{") misses ```json blocks and "Here are
-        # the minutes:" lead-ins -- the two commonest shapes -- and the raw
-        # fragment reaches the reader anyway.
+        # Check the UNWRAPPED candidate plus a JSON shape signal: a truncated
+        # response never closes its fence, so a bare startswith("{") misses
+        # ```json blocks and "Here are the minutes:" lead-ins.
         unwrapped = _candidate(fallback).lstrip()
         if unwrapped.startswith(("{", "[")) or _JSON_ISH.search(fallback):
             _logger.warning(
@@ -172,12 +171,21 @@ def summarize_minutes(transcript: str, llm_client, model=None) -> Minutes:
             )
             fallback = "(minutes unavailable: the model's response could not be parsed)"
         return Minutes(summary=fallback, decisions=[], action_items=[])
+
+    summary = parsed.get("summary")
+    if not isinstance(summary, str):
+        # Salvage recovered SOMETHING but not the summary -- truncation landed
+        # before that value closed. Keep whatever else survived rather than
+        # throwing away a title and decisions the model really did produce.
+        _logger.warning("minutes response had no usable summary; keeping the other fields")
+        summary = "(summary unavailable: the model's response was cut off)"
+
     raw_decisions = parsed.get("decisions", [])
     raw_action_items = parsed.get("action_items", [])
     raw_title = parsed.get("title")
     return Minutes(
         title=str(raw_title).strip()[:120] if isinstance(raw_title, str) else "",
-        summary=parsed["summary"],
+        summary=summary,
         decisions=[str(x) for x in raw_decisions] if isinstance(raw_decisions, list) else [],
         action_items=[str(x) for x in raw_action_items] if isinstance(raw_action_items, list) else [],
     )
