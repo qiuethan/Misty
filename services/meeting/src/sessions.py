@@ -1,31 +1,30 @@
 """Stateful in-process session registry + meeting lifecycle orchestration.
 
-All collaborators (transcriber factory, audio decoder, mixer, report builder,
-tmp dir root, clock) are injected via a ``deps`` dict so this module has zero
-direct dependency on ffmpeg/AWS/network -- tests use fakes exclusively.
+All collaborators (transcriber factory, audio decoder, report builder, clock)
+are injected via a ``deps`` dict so this module has zero direct dependency on
+AWS/network -- tests use fakes exclusively.
 
-Design note (deviation from a fully "live" model, flagged for the reviewer):
-true incremental transcription would keep a persistent per-speaker Transcribe
-stream open and feed it audio as frames arrive. That's an inherently live/
-integration concern (a real streaming client, backpressure, concurrent tasks)
-that doesn't unit-test cleanly with fakes. Instead, ``feed`` only decodes and
-buffers: per-speaker raw PCM is appended to a temp file (for the final audio
-mix) AND kept in memory (for transcription input). Transcription itself is
-driven by re-running the injected transcriber's ``transcribe()`` over the
-speaker's buffered-so-far PCM, both when ``transcript_view()`` is polled
-(a "periodic" refinement of the rolling view) and, finally, in ``stop()``.
-This is simpler and fully testable with fakes, and is adequate for the
-rolling-transcript-at-stop + periodic transcript_view use cases described in
-the brief. True incremental/live streaming transcription can be layered in
-during the sub-plan 3 live integration phase.
+Nothing here touches the filesystem, and nothing retains the audio: each PCM
+chunk is handed straight to that speaker's Transcribe stream and dropped.
+Audio is never persisted and never returned (see ``stop``).
+
+Transcription is LIVE: each speaker gets one persistent AWS Transcribe stream
+(``src/stt/transcribe.py``) opened on their first frame and fed as audio
+arrives. ``transcript_view()`` is then a pure read of what that stream has
+finalized so far -- no AWS call, no audio replayed -- and ``stop()`` just closes
+the streams and collects their final results.
+
+This replaced a design that re-transcribed each speaker's WHOLE accumulated
+buffer on every poll and again at stop. That made AWS cost grow with the SQUARE
+of meeting length (k polls re-sent ~k/2 copies of the audio), made each poll
+progressively slower, and forced every speaker's PCM to be retained in memory
+for the life of the meeting. None of that is true any more: nothing here keeps
+the audio, because nothing replays it.
 """
 
 import asyncio
 import base64
-import hashlib
 import logging
-import os
-import shutil
 import threading
 
 from src.contracts import Segment, StopResponse
@@ -66,84 +65,131 @@ def words_to_segments(speaker: str, words: list[dict], gap_ms: int = 3000) -> li
     return segments
 
 
-def _safe_filename_component(raw: str) -> str:
-    """Derive a filesystem-safe, collision-resistant filename component from an
-    attacker/caller-controlled speaker_id (decoded straight off the WS binary
-    frame, see api/routers/meetings.py -- no charset or path-traversal
-    validation happens there). NEVER interpolate the raw speaker_id into a
-    filesystem path: values like ``../../etc/evil`` or ``/abs/path`` would
-    otherwise let a WS client redirect PCM writes (and the later ffmpeg mix
-    read) to an arbitrary path outside the session's tmp dir (CWE-22).
+# 16 kHz mono s16le -> 2 bytes per sample * 16 samples per ms.
+_PCM_BYTES_PER_MS = 32
 
-    A hash of the raw id is used (rather than an allowlist substitution) so
-    two distinct raw ids collide onto the same sanitized filename only with
-    negligible probability (a 128-bit truncation of a cryptographic hash --
-    not a mathematical impossibility, but not a practical concern either).
-    The raw speaker_id itself is preserved untouched as the dict key / for
-    display_name mapping -- only the on-disk path uses this sanitized value.
-    """
-    return hashlib.sha256(raw.encode("utf-8", errors="surrogateescape")).hexdigest()[:32]
-
-
-async def _achunks(chunks: list[bytes]):
-    for chunk in chunks:
-        yield chunk
+# How far a frame's wall-clock ts_ms may run ahead of where the buffer says it
+# should land before we treat the difference as a real silence gap rather than
+# ordinary network/scheduling jitter. Discord delivers a frame every ~20ms, so
+# 200ms is ~10 frames of slack: comfortably above jitter, far below any pause
+# that matters in a transcript.
+_ANCHOR_GAP_TOLERANCE_MS = 200
 
 
 class _SpeakerBuffer:
-    def __init__(self, display_name: str, pcm_path: str, transcriber, decoder):
+    def __init__(self, display_name: str, stream, decoder):
         self.display_name = display_name
-        self.pcm_path = pcm_path
-        self.transcriber = transcriber
+        # This speaker's PERSISTENT Transcribe stream. Audio is pushed into it
+        # as it arrives and is never replayed: each second of speech is billed
+        # once, and polling the rolling transcript is free.
+        #
+        # The previous design re-ran a fresh transcription over the speaker's
+        # whole accumulated buffer on every transcript_view() AND at stop(), so
+        # cost grew with the SQUARE of meeting length (k polls re-sent ~k/2
+        # copies of the audio) and each poll got progressively slower.
+        self.stream = stream
         # Opus decode is STATEFUL per stream (packet-loss concealment,
         # internal decoder history) -- this speaker's own decoder instance
         # must be fed only this speaker's packets, in order, for the life of
         # the session. See src/audio/decoder.py's OpusStreamDecoder docstring.
         self.decoder = decoder
-        self.pcm_chunks: list[bytes] = []
-        # Absolute meeting-relative ts_ms of this speaker's FIRST fed frame. AWS
-        # Transcribe's word start_ms values are relative to the start of this
-        # speaker's own concatenated PCM buffer (each speaker's audio starts near
-        # word start_ms 0), NOT to the meeting's start. We anchor by adding this
-        # base offset to every word's start_ms before building segments, so that
-        # cross-speaker sorting-by-start_ms in transcript_view()/stop() reflects
-        # real chronological (meeting-relative) order instead of each speaker
-        # restarting at ~0.
+        # Bytes of audio sent to the stream so far. Tracked in BYTES rather
+        # than milliseconds on purpose: the resampler emits variable-length
+        # chunks, and flooring each one to whole milliseconds would accumulate
+        # a monotonic undercount that eventually fakes a silence gap mid-speech.
+        # Converting once, at read time, bounds the error to <1ms total.
         #
-        # Known residual limitation (sub-plan 3 refinement): because each
-        # speaker's PCM is a concatenation of only the frames they spoke
-        # (inter-utterance silence is never written to their buffer), this base
-        # offset anchors only the FIRST word correctly. If a speaker has a long
-        # silence mid-meeting and then resumes, later words in that same
-        # speaker's buffer will still under-count the elapsed wall-clock gap
-        # (Transcribe sees back-to-back audio with no gap). This fixes the
-        # gross cross-speaker ordering bug; true per-utterance anchoring
-        # (tracking ts_ms per contiguous run of frames, not just the first)
-        # is left for the live-integration phase.
-        self.base_ts_ms: int | None = None
+        # NOTE this is a COUNT, not the audio: nothing retains the PCM, because
+        # nothing replays it.
+        self.buffered_bytes = 0
+        # Anchors mapping this speaker's BUFFER timeline onto the MEETING
+        # timeline, as ``(buffer_offset_ms, meeting_ts_ms)`` pairs in
+        # increasing buffer_offset_ms order.
+        #
+        # Why this is needed: AWS Transcribe reports word start_ms relative to
+        # the start of this speaker's own concatenated PCM buffer, and that
+        # buffer contains ONLY the frames they actually spoke -- inter-utterance
+        # silence is never written to it. So a speaker's buffer timeline is
+        # their speaking time, compressed; it drifts further from wall-clock
+        # with every pause. A single first-frame offset would anchor only their
+        # first word (that was the previous behaviour, and it made transcripts
+        # of any real meeting interleave in the wrong order and collapse into
+        # one segment per speaker, since the 3s-gap split rule never saw a gap).
+        #
+        # Instead we record a new anchor each time a frame arrives later than
+        # the buffer accounts for -- i.e. at the far side of each real silence.
+        # Word times are then mapped through the nearest preceding anchor, so
+        # real pauses reappear in the output and cross-speaker sorting reflects
+        # actual chronology.
+        self.anchors: list[tuple[int, int]] = []
 
-    def append(self, pcm_bytes: bytes, ts_ms: int | None = None) -> None:
-        if self.base_ts_ms is None and ts_ms is not None:
-            self.base_ts_ms = ts_ms
-        self.pcm_chunks.append(pcm_bytes)
-        with open(self.pcm_path, "ab") as f:
-            f.write(pcm_bytes)
+    @property
+    def buffered_ms(self) -> int:
+        return self.buffered_bytes // _PCM_BYTES_PER_MS
 
-    def has_audio(self) -> bool:
-        return os.path.exists(self.pcm_path) and os.path.getsize(self.pcm_path) > 0
+    def append(self, pcm_bytes: bytes, ts_ms: int) -> None:
+        # A packet that decoded to nothing (DTX, or a malformed frame the
+        # decoder swallowed) carries no audio and must not anchor: doing so
+        # would attribute the start of the next REAL audio to this dud frame's
+        # timestamp instead of its own.
+        if not pcm_bytes:
+            return
+        self._note_anchor(ts_ms)
+        self.stream.send(pcm_bytes)
+        self.buffered_bytes += len(pcm_bytes)
 
-    async def transcribe_buffered(self, pcm_chunks: list[bytes]) -> list[dict]:
-        # ``pcm_chunks`` must already be an immutable snapshot taken by the
-        # caller (MeetingSession) under ``self._lock`` -- this method itself
-        # does no locking so it's safe to ``await`` here without holding
-        # anything that feed() (running on a worker thread) needs.
-        result = await self.transcriber.transcribe(_achunks(pcm_chunks), sample_rate=16000)
-        words = result.get("words", [])
-        base = self.base_ts_ms or 0
-        # Offset each Transcribe-relative word start_ms by this speaker's
-        # absolute meeting-relative base offset -- see the comment in
-        # __init__ for why this is necessary and its known limitation.
-        return [{**word, "start_ms": word["start_ms"] + base} for word in words]
+    def _note_anchor(self, ts_ms: int) -> None:
+        """Record an anchor if this frame starts a new run of contiguous audio.
+
+        Called BEFORE the frame is appended, so ``self.buffered_ms`` is the
+        buffer offset at which this frame's audio begins.
+        """
+        if not self.anchors:
+            self.anchors.append((0, ts_ms))
+            return
+        offset, meeting_ts = self.anchors[-1]
+        # Where this frame *would* land if the speaker had been talking
+        # continuously since the last anchor.
+        expected_ts = meeting_ts + (self.buffered_ms - offset)
+        if ts_ms - expected_ts > _ANCHOR_GAP_TOLERANCE_MS:
+            self.anchors.append((self.buffered_ms, ts_ms))
+
+    def snapshot(self) -> tuple[str, list[tuple[int, int]]]:
+        """Copy what a reader needs from this buffer. Callers MUST hold the
+        session lock: feed() runs on a worker thread and mutates both of these
+        (``display_name`` is re-assigned on every frame)."""
+        return self.display_name, list(self.anchors)
+
+    @staticmethod
+    def _to_meeting_ms(buffer_ms: int, anchors: list[tuple[int, int]]) -> int:
+        """Map a buffer-relative time onto the meeting timeline via the nearest
+        preceding anchor. Anchors are ordered, and there are at most a handful
+        per speaker (one per silence), so a linear scan is fine."""
+        if not anchors:
+            return buffer_ms
+        offset, meeting_ts = anchors[0]
+        for anchor_offset, anchor_ts in anchors:
+            if anchor_offset > buffer_ms:
+                break
+            offset, meeting_ts = anchor_offset, anchor_ts
+        return meeting_ts + (buffer_ms - offset)
+
+    def _map(self, words: list[dict], anchors: list[tuple[int, int]]) -> list[dict]:
+        return [
+            {**word, "start_ms": self._to_meeting_ms(word["start_ms"], anchors)} for word in words
+        ]
+
+    def words_so_far(self, anchors: list[tuple[int, int]]) -> list[dict]:
+        """Finalized words the live stream has produced up to now, mapped onto
+        the meeting timeline. Cheap: a read, not a transcription. ``anchors``
+        must be a snapshot taken by the caller under the session lock."""
+        return self._map(self.stream.words(), anchors)
+
+    async def finalize(self, anchors: list[tuple[int, int]]) -> list[dict]:
+        """Close the stream and return every word it produced, mapped onto the
+        meeting timeline. Closing flushes AWS's last partial results into final
+        ones, so this can return more than ``words_so_far`` did a moment ago."""
+        return self._map(await self.stream.aclose(), anchors)
 
 
 class MeetingSession:
@@ -165,12 +211,32 @@ class MeetingSession:
         # below are kept small and never nested, and never held across an
         # ``await``.
         self._lock = threading.Lock()
-        self._tmp_dir = os.path.join(deps["tmp_root"], session_id)
-        os.makedirs(self._tmp_dir, exist_ok=True)
+        # Each speaker's Transcribe stream needs the event loop to schedule its
+        # pump on, but speakers are first seen inside feed(), which runs on a
+        # WORKER thread with no running loop. Capture it here instead: __init__
+        # runs on the loop (the async WS handler calls registry.create). None in
+        # sync unit tests, where the injected fake streams don't need a loop.
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
         self._finalized = False
+        # Set the instant finalization begins. stop() snapshots the buffers and
+        # then awaits transcription + report building, during which the WS
+        # ingest loop is still live (the bot only closes the socket after /stop
+        # returns). Without this, a frame arriving in that window is appended to
+        # a buffer that has already been transcribed -- accepted, then silently
+        # dropped from the transcript. Refuse it outright instead.
+        self._stopping = False
         self._cap_hit_logged = False
 
     def feed(self, speaker_id: str, display_name: str, opus_frame_bytes: bytes, ts_ms: int) -> None:
+        # Finalization has started (or finished): anything arriving now could
+        # never reach the transcript, so drop it rather than buffer it into a
+        # snapshot that has already been taken. See ``_stopping`` in __init__.
+        if self._stopping:
+            return
+
         # Fix #4 (cap only -- NOT a fix for the separate re-billing cost issue
         # below): bound unbounded PCM growth by refusing to buffer audio past
         # max_meeting_ms. This does NOT address transcript_view()/stop() still
@@ -199,10 +265,10 @@ class MeetingSession:
         with self._lock:
             buf = self._speakers.get(speaker_id)
             if buf is None:
-                pcm_path = os.path.join(self._tmp_dir, f"{_safe_filename_component(speaker_id)}.pcm")
-                transcriber = self._deps["make_transcriber"]()
+                stream = self._deps["make_transcription_stream"]()
+                stream.start(self._loop)
                 decoder = self._deps["audio"].make_decoder()
-                buf = _SpeakerBuffer(display_name, pcm_path, transcriber, decoder)
+                buf = _SpeakerBuffer(display_name, stream, decoder)
                 self._speakers[speaker_id] = buf
             else:
                 buf.display_name = display_name
@@ -230,10 +296,9 @@ class MeetingSession:
         # (or speaks more) mid-poll simply shows up fully on the next poll (or
         # at stop()) instead -- an acceptable, self-correcting gap.
         with self._lock:
-            snapshot = [(buf, list(buf.pcm_chunks)) for buf in self._speakers.values()]
-        for buf, pcm_chunks in snapshot:
-            words = await buf.transcribe_buffered(pcm_chunks)
-            segments.extend(words_to_segments(buf.display_name, words))
+            snapshot = [(buf, *buf.snapshot()) for buf in self._speakers.values()]
+        for buf, display_name, anchors in snapshot:
+            segments.extend(words_to_segments(display_name, buf.words_so_far(anchors)))
         segments.sort(key=lambda s: s.start_ms)
         return segments
 
@@ -253,16 +318,19 @@ class MeetingSession:
         }
 
     async def stop(self) -> StopResponse:
+        # Quiesce ingest BEFORE the snapshot below, so no frame can slip into a
+        # buffer between the snapshot and the end of finalization.
+        self._stopping = True
         try:
             segments: list[Segment] = []
             # Same lock-scoped snapshot rationale as transcript_view() above:
             # a concurrent feed() must not mutate self._speakers or a
             # buffer's pcm_chunks while we're suspended at the await below.
             with self._lock:
-                snapshot = [(buf, list(buf.pcm_chunks)) for buf in self._speakers.values()]
-            for buf, pcm_chunks in snapshot:
-                words = await buf.transcribe_buffered(pcm_chunks)
-                segments.extend(words_to_segments(buf.display_name, words))
+                snapshot = [(buf, *buf.snapshot()) for buf in self._speakers.values()]
+            for buf, display_name, anchors in snapshot:
+                words = await buf.finalize(anchors)
+                segments.extend(words_to_segments(display_name, words))
             segments.sort(key=lambda s: s.start_ms)
 
             transcript_text = assemble_transcript(segments)
@@ -277,31 +345,24 @@ class MeetingSession:
             )
             pdf_b64 = base64.b64encode(pdf_bytes).decode("ascii")
 
-            audio_b64 = None
-            with self._lock:
-                pcm_paths = [buf.pcm_path for buf in self._speakers.values() if buf.has_audio()]
-            if pcm_paths:
-                output_path = os.path.join(self._tmp_dir, "mix.mp3")
-                # Fix #2: mixer.mix() shells out to ffmpeg synchronously (subprocess.run).
-                # Offload to a thread for the same reason as report_builder above.
-                mp3_bytes = await asyncio.to_thread(self._deps["mixer"].mix, pcm_paths, output_path)
-                audio_b64 = base64.b64encode(mp3_bytes).decode("ascii")
-
+            # Meeting audio is deliberately NOT returned: consumers get the
+            # minutes PDF only. Nothing mixes, persists, or ships audio -- the
+            # buffered PCM exists solely as transcription input and dies with
+            # the session.
             return StopResponse(
                 transcript=transcript_text,
                 minutes=minutes,
                 pdf_b64=pdf_b64,
-                audio_b64=audio_b64,
             )
         finally:
             self._cleanup()
 
     def discard(self) -> None:
         """Lightweight teardown for abrupt disconnects (e.g. WS drop without a
-        preceding ``POST /stop``): delete the session's temp dir and deregister
-        it from the registry. Deliberately does NOT transcribe/summarize/build a
-        PDF/mix audio -- those are only worth paying for when a consumer
-        actually wants the finalized meeting artifacts via ``stop()``.
+        preceding ``POST /stop``): deregister the session and drop its buffered
+        audio. Deliberately does NOT transcribe/summarize/build a PDF -- those
+        are only worth paying for when a consumer actually wants the finalized
+        meeting artifacts via ``stop()``.
 
         Idempotent: safe to call more than once, and safe to call after
         ``stop()`` has already run (both funnel through the same cleanup).
@@ -312,7 +373,20 @@ class MeetingSession:
         if self._finalized:
             return
         self._finalized = True
-        shutil.rmtree(self._tmp_dir, ignore_errors=True)
+        # Covers the discard() path too: once torn down, nothing more is taken.
+        self._stopping = True
+        # Tear down every speaker's Transcribe stream. stop() has already
+        # aclose()d them (abort() is then a no-op), but an abrupt disconnect
+        # routes through discard() -> here without ever closing them, and a
+        # leaked stream stays open on AWS's side until it idles out.
+        with self._lock:
+            speakers = list(self._speakers.values())
+            self._speakers.clear()
+        for buf in speakers:
+            try:
+                buf.stream.abort()
+            except Exception as exc:  # noqa: BLE001 -- teardown must not raise
+                _logger.warning("aborting stream for session %s failed: %s", self.session_id, exc)
         self._on_finalize(self.session_id)
 
 

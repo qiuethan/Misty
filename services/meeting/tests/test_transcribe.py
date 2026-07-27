@@ -2,24 +2,9 @@
 
 import asyncio
 
-import pytest
 from amazon_transcribe.model import Alternative, Item, Result, Transcript, TranscriptEvent
 
-from src.stt.transcribe import create_transcriber
-
-
-class _FakeOutputStream:
-    """Mimics amazon_transcribe's TranscriptResultStream: an async-iterable of events."""
-
-    def __init__(self, events):
-        self._events = events
-
-    def __aiter__(self):
-        return self._iter()
-
-    async def _iter(self):
-        for event in self._events:
-            yield event
+from src.stt.transcribe import create_transcription_stream
 
 
 class _FakeInputStream:
@@ -34,40 +19,6 @@ class _FakeInputStream:
 
     async def end_stream(self):
         self.ended = True
-
-
-class _FakeStream:
-    """Mimics StartStreamTranscriptionEventStream (.input_stream / .output_stream)."""
-
-    def __init__(self, events):
-        self.input_stream = _FakeInputStream()
-        self.output_stream = _FakeOutputStream(events)
-
-
-class _FakeClient:
-    """Mimics TranscribeStreamingClient.start_stream_transcription — no network."""
-
-    def __init__(self, events):
-        self._events = events
-        self.calls = []
-        self.stream = None
-
-    async def start_stream_transcription(self, **kwargs):
-        self.calls.append(kwargs)
-        self.stream = _FakeStream(self._events)
-        return self.stream
-
-
-def _partial_event() -> TranscriptEvent:
-    alternative = Alternative(
-        transcript="hel",
-        items=[Item(start_time=0.1, end_time=0.3, item_type="pronunciation", content="hel")],
-        entities=None,
-    )
-    result = Result(
-        result_id="r1", start_time=0.1, end_time=0.3, is_partial=True, alternatives=[alternative]
-    )
-    return TranscriptEvent(transcript=Transcript(results=[result]))
 
 
 def _final_event() -> TranscriptEvent:
@@ -86,94 +37,241 @@ def _final_event() -> TranscriptEvent:
     return TranscriptEvent(transcript=Transcript(results=[result]))
 
 
-async def _fake_pcm_chunks():
-    yield b"\x00\x01"
-    yield b"\x02\x03"
+def _partial_event() -> TranscriptEvent:
+    alternative = Alternative(
+        transcript="hel",
+        items=[Item(start_time=0.1, end_time=0.3, item_type="pronunciation", content="hel")],
+        entities=None,
+    )
+    result = Result(
+        result_id="r1", start_time=0.1, end_time=0.3, is_partial=True, alternatives=[alternative]
+    )
+    return TranscriptEvent(transcript=Transcript(results=[result]))
 
 
-def test_transcribe_accumulates_only_final_results_no_network():
-    client = _FakeClient([_partial_event(), _final_event()])
-    transcriber = create_transcriber(region="us-east-1", client=client)
-
-    result = asyncio.run(transcriber.transcribe(_fake_pcm_chunks(), sample_rate=16000))
-
-    assert result["text"] == "hello world"
-    # Only pronunciation items from the FINAL result; partial ("hel") is skipped.
-    assert result["words"] == [
-        {"text": "hello", "start_ms": 100},
-        {"text": "world", "start_ms": 512},
-    ]
+# --- persistent per-speaker streaming ---------------------------------------
 
 
-def test_transcribe_feeds_audio_and_ends_stream_and_uses_pcm_config():
-    client = _FakeClient([_final_event()])
-    transcriber = create_transcriber(region="us-east-1", client=client)
-
-    asyncio.run(transcriber.transcribe(_fake_pcm_chunks(), sample_rate=16000))
-
-    assert client.calls == [
-        {
-            "language_code": "en-US",
-            "media_sample_rate_hz": 16000,
-            "media_encoding": "pcm",
-        }
-    ]
-    assert client.stream.input_stream.sent_chunks == [b"\x00\x01", b"\x02\x03"]
-    assert client.stream.input_stream.ended is True
-
-
-class _HangingOutputStream:
-    """Never yields an event on its own — mimics a stream that would hang forever
-    once the AWS side stops receiving events (e.g. because sending failed and
-    end_stream() was never reached)."""
+class _LiveOutputStream:
+    """An output stream fed events on demand, so a test can control WHEN results
+    become visible -- mimicking AWS emitting finals as the speaker talks rather
+    than all at once at the end."""
 
     def __init__(self):
-        self.was_cancelled = False
+        self._queue = asyncio.Queue()
+        self.closed = False
+
+    def push(self, event):
+        self._queue.put_nowait(event)
+
+    def finish(self):
+        self._queue.put_nowait(None)
 
     def __aiter__(self):
         return self._iter()
 
     async def _iter(self):
-        try:
-            await asyncio.sleep(3600)
-        except asyncio.CancelledError:
-            self.was_cancelled = True
-            raise
-        yield  # pragma: no cover -- unreachable, only makes this an async generator
+        while True:
+            event = await self._queue.get()
+            if event is None:
+                self.closed = True
+                return
+            yield event
 
 
-class _FailingInputStream:
-    async def send_audio_event(self, audio_chunk):
-        # Yield control first so the concurrently-scheduled consumer task gets a
-        # chance to actually start running (and reach its hang point) before we
-        # fail — mirrors a real network call, which always yields.
-        await asyncio.sleep(0)
-        raise RuntimeError("network blip")
-
-    async def end_stream(self):
-        pass  # pragma: no cover -- never reached; send fails first
-
-
-class _FailingStream:
+class _LiveStream:
     def __init__(self):
-        self.input_stream = _FailingInputStream()
-        self.output_stream = _HangingOutputStream()
+        self.output_stream = _LiveOutputStream()
+        self.input_stream = _FakeInputStream()
+        # Faithful to the real service: ending the input stream makes AWS flush
+        # its remaining results and CLOSE the output stream. Without this the
+        # fake would let a consumer wait on it forever, which the real one never
+        # does.
+        _end = self.input_stream.end_stream
+
+        async def end_stream():
+            await _end()
+            self.output_stream.finish()
+
+        self.input_stream.end_stream = end_stream
 
 
-class _FailingClient:
+class _LiveClient:
     def __init__(self):
-        self.stream = _FailingStream()
+        self.streams = []
+        self.calls = []
 
     async def start_stream_transcription(self, **kwargs):
-        return self.stream
+        self.calls.append(kwargs)
+        stream = _LiveStream()
+        self.streams.append(stream)
+        return stream
 
 
-def test_send_audio_failure_cancels_dangling_consumer_task():
-    client = _FailingClient()
-    transcriber = create_transcriber(region="us-east-1", client=client)
+def test_streaming_sends_audio_once_and_exposes_words_as_they_finalize():
+    """The persistent stream: audio pushed in with send() reaches AWS exactly
+    once, and finalized words become readable via words() WITHOUT closing or
+    re-sending anything."""
 
-    with pytest.raises(RuntimeError, match="network blip"):
-        asyncio.run(transcriber.transcribe(_fake_pcm_chunks(), sample_rate=16000))
+    async def scenario():
+        client = _LiveClient()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
 
-    # The consumer must have been cancelled rather than left dangling forever.
-    assert client.stream.output_stream.was_cancelled is True
+        stream.send(b"\x00" * 640)
+        stream.send(b"\x01" * 640)
+        await stream.drain()
+
+        assert stream.words() == []  # nothing finalized yet
+
+        client.streams[0].output_stream.push(_final_event())
+        await stream.drain()
+
+        # Readable mid-flight, with the stream still open.
+        assert stream.words() == [
+            {"text": "hello", "start_ms": 100},
+            {"text": "world", "start_ms": 512},
+        ]
+        assert client.streams[0].input_stream.ended is False
+
+        words = await stream.aclose()
+        assert words == [
+            {"text": "hello", "start_ms": 100},
+            {"text": "world", "start_ms": 512},
+        ]
+        # Exactly one AWS stream, each chunk sent exactly once.
+        assert len(client.streams) == 1
+        assert client.streams[0].input_stream.sent_chunks == [b"\x00" * 640, b"\x01" * 640]
+        assert client.streams[0].input_stream.ended is True
+
+    asyncio.run(scenario())
+
+
+def test_streaming_reopens_after_the_aws_stream_ends_and_offsets_word_times():
+    """AWS ends a streaming session on its own (idle timeout, or the 4h cap). If
+    the speaker talks again afterwards we must transparently open a NEW stream --
+    and offset its word times by the audio already sent, because each stream
+    reports times relative to its own start."""
+
+    async def scenario():
+        client = _LiveClient()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
+
+        # 1000ms of audio through the first stream, which then ends by itself.
+        stream.send(b"\x00" * (32 * 1000))
+        await stream.drain()
+        client.streams[0].output_stream.push(_final_event())
+        client.streams[0].output_stream.finish()
+        await stream.drain()
+
+        # The speaker resumes: a second stream opens transparently.
+        stream.send(b"\x02" * 640)
+        await stream.drain()
+        client.streams[1].output_stream.push(_final_event())
+        words = await stream.aclose()
+
+        assert len(client.streams) == 2, "a new stream must be opened after the first ends"
+        # Second stream's words repeat start_ms 100/512, but land 1000ms later
+        # because 1000ms of audio preceded them.
+        assert words == [
+            {"text": "hello", "start_ms": 100},
+            {"text": "world", "start_ms": 512},
+            {"text": "hello", "start_ms": 1100},
+            {"text": "world", "start_ms": 1512},
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_streaming_abort_is_sync_and_stops_the_stream():
+    """discard() (abrupt WS drop) is synchronous and must still tear the AWS
+    stream down rather than leaking it until its idle timeout."""
+
+    async def scenario():
+        client = _LiveClient()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
+        stream.send(b"\x00" * 640)
+        await stream.drain()
+
+        stream.abort()  # sync, no await
+
+        # Cancellation still has to propagate through the pump's nested waits,
+        # so give the loop turns to settle rather than assuming a fixed number.
+        for _ in range(100):
+            if not stream.is_running():
+                break
+            await asyncio.sleep(0)
+
+        assert stream.is_running() is False
+        # And it must stay torn down -- no reopen behind our back.
+        assert stream.words() == []
+
+    asyncio.run(scenario())
+
+
+def test_streaming_survives_a_failing_stream_and_keeps_earlier_words():
+    """A mid-meeting AWS/network failure must not crash the meeting: words
+    already finalized are kept and the speaker's later audio is simply dropped
+    rather than propagating an exception into the WS ingest loop."""
+
+    class _ExplodingClient:
+        def __init__(self):
+            self.calls = 0
+
+        async def start_stream_transcription(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                stream = _LiveStream()
+                self.first = stream
+                return stream
+            raise RuntimeError("AWS is unhappy")
+
+    async def scenario():
+        client = _ExplodingClient()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
+        stream.send(b"\x00" * 640)
+        await stream.drain()
+        client.first.output_stream.push(_final_event())
+        await stream.drain()
+        # First stream ends; reopening will raise.
+        client.first.output_stream.finish()
+        await stream.drain()
+        stream.send(b"\x01" * 640)
+        await stream.drain()
+
+        words = await stream.aclose()
+        assert words == [
+            {"text": "hello", "start_ms": 100},
+            {"text": "world", "start_ms": 512},
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_streaming_ignores_partial_results():
+    """AWS emits partial hypotheses that get revised. Only finalized results may
+    reach the transcript, or words would appear and then change under the
+    reader."""
+
+    async def scenario():
+        client = _LiveClient()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
+        stream.send(b"\x00" * 640)
+        await stream.drain()
+
+        client.streams[0].output_stream.push(_partial_event())
+        await stream.drain()
+        assert stream.words() == [], "a partial result must not be surfaced"
+
+        client.streams[0].output_stream.push(_final_event())
+        words = await stream.aclose()
+        assert words == [
+            {"text": "hello", "start_ms": 100},
+            {"text": "world", "start_ms": 512},
+        ]
+
+    asyncio.run(scenario())

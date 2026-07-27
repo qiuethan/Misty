@@ -227,27 +227,26 @@ export async function handleMention(message, { appContext, botId }) {
   }
 }
 
-// Base64-decodes the report produced by the meeting service into Discord
-// attachments and posts them to the meeting's text channel. Never throws —
-// meetingSurface.stop() awaits this and a poster failure must not prevent the
-// session from being torn down. If the full post (including audio) fails —
-// e.g. the audio is too large for Discord's attachment limit — fall back to
-// posting the PDF alone.
+// Base64-decodes the report produced by the meeting service into a Discord
+// attachment and posts it to the meeting's text channel, @-mentioning whoever
+// started the recording so they're notified the minutes are ready. Never
+// throws — meetingSurface.stop() awaits this and a poster failure must not
+// prevent the session from being torn down.
+//
+// Only the minutes PDF is posted. The meeting service no longer returns mixed
+// audio at all (see services/meeting's StopResponse), so there's no second
+// attachment and no oversized-payload fallback to make.
 export function makeAttachmentPoster() {
-  return async ({ channel, report }) => {
+  return async ({ channel, report, requesterId }) => {
     try {
       const pdfFile = new AttachmentBuilder(Buffer.from(report.pdf_b64, 'base64'), { name: 'meeting-minutes.pdf' });
-      const files = [pdfFile];
-      if (report.audio_b64) {
-        files.push(new AttachmentBuilder(Buffer.from(report.audio_b64, 'base64'), { name: 'meeting-audio.mp3' }));
-      }
-      try {
-        await channel.send({ content: '📄 Meeting minutes', files });
-      } catch {
-        await channel
-          .send({ content: '📄 Meeting minutes (audio too large to attach)', files: [pdfFile] })
-          .catch(() => {});
-      }
+      // No requesterId (e.g. a recording started before this field existed, or
+      // any path that couldn't resolve one) => post unaddressed rather than
+      // dropping the minutes.
+      const content = requesterId ? `<@${requesterId}> 📄 Meeting minutes` : '📄 Meeting minutes';
+      await channel.send({ content, files: [pdfFile] }).catch((e) => {
+        console.error('meeting minutes post failed:', e.message);
+      });
     } catch (e) {
       console.error('meeting attachment poster failed:', e.message);
     }
@@ -308,6 +307,9 @@ async function handleRecordInteraction(interaction, appContext, recordCommand) {
         guildId: interaction.guildId,
         voiceChannel,
         textChannel: interaction.channel,
+        // Remembered for the whole session so the minutes @-mention whoever
+        // started the recording, even when auto-stop ends it.
+        requesterId: interaction.user.id,
       });
     } catch (e) {
       console.error('meetingSurface.start failed:', e.message);

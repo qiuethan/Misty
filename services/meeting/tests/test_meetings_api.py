@@ -37,7 +37,6 @@ class FakeSession:
             transcript="[00:00] alice: hello",
             minutes=Minutes(summary="s", decisions=[], action_items=[]),
             pdf_b64="ZmFrZQ==",
-            audio_b64=None,
         )
 
     def discard(self):
