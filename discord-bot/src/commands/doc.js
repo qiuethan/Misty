@@ -23,7 +23,7 @@ export default defineCommand({
   name: 'doc',
   description: 'Catalog and look up UTMIST documents and links',
   auth: 'linked',
-  beta: true,
+  beta: false, // stable → registered globally (all prod servers)
   options: [],
   subcommands: [
     {
@@ -36,11 +36,14 @@ export default defineCommand({
         { name: 'team', type: 'string', required: false, description: 'Owning team (slug)', autocomplete: teamAutocomplete },
         { name: 'tags', type: 'string', required: false, description: 'Comma-separated tags' },
       ],
-      async handler({ options, ctx }) {
+      async handler({ options, ctx, principal }) {
         const args = { url: options.url };
         if (options.title !== null && options.title !== undefined) args.title = options.title;
         if (options.team !== null && options.team !== undefined) args.teamSlug = options.team;
         args.tags = parseTags(options.tags);
+        // The caller owns what they catalog, so it's always visible to them
+        // (in addition to the owning team, if one was picked).
+        args.owningPersonId = principal?.person?.id;
         const result = await ctx.docService.addDoc(args);
         return renderDocAddResult(result);
       },
@@ -55,11 +58,13 @@ export default defineCommand({
         { name: 'tag', type: 'string', required: false, description: 'Filter by tag' },
         { name: 'source', type: 'string', required: false, description: 'Filter by source kind (e.g. gdocs, github)' },
       ],
-      async handler({ options, ctx }) {
+      async handler({ options, ctx, principal }) {
         const args = {};
         if (options.team !== null && options.team !== undefined) args.teamSlug = options.team;
         if (options.tag !== null && options.tag !== undefined) args.tag = options.tag;
         if (options.source !== null && options.source !== undefined) args.source = options.source;
+        // Read as the linked caller so the doc service filters to what they can see.
+        args.onBehalfOf = principal?.person?.id;
         const result = await ctx.docService.listDocs(args);
         return renderDocListResult(result);
       },
@@ -72,8 +77,8 @@ export default defineCommand({
       options: [
         { name: 'id', type: 'string', required: true, description: 'Doc id (from /doc list)' },
       ],
-      async handler({ options, ctx }) {
-        const result = await ctx.docService.showDoc({ id: options.id });
+      async handler({ options, ctx, principal }) {
+        const result = await ctx.docService.showDoc({ id: options.id, onBehalfOf: principal?.person?.id });
         return renderDocShowResult(result);
       },
     },

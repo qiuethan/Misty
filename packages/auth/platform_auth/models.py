@@ -7,6 +7,7 @@ from uuid import UUID
 
 ADMIN_SCOPE = "admin"
 DEV_SPOOF_SCOPE = "dev:spoof"
+ACT_AS_USER_SCOPE = "act-as-user"
 
 
 @dataclass(frozen=True)

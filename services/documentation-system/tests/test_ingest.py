@@ -69,6 +69,38 @@ def test_ingest_dedup_returns_existing_and_merges_tags(store):
     assert set(second.doc.tags) == {"one", "two"}
 
 
+def test_reingest_after_soft_remove_does_not_proliferate_active_docs(store):
+    # Bug #5 end-to-end: once a URL's earliest row is soft-removed, repeated
+    # re-ingest must NOT keep spawning new active duplicates. The dedup lookup
+    # now prefers the active row, so the second re-ingest merges instead of
+    # inserting.
+    f = FakeFetchers(result=FetchResult(title="X"))
+
+    def ingest():
+        return ingest_doc(DocIngest(url="https://dup.com/a"), storage=store,
+                          fetchers=f, directory=FakeDirectory(), actor="bot")
+
+    first = ingest()
+    assert first.created is True
+    # Soft-remove the original row (row kept, active=False).
+    store.update_doc(first.doc.id, {"active": False}, actor="admin")
+
+    # Re-ingest: nothing active for this URL, so a fresh active row is created.
+    second = ingest()
+    assert second.created is True
+    assert second.doc.id != first.doc.id
+
+    # Re-ingest again: the live active row must be found and merged into,
+    # NOT duplicated. Pre-fix this created a third active doc.
+    third = ingest()
+    assert third.created is False
+    assert third.doc.id == second.doc.id
+
+    active = [d for d in store.list_docs(active_only=True) if d.url_normalized == "https://dup.com/a"]
+    assert len(active) == 1
+    assert active[0].id == second.doc.id
+
+
 def test_ingest_fetch_failure_warns_and_falls_back_to_url(store):
     fetchers = FakeFetchers(error=FetchError("timeout"))
     res = ingest_doc(DocIngest(url="https://github.com/a/b"), storage=store,
@@ -105,3 +137,29 @@ def test_ingest_bad_source_id_raises(store):
     with pytest.raises(BadReference):
         ingest_doc(DocIngest(url="https://x.com", source_id="nope"), storage=store,
                    fetchers=FakeFetchers(), directory=FakeDirectory(), actor="bot")
+
+
+def test_ingest_applies_grants(store):
+    payload = DocIngest(url="https://g.com", grants=[{"grantee_type": "org"}])
+    result = ingest_doc(payload, storage=store,
+                        fetchers=FakeFetchers(result=FetchResult(title="G")),
+                        directory=FakeDirectory(), actor="t")
+    grants = store.list_grants(result.doc.id)
+    assert [(g.grantee_type, g.grantee_id) for g in grants] == [("org", None)]
+    # Fix: the grant must record the actor passed to ingest_doc, not a hardcoded "ingest".
+    assert grants[0].created_by == "t"
+
+
+def test_ingest_dedup_applies_grants_to_existing_doc(store):
+    f = FakeFetchers(result=FetchResult(title="X"))
+    first = ingest_doc(DocIngest(url="https://x.com/a"), storage=store,
+                       fetchers=f, directory=FakeDirectory(), actor="bot")
+    second = ingest_doc(
+        DocIngest(url="https://x.com/a/", grants=[{"grantee_type": "org"}]),
+        storage=store, fetchers=f, directory=FakeDirectory(), actor="bot-2",
+    )
+    assert second.doc.id == first.doc.id
+    grants = store.list_grants(first.doc.id)
+    assert [(g.grantee_type, g.grantee_id) for g in grants] == [("org", None)]
+    # Fix: the dedup branch must also record the real caller, not a hardcoded "ingest".
+    assert grants[0].created_by == "bot-2"

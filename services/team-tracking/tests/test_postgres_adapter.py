@@ -1,6 +1,7 @@
 from datetime import date
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from contracts.types import (
@@ -12,6 +13,7 @@ from contracts.types import (
     TeamMembershipCreate,
     TeamMembershipUpdate,
 )
+from src.storage.errors import UnknownParentTeamError
 from src.storage.postgres import PostgresStorageAdapter
 
 
@@ -62,6 +64,28 @@ def test_team_hierarchy(adapter):
     assert child.parent_id == parent.id
 
 
+def test_create_team_nonexistent_parent_raises_unknown_parent(adapter):
+    """FK violation on parent_id must surface as UnknownParentTeamError, not a slug conflict."""
+    from uuid import uuid4
+
+    bogus = uuid4()
+    with pytest.raises(UnknownParentTeamError) as exc:
+        adapter.create_team(
+            TeamCreate(slug="orphan", label="Orphan", parent_id=bogus),
+            actor="t",
+        )
+    assert exc.value.parent_id == bogus
+
+
+def test_create_team_duplicate_slug_still_raises_value_error(adapter):
+    """Unique-violation on slug stays a plain ValueError (router -> 409)."""
+    adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    with pytest.raises(ValueError) as exc:
+        adapter.create_team(TeamCreate(slug="ops", label="Other"), actor="t")
+    assert not isinstance(exc.value, UnknownParentTeamError)
+    assert "slug already exists" in str(exc.value)
+
+
 def test_role_kinds_seeded(adapter):
     kinds = adapter.list_role_kinds()
     assert {k.id for k in kinds} == {"executive", "director", "lead", "member"}
@@ -72,7 +96,12 @@ def test_membership_full_cycle(adapter):
         PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
     )
     team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
-    m = adapter.create_membership(TeamMembershipCreate(person_id=p.id, team_id=team.id), actor="t")
+    # Explicit past started_at keeps this independent of the DB vs local-clock
+    # timezone boundary (server CURRENT_DATE can differ from Python date.today()).
+    m = adapter.create_membership(
+        TeamMembershipCreate(person_id=p.id, team_id=team.id, started_at=date(2024, 9, 1)),
+        actor="t",
+    )
     assert m.role_kind_id == "member"
     assert m.is_team_admin is False
 
@@ -82,7 +111,9 @@ def test_membership_full_cycle(adapter):
     assert made_admin is not None
     assert made_admin.is_team_admin is True
 
-    end = date(2026, 12, 31)
+    # End in the past: ended_at < CURRENT_DATE is NOT "currently active", so it
+    # drops out of active_only.
+    end = date(2025, 4, 30)
     ended = adapter.end_membership(m.id, end, actor="t")
     assert ended is not None
     assert ended.ended_at == end
@@ -129,6 +160,204 @@ def test_is_team_admin_filter(adapter):
     non_admins = adapter.list_memberships(team_id=team.id, is_team_admin=False)
     assert len(admins) == 1
     assert len(non_admins) == 1
+
+
+def test_pg_membership_bad_fk_raises_valueerror(adapter):
+    """A bad person/team/role_kind FK raises ValueError (router -> 400), not a
+    bare IntegrityError (which would surface as 500)."""
+    from uuid import uuid4
+
+    with pytest.raises(ValueError):
+        adapter.create_membership(
+            TeamMembershipCreate(person_id=uuid4(), team_id=uuid4()), actor="t"
+        )
+
+
+def test_pg_membership_update_bad_role_kind_raises_valueerror(adapter):
+    p = adapter.create_person(
+        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
+    )
+    team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    m = adapter.create_membership(TeamMembershipCreate(person_id=p.id, team_id=team.id), actor="t")
+    with pytest.raises(ValueError):
+        adapter.update_membership(m.id, TeamMembershipUpdate(role_kind_id="nope"), actor="t")
+
+
+def test_pg_membership_update_into_overlap_raises_valueerror(adapter):
+    """Extending ended_at via update into another active membership's range for
+    the same (person, team) hits the EXCLUDE constraint -> ValueError (400),
+    not a 500. Mirrors the in-memory update-side overlap check."""
+    p = adapter.create_person(
+        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
+    )
+    team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    a = adapter.create_membership(
+        TeamMembershipCreate(
+            person_id=p.id, team_id=team.id, started_at=date(2026, 1, 1), ended_at=date(2026, 3, 1)
+        ),
+        actor="t",
+    )
+    # B starts exactly when A ends -> allowed.
+    adapter.create_membership(
+        TeamMembershipCreate(person_id=p.id, team_id=team.id, started_at=date(2026, 3, 1)),
+        actor="t",
+    )
+    with pytest.raises(ValueError, match="overlap"):
+        adapter.update_membership(a.id, TeamMembershipUpdate(ended_at=date(2026, 4, 1)), actor="t")
+
+
+def test_pg_membership_overlap_exclusion_raises_valueerror(adapter):
+    """The temporal-overlap EXCLUDE constraint surfaces as a ValueError -> 400."""
+    p = adapter.create_person(
+        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
+    )
+    team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    adapter.create_membership(TeamMembershipCreate(person_id=p.id, team_id=team.id), actor="t")
+    with pytest.raises(ValueError, match="overlap"):
+        adapter.create_membership(TeamMembershipCreate(person_id=p.id, team_id=team.id), actor="t")
+
+
+def test_pg_membership_same_day_readd_allowed(adapter):
+    """daterange upper bound is exclusive: end then re-add same day is allowed."""
+    p = adapter.create_person(
+        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
+    )
+    team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    m = adapter.create_membership(
+        TeamMembershipCreate(person_id=p.id, team_id=team.id, started_at=date(2026, 1, 1)),
+        actor="t",
+    )
+    adapter.end_membership(m.id, date(2026, 3, 1), actor="t")
+    again = adapter.create_membership(
+        TeamMembershipCreate(person_id=p.id, team_id=team.id, started_at=date(2026, 3, 1)),
+        actor="t",
+    )
+    assert again.id != m.id
+
+
+def test_pg_membership_disjoint_history_allowed(adapter):
+    """Non-overlapping historical memberships for the same person+team are fine."""
+    p = adapter.create_person(
+        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
+    )
+    team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    adapter.create_membership(
+        TeamMembershipCreate(
+            person_id=p.id, team_id=team.id, started_at=date(2020, 9, 1), ended_at=date(2021, 5, 1)
+        ),
+        actor="t",
+    )
+    adapter.create_membership(
+        TeamMembershipCreate(
+            person_id=p.id, team_id=team.id, started_at=date(2023, 9, 1), ended_at=date(2024, 5, 1)
+        ),
+        actor="t",
+    )
+    assert len(adapter.list_memberships(person_id=p.id)) == 2
+
+
+def test_pg_active_only_includes_future_dated(adapter):
+    """active_only includes a future-dated membership (regression for #7)."""
+    p = adapter.create_person(
+        PersonCreate(display_name="A", primary_email="a@utmist.ca"), actor="t"
+    )
+    team = adapter.create_team(TeamCreate(slug="ops", label="Ops"), actor="t")
+    from datetime import timedelta
+
+    adapter.create_membership(
+        TeamMembershipCreate(
+            person_id=p.id, team_id=team.id, ended_at=date.today() + timedelta(days=30)
+        ),
+        actor="t",
+    )
+    assert len(adapter.list_memberships(active_only=True)) == 1
+
+
+_DEDUP_SQL = """
+DO $$
+DECLARE
+    affected integer;
+BEGIN
+    LOOP
+        WITH conflicts AS (
+            SELECT DISTINCT a.id AS loser_id
+            FROM team_memberships a
+            JOIN team_memberships b
+              ON a.person_id = b.person_id
+             AND a.team_id = b.team_id
+             AND a.id <> b.id
+             AND daterange(a.started_at, COALESCE(a.ended_at, 'infinity'::date))
+                 && daterange(b.started_at, COALESCE(b.ended_at, 'infinity'::date))
+            WHERE (b.started_at, b.created_at, b.id) < (a.started_at, a.created_at, a.id)
+        )
+        UPDATE team_memberships t
+        SET ended_at = t.started_at,
+            updated_at = now(),
+            updated_by = 'migration_007_dedup'
+        FROM conflicts c
+        WHERE t.id = c.loser_id
+          AND (t.ended_at IS NULL OR t.ended_at <> t.started_at);
+        GET DIAGNOSTICS affected = ROW_COUNT;
+        EXIT WHEN affected = 0;
+    END LOOP;
+END $$;
+"""
+
+_OVERLAP_COUNT_SQL = """
+SELECT count(*) FROM team_memberships a
+JOIN team_memberships b
+  ON a.person_id = b.person_id AND a.team_id = b.team_id AND a.id <> b.id
+ AND daterange(a.started_at, COALESCE(a.ended_at, 'infinity'::date))
+     && daterange(b.started_at, COALESCE(b.ended_at, 'infinity'::date))
+"""
+
+
+def test_pg_migration_backfill_dedups_overlaps(clean_db: Engine):
+    """Reproduces migration 007's backfill: with the constraint dropped, insert
+    two overlapping PAST-started active rows, run the dedup, and confirm no
+    overlaps remain and the constraint can then be (re)created."""
+    engine = clean_db
+    adapter = PostgresStorageAdapter(engine)
+    p = adapter.create_person(
+        PersonCreate(display_name="Dup", primary_email="dup@x.com"), actor="t"
+    )
+    team = adapter.create_team(TeamCreate(slug="dupteam", label="Dup"), actor="t")
+
+    with engine.begin() as conn:
+        conn.execute(
+            text("ALTER TABLE team_memberships DROP CONSTRAINT team_memberships_no_overlap")
+        )
+        # Two overlapping, past-started, open-ended memberships — the exact shape
+        # the plain-CURRENT_DATE approach fails to resolve.
+        for start in ("2024-09-01", "2025-01-15"):
+            conn.execute(
+                text(
+                    "INSERT INTO team_memberships "
+                    "(person_id, team_id, role_kind_id, started_at, ended_at, created_by, updated_by)"
+                    " VALUES (:pid, :tid, 'member', :start, NULL, 's', 's')"
+                ),
+                {"pid": p.id, "tid": team.id, "start": start},
+            )
+        pre = conn.execute(text(_OVERLAP_COUNT_SQL)).scalar_one()
+        assert pre > 0  # they really do overlap before backfill
+
+    with engine.begin() as conn:
+        conn.execute(text(_DEDUP_SQL))
+        post = conn.execute(text(_OVERLAP_COUNT_SQL)).scalar_one()
+        assert post == 0  # dedup leaves no overlaps
+        # Constraint can now be recreated (restore normal migrated state).
+        conn.execute(
+            text(
+                "ALTER TABLE team_memberships ADD CONSTRAINT team_memberships_no_overlap "
+                "EXCLUDE USING gist (person_id WITH =, team_id WITH =, "
+                "daterange(started_at, COALESCE(ended_at, 'infinity'::date)) WITH &&)"
+            )
+        )
+
+    # Exactly one survivor remains active for the (person, team).
+    active = adapter.list_memberships(person_id=p.id, team_id=team.id, active_only=True)
+    assert len(active) == 1
+    assert active[0].started_at == date(2024, 9, 1)
 
 
 def test_api_key_create_and_lookup_pg(adapter):
@@ -218,3 +447,91 @@ def test_pg_external_id_owned_by_another_person_raises(adapter):
         adapter.create_person_identifier(
             person_b.id, PersonIdentifierCreate(provider="discord", external_id="1"), actor="t"
         )
+
+
+def _seed_person(adapter, email="a@x.com", name="A"):
+    return adapter.create_person(PersonCreate(display_name=name, primary_email=email), actor="t")
+
+
+def test_pg_add_multiple_emails_to_one_person(adapter):
+    p = _seed_person(adapter, "p@x.com")
+    adapter.add_person_email(p.id, "one@x.com", actor="t")
+    adapter.add_person_email(p.id, "two@x.com", actor="t")
+    emails = [i.external_id for i in adapter.list_person_identifiers(p.id) if i.provider == "email"]
+    assert sorted(emails) == ["one@x.com", "two@x.com"]
+
+
+def test_pg_add_email_normalizes(adapter):
+    p = _seed_person(adapter, "p@x.com")
+    adapter.add_person_email(p.id, "  MixEd@Case.COM ", actor="t")
+    assert adapter.get_person_by_identifier("email", "mixed@case.com").id == p.id
+
+
+def test_pg_add_email_idempotent(adapter):
+    p = _seed_person(adapter, "p@x.com")
+    first = adapter.add_person_email(p.id, "e@x.com", actor="t")
+    again = adapter.add_person_email(p.id, "E@X.com", actor="t")
+    assert again.id == first.id
+    assert sum(i.provider == "email" for i in adapter.list_person_identifiers(p.id)) == 1
+
+
+def test_pg_add_email_rejects_another_persons_identifier(adapter):
+    a = _seed_person(adapter, "a@x.com", "A")
+    b = _seed_person(adapter, "b@x.com", "B")
+    adapter.add_person_email(a.id, "shared@x.com", actor="t")
+    with pytest.raises(ValueError, match="email_registered_to_another"):
+        adapter.add_person_email(b.id, "shared@x.com", actor="t")
+
+
+def test_pg_add_email_rejects_another_persons_primary(adapter):
+    _seed_person(adapter, "a@x.com", "A")
+    b = _seed_person(adapter, "b@x.com", "B")
+    with pytest.raises(ValueError, match="email_registered_to_another"):
+        adapter.add_person_email(b.id, "A@X.com", actor="t")  # a's primary
+
+
+def test_pg_add_email_own_primary_creates_identifier(adapter):
+    p = _seed_person(adapter, "me@x.com")
+    ident = adapter.add_person_email(p.id, "Me@X.com", actor="t")
+    assert ident.provider == "email"
+    assert ident.external_id == "me@x.com"
+    email_idents = [i for i in adapter.list_person_identifiers(p.id) if i.provider == "email"]
+    assert len(email_idents) == 1
+
+    again = adapter.add_person_email(p.id, "Me@X.com", actor="t")
+    assert again.id == ident.id
+    email_idents = [i for i in adapter.list_person_identifiers(p.id) if i.provider == "email"]
+    assert len(email_idents) == 1
+
+
+def test_pg_add_person_email_uses_on_conflict_do_nothing_path(adapter):
+    """Exercises the new on_conflict_do_nothing + re-read code path directly
+    (item 1). A true concurrent same-person race isn't deterministically
+    reproducible in a unit test, but repeat calls through the same insert
+    statement must still return the same row idempotently."""
+    p = _seed_person(adapter, "race@x.com")
+    first = adapter.add_person_email(p.id, "shared-addr@x.com", actor="t")
+    again = adapter.add_person_email(p.id, "shared-addr@x.com", actor="t")
+    assert again.id == first.id
+    email_idents = [i for i in adapter.list_person_identifiers(p.id) if i.provider == "email"]
+    assert len(email_idents) == 1
+
+
+def test_pg_add_person_email_rejects_blank(adapter):
+    p = _seed_person(adapter, "p2@x.com")
+    with pytest.raises(ValueError, match="email_must_not_be_empty"):
+        adapter.add_person_email(p.id, "   ", actor="t")
+
+
+def test_pg_generic_identifier_ops_reject_email_provider(adapter):
+    p = _seed_person(adapter, "p@x.com")
+    with pytest.raises(ValueError, match="email_not_addressable_by_provider"):
+        adapter.create_person_identifier(
+            p.id, PersonIdentifierCreate(provider="email", external_id="e@x.com"), actor="t"
+        )
+    with pytest.raises(ValueError, match="email_not_addressable_by_provider"):
+        adapter.update_person_identifier(
+            p.id, "email", PersonIdentifierUpdate(external_id="e@x.com"), actor="t"
+        )
+    with pytest.raises(ValueError, match="email_not_addressable_by_provider"):
+        adapter.delete_person_identifier(p.id, "email")

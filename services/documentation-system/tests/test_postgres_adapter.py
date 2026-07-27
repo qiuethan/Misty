@@ -3,7 +3,10 @@ import os
 import pytest
 from sqlalchemy import create_engine, text
 
+from contracts.storage import DuplicateActiveUrl
+from contracts.types import DocIngest
 from src.config import get_settings
+from src.ingest import ingest_doc
 from src.storage.postgres import PostgresStorageAdapter
 
 pytestmark = pytest.mark.skipif(
@@ -15,7 +18,7 @@ pytestmark = pytest.mark.skipif(
 def adapter():
     engine = create_engine(get_settings().database_url, future=True)
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE doc_tags, docs, api_keys RESTART IDENTITY CASCADE"))
+        conn.execute(text("TRUNCATE doc_grants, doc_tags, docs, api_keys RESTART IDENTITY CASCADE"))
     return PostgresStorageAdapter(engine)
 
 
@@ -66,8 +69,110 @@ def test_add_tag_idempotent(adapter):
     assert set(adapter.get_doc(d.id).tags) == {"x", "y"}
 
 
-def test_get_by_normalized_url_with_duplicates_returns_one(adapter):
-    a = _mk(adapter, url="https://dup.com")
-    _mk(adapter, url="https://dup.com")  # same url_normalized, no unique constraint
+def test_second_active_dup_insert_is_rejected(adapter):
+    # Bug #11: the partial unique index (url_normalized WHERE active) forbids a
+    # second active row for the same URL. create_doc surfaces this as
+    # DuplicateActiveUrl (on_conflict_do_nothing -> no RETURNING row).
+    _mk(adapter, url="https://dup.com")
+    with pytest.raises(DuplicateActiveUrl):
+        _mk(adapter, url="https://dup.com")
+
+
+def test_get_by_normalized_url_prefers_active_over_inactive(adapter):
+    # Bug #5: a soft-removed row must not shadow the live active row.
+    first = _mk(adapter, url="https://dup.com")
+    adapter.update_doc(first.id, {"active": False}, actor="t")  # soft-remove
+    live = _mk(adapter, url="https://dup.com")  # now allowed again (index is partial)
     got = adapter.get_doc_by_normalized_url("https://dup.com")
-    assert got is not None and got.id in (a.id,) or got is not None  # returns one, does not raise
+    assert got is not None and got.id == live.id
+
+
+def test_reingest_allowed_after_soft_remove(adapter):
+    # The partial index exempts inactive rows, so a URL can be re-catalogued.
+    first = _mk(adapter, url="https://re.com")
+    adapter.update_doc(first.id, {"active": False}, actor="t")
+    second = _mk(adapter, url="https://re.com")  # must not raise
+    assert second.id != first.id
+
+
+def test_ingest_race_fallback_merges_into_existing(adapter):
+    # Simulate the read-then-insert race deterministically: the dedup read in
+    # ingest step 1 sees nothing (row not yet visible), but create_doc in step 5
+    # hits the unique index. create_doc raises DuplicateActiveUrl and ingest
+    # falls back to merging into the now-existing active row (created=False).
+    from test_ingest import FakeDirectory, FakeFetchers
+    from contracts.fetcher import FetchResult
+
+    winner = _mk(adapter, url="https://race.com", tags=["existing"])
+
+    class _RaceAdapter:
+        """Delegates to the real adapter but hides the existing active row from
+        the FIRST dedup lookup, forcing ingest down the create/conflict path."""
+
+        def __init__(self, real):
+            self._real = real
+            self._hidden = True
+
+        def get_doc_by_normalized_url(self, url_normalized):
+            if self._hidden:
+                self._hidden = False  # only the initial dedup read is blinded
+                return None
+            return self._real.get_doc_by_normalized_url(url_normalized)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    race = _RaceAdapter(adapter)
+    result = ingest_doc(
+        DocIngest(url="https://race.com", tags=["new"]),
+        storage=race,
+        fetchers=FakeFetchers(result=FetchResult(title="R")),
+        directory=FakeDirectory(),
+        actor="bot",
+    )
+    assert result.created is False
+    assert result.doc.id == winner.id
+    assert set(result.doc.tags) == {"existing", "new"}  # merged, not duplicated
+    # Still exactly one active row for the URL.
+    active = [d for d in adapter.list_docs(active_only=True) if d.url_normalized == "https://race.com"]
+    assert len(active) == 1
+
+
+from uuid import UUID
+from contracts.visibility import Actor, DENY, SEE_ALL
+
+_P1 = UUID("11111111-1111-1111-1111-111111111111")
+_T1 = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+
+def test_grants_and_visibility_pg(adapter):
+    d = _mk(adapter, url="https://g.com")
+    assert adapter.add_grant(d.id, grantee_type="person", grantee_id=_P1, actor="t") is True
+    actor = Actor(person_id=_P1, team_ids=frozenset({_T1}))
+    assert adapter.get_doc(d.id, visibility=actor).id == d.id
+    other = Actor(person_id=UUID(int=9), team_ids=frozenset())
+    assert adapter.get_doc(d.id, visibility=other) is None
+    assert adapter.list_docs(visibility=DENY) == []
+    assert len(adapter.list_docs(visibility=SEE_ALL)) >= 1
+
+
+def test_org_grant_partial_unique_pg(adapter):
+    d = _mk(adapter, url="https://o.com")
+    assert adapter.add_grant(d.id, grantee_type="org", grantee_id=None, actor="t") is True
+    assert adapter.add_grant(d.id, grantee_type="org", grantee_id=None, actor="t") is True  # idempotent
+    assert len(adapter.list_grants(d.id)) == 1
+
+
+def test_list_docs_batched_tag_hydration_matches_per_doc(adapter):
+    """list_docs hydrates tags via a single batched query; the tags attached to
+    each doc must be identical (same values, same tag-sorted order) to what
+    get_doc returns per-doc, across a multi-doc, multi-tag catalog — including
+    docs with no tags."""
+    d1 = _mk(adapter, url="https://one.com", tags=["gamma", "alpha", "beta"])
+    d2 = _mk(adapter, url="https://two.com", tags=["zeta"])
+    d3 = _mk(adapter, url="https://three.com", tags=[])
+    listed = {d.id: d for d in adapter.list_docs(active_only=True)}
+    for doc_id in (d1.id, d2.id, d3.id):
+        assert listed[doc_id].tags == adapter.get_doc(doc_id).tags
+    assert listed[d1.id].tags == ["alpha", "beta", "gamma"]  # tag-sorted
+    assert listed[d3.id].tags == []

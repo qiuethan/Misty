@@ -30,7 +30,7 @@ issue_key() {
 
 echo "▶ discord-bot: issuing scoped directory key ($ENVIRONMENT)…"
 BOT_KEY="$(issue_key "discord-bot-$ENVIRONMENT" \
-  people:read people:write identifiers:read identifiers:write \
+  people:read people:write people:elevate identifiers:read identifiers:write \
   teams:read teams:write memberships:read memberships:write role_kinds:read)" \
   || { echo "ERROR: failed to mint discord-bot key" >&2; exit 1; }
 [ -n "$BOT_KEY" ] || { echo "ERROR: discord-bot key came back empty" >&2; exit 1; }

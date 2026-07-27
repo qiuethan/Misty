@@ -18,6 +18,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, CITEXT, UUID
+from sqlalchemy.dialects.postgresql import ExcludeConstraint
 
 metadata = MetaData()
 
@@ -86,6 +87,19 @@ team_memberships = Table(
     Index("ix_team_memberships_team_ended", "team_id", "ended_at"),
     Index("ix_team_memberships_person_ended", "person_id", "ended_at"),
     Index("ix_team_memberships_dates", "started_at", "ended_at"),
+    # Temporal non-overlap: a person cannot have two memberships in the same team
+    # whose active date ranges overlap. Enforced with a gist EXCLUDE constraint
+    # backed by btree_gist. daterange upper bound is exclusive, so ending someone
+    # and re-adding them on the same day is allowed. Created in migration 007;
+    # the extension + backfill live there (declaring it here keeps the model in
+    # sync but does NOT create the btree_gist extension by itself).
+    ExcludeConstraint(
+        ("person_id", "="),
+        ("team_id", "="),
+        (text("daterange(started_at, COALESCE(ended_at, 'infinity'::date))"), "&&"),
+        name="team_memberships_no_overlap",
+        using="gist",
+    ),
 )
 
 api_keys = Table(
@@ -130,9 +144,16 @@ person_identifiers = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
     Column("created_by", Text, nullable=False),
     Column("updated_by", Text, nullable=False),
-    # One account per provider per person; and one account maps to one person.
-    # The (provider, external_id) unique index also powers the reverse lookup,
-    # so no separate Index is needed.
-    UniqueConstraint("person_id", "provider", name="uq_person_identifiers_person_provider"),
+    # One account per provider per person (except email, which is multi-valued);
+    # and one account maps to one person. The (provider, external_id) unique
+    # index also powers the reverse lookup, so no separate Index is needed.
     UniqueConstraint("provider", "external_id", name="uq_person_identifiers_provider_external"),
+)
+
+Index(
+    "uq_person_identifiers_person_provider",
+    person_identifiers.c.person_id,
+    person_identifiers.c.provider,
+    unique=True,
+    postgresql_where=text("provider <> 'email'"),
 )

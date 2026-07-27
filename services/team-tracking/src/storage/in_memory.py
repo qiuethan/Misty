@@ -18,10 +18,31 @@ from contracts.types import (
     TeamMembershipUpdate,
     TeamUpdate,
 )
+from src.storage.errors import UnknownParentTeamError
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _norm_email(v: str) -> str:
+    return v.strip().lower()
+
+
+def _ranges_overlap(start1: date, end1: date | None, start2: date, end2: date | None) -> bool:
+    """Half-open [start, end) overlap; end=None means +infinity.
+
+    Mirrors the Postgres EXCLUDE constraint on
+    daterange(started_at, COALESCE(ended_at, 'infinity')) with && (overlap).
+    Empty ranges (start >= end) overlap nothing, matching daterange semantics.
+    """
+    if end1 is not None and start1 >= end1:
+        return False
+    if end2 is not None and start2 >= end2:
+        return False
+    lo1_before_hi2 = end2 is None or start1 < end2
+    lo2_before_hi1 = end1 is None or start2 < end1
+    return lo1_before_hi2 and lo2_before_hi1
 
 
 class InMemoryStorageAdapter:
@@ -88,6 +109,8 @@ class InMemoryStorageAdapter:
             return None
         data = existing.model_dump()
         patch = payload.model_dump(exclude_unset=True)
+        if "primary_email" in patch:
+            patch["primary_email"] = _norm_email(patch["primary_email"])
         if "primary_email" in patch and patch["primary_email"] != existing.primary_email:
             new_email = patch["primary_email"]
             if any(
@@ -106,6 +129,8 @@ class InMemoryStorageAdapter:
     def create_team(self, payload: TeamCreate, *, actor: str) -> Team:
         if any(t.slug == payload.slug for t in self._teams.values()):
             raise ValueError(f"slug already exists: {payload.slug}")
+        if payload.parent_id is not None and payload.parent_id not in self._teams:
+            raise UnknownParentTeamError(payload.parent_id)
         now = _now()
         t = Team(
             id=uuid4(),
@@ -173,6 +198,15 @@ class InMemoryStorageAdapter:
             raise ValueError(f"team_id not found: {payload.team_id}")
         if payload.role_kind_id not in self._role_kinds:
             raise ValueError(f"role_kind_id not found: {payload.role_kind_id}")
+        new_start = payload.started_at or date.today()
+        new_end = payload.ended_at
+        for existing in self._memberships.values():
+            if existing.person_id != payload.person_id or existing.team_id != payload.team_id:
+                continue
+            if _ranges_overlap(new_start, new_end, existing.started_at, existing.ended_at):
+                raise ValueError(
+                    "membership overlaps an existing active membership for this person and team"
+                )
         now = _now()
         m = TeamMembership(
             id=uuid4(),
@@ -208,7 +242,10 @@ class InMemoryStorageAdapter:
         if person_id is not None:
             results = [m for m in results if m.person_id == person_id]
         if active_only:
-            results = [m for m in results if m.ended_at is None]
+            # "Currently active" = open-ended OR ends strictly after today, so a
+            # future-dated ended_at still counts as active now.
+            today = date.today()
+            results = [m for m in results if m.ended_at is None or m.ended_at > today]
         if as_of is not None:
             results = [
                 m
@@ -233,6 +270,21 @@ class InMemoryStorageAdapter:
         data["updated_at"] = _now()
         data["updated_by"] = actor
         updated = TeamMembership(**data)
+        # Mirror the Postgres EXCLUDE constraint: the updated range must not
+        # overlap any OTHER active membership for the same (person, team). A
+        # PATCH that re-opens/extends ended_at can re-introduce an overlap, so
+        # re-check here, excluding the row being updated from the comparison.
+        for other in self._memberships.values():
+            if other.id == membership_id:
+                continue
+            if other.person_id != updated.person_id or other.team_id != updated.team_id:
+                continue
+            if _ranges_overlap(
+                updated.started_at, updated.ended_at, other.started_at, other.ended_at
+            ):
+                raise ValueError(
+                    "membership overlaps an existing active membership for this person and team"
+                )
         self._memberships[membership_id] = updated
         return updated
 
@@ -342,6 +394,8 @@ class InMemoryStorageAdapter:
     def create_person_identifier(
         self, person_id: UUID, payload: PersonIdentifierCreate, *, actor: str
     ) -> PersonIdentifier:
+        if payload.provider == "email":
+            raise ValueError("email_not_addressable_by_provider")
         for i in self._identifiers.values():
             if i.person_id == person_id and i.provider == payload.provider:
                 raise ValueError(
@@ -370,6 +424,8 @@ class InMemoryStorageAdapter:
     def update_person_identifier(
         self, person_id: UUID, provider: str, payload: PersonIdentifierUpdate, *, actor: str
     ) -> PersonIdentifier | None:
+        if provider == "email":
+            raise ValueError("email_not_addressable_by_provider")
         existing = next(
             (
                 i
@@ -399,6 +455,8 @@ class InMemoryStorageAdapter:
         return updated
 
     def delete_person_identifier(self, person_id: UUID, provider: str) -> bool:
+        if provider == "email":
+            raise ValueError("email_not_addressable_by_provider")
         target = next(
             (
                 i
@@ -413,7 +471,37 @@ class InMemoryStorageAdapter:
         return True
 
     def get_person_by_identifier(self, provider: str, external_id: str) -> Person | None:
+        target = _norm_email(external_id) if provider == "email" else external_id
         for i in self._identifiers.values():
-            if i.provider == provider and i.external_id == external_id:
+            if i.provider == provider and i.external_id == target:
                 return self._people.get(i.person_id)
         return None
+
+    def add_person_email(self, person_id: UUID, email: str, *, actor: str) -> PersonIdentifier:
+        addr = _norm_email(email)
+        if not addr:
+            raise ValueError("email_must_not_be_empty")
+        # already an email identifier somewhere?
+        for i in self._identifiers.values():
+            if i.provider == "email" and i.external_id == addr:
+                if i.person_id == person_id:
+                    return i  # idempotent
+                raise ValueError("email_registered_to_another")
+        # another person's primary_email?
+        owner = self.get_person_by_email(addr)
+        if owner is not None and owner.id != person_id:
+            raise ValueError("email_registered_to_another")
+        now = _now()
+        pi = PersonIdentifier(
+            id=uuid4(),
+            person_id=person_id,
+            provider="email",
+            external_id=addr,
+            handle=None,
+            created_at=now,
+            updated_at=now,
+            created_by=actor,
+            updated_by=actor,
+        )
+        self._identifiers[pi.id] = pi
+        return pi

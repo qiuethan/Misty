@@ -43,7 +43,7 @@ Three services, each existing once at the Railway project level and exposed in *
 
 - **`staging` is the default branch.** Feature PRs auto-target it. Merges auto-deploy to the Railway staging environment.
 - **`main` is the release branch.** Only PRs from `staging` can merge — enforced by the `main-source-guard` workflow. Merges auto-deploy to production.
-- Both branches require the 4 CI checks; main additionally requires the source-guard.
+- Both branches require the 4 required CI status checks (`python-test`, `python-lint`, `node-test`, `docker-build`); main additionally requires the source-guard. (CI runs 8 jobs in total — the other four aren't yet required to merge.)
 
 This gives you the loop of `push to feature → PR → staging → real staging deploy → validate → promote to main → production deploy`, with no branch or environment able to skip validation.
 
@@ -54,18 +54,26 @@ The bot and docs-system authenticate to team-tracking with their **own** scoped 
 Keys are minted by `scripts/provision-directory-key.sh <env>`, which runs `team-tracking-keys issue` against that environment's Neon branch and writes each key onto its Railway consumer with `railway variables --set`. One command per environment.
 
 Scopes:
-- **discord-bot:** `people:read people:write identifiers:read identifiers:write teams:read teams:write memberships:read memberships:write role_kinds:read` (needs identity + membership management)
+- **discord-bot:** `people:read people:write people:elevate identifiers:read identifiers:write teams:read teams:write memberships:read memberships:write role_kinds:read` (needs identity + membership management; `people:elevate` lets `/seed` promote people to `admin`/`superuser`)
 - **documentation-system:** `people:read teams:read` (only needs to look up an owner's label)
 
 ### CI on every PR to `staging` or `main`
 
-`.github/workflows/ci.yml` runs:
-- **`python-test`** — Postgres 16 service container, applies migrations, runs the full pytest suite
-- **`python-lint`** — ruff check + format
+`.github/workflows/ci.yml` runs **8 jobs**:
+- **`python-test`** — team-tracking, Postgres 16 service container, applies migrations, runs the full pytest suite
+- **`python-lint`** — team-tracking ruff check + format
+- **`auth-lib-test`** — the shared `packages/auth` (`platform_auth`) pytest suite + ruff check
+- **`verification-test`** — services/verification, Postgres 16 service container, `alembic upgrade head`, then `pytest` + ruff check/format
+- **`llm-test`** — services/llm pytest suite + ruff check/format
+- **`documentation-system-test`** — Postgres 16 service container, runs `alembic upgrade head`, then `pytest` with `RUN_PG_TESTS=1` (does not yet run ruff — deferred)
 - **`node-test`** — the bot's `node --test` suite
-- **`docker-build`** — builds *and boot-smoke-tests* all three images (`python -c "import src.api.app"` for the APIs, `node --check src/index.js` for the bot)
+- **`docker-build`** — builds *and boot-smoke-tests* the service images (`python -c "import src.api.app"` for the APIs, `node --check src/index.js` for the bot)
 
-Plus `main-source-guard` on PRs to `main`. All required — nothing red merges.
+Only **four** of these are **required status checks** in branch protection —
+`python-test`, `python-lint`, `node-test`, `docker-build`. The other four
+(`auth-lib-test`, `verification-test`, `llm-test`, `documentation-system-test`)
+run on every PR but aren't yet gating merges. Plus `main-source-guard` on PRs to
+`main`.
 
 ---
 
@@ -101,11 +109,44 @@ Set `PORT=8000` (or whatever you like) as an **explicit** Railway variable on an
 
 ---
 
+## Release log
+
+### 2026-07-14 — security-review remediation (staging)
+
+The remediation from the 2026-07-13 security review merged to `staging`. In one release:
+
+- **team-tracking:** an SSRF egress guard on outbound fetches; a `PATCH /people`
+  privilege-escalation fix backed by a new **`people:elevate`** scope (required to
+  set a non-`member` `access_level` on `POST`/`PATCH /people`; plain `people:write`
+  can no longer escalate, `admin` still satisfies it); a membership temporal
+  no-overlap constraint, `400`s on bad foreign-key references, and `active_only`
+  filtering.
+- **documentation-system:** URL dedup hardened via a partial unique index on
+  `url_normalized WHERE active`.
+- **verification:** `confirm-code` replay hardening — an idempotent replay on a
+  consumed-but-unexpired code now re-checks the submitted code (no email leak on a
+  wrong code) and enforces the same attempt limit (`429`).
+- **llm:** `POST /chat` now requires the dedicated **`chat`** scope (was: any valid key).
+
+**Migrations applied on staging** — team-tracking **007** (membership no-overlap via a
+`btree_gist` exclusion constraint; the migration creates the `btree_gist` extension) and
+documentation-system **004** (the partial unique index above). Both run automatically as
+Railway's `preDeployCommand` (`alembic upgrade head`).
+
+**CI:** added the **`documentation-system-test`** job (Postgres 16 service +
+`alembic upgrade head` + `pytest` with `RUN_PG_TESTS=1`; ruff deferred).
+
+**Keys:** the discord-bot directory key was rotated to add `people:elevate`
+(`scripts/provision-directory-key.sh` updated) so its `/seed` can promote people to
+`admin`/`superuser`.
+
+**Discord:** `/doc` was promoted from beta to stable and now registers globally.
+
 ## Current state
 
 - Both environments fully deployed and healthy.
 - APIs are **private-only** on Railway (no public domains). Only in-project services (the bot, docs-system) reach them, over Railway's internal network. Add a public domain later if an external caller ever needs one — both APIs already have API-key auth.
-- **Discord commands.** Stable commands (`/link`, `/whoami`, `/seed`) are registered globally on the production bot. Beta commands (`/team`, `/my-teams`) are still guild-scoped to the test guild — flip `beta: false` in each module + re-run `registerCommands` to promote them to production when confident.
+- **Discord commands.** All stable commands (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`, `/doc`, plus the email-verification set `/add-email`, `/verify-email`, `/verify-code`, and `/help`) are registered globally on the production bot; **0 beta commands** remain guild-scoped (every command in `discord-bot/src/commands/index.js` is `beta: false`). To ship a future beta command, add it with `beta: true`, validate it in the staging test guild, then flip `beta: false` in its module + re-run `registerCommands` to promote it globally.
 - **Migrations run automatically** as Railway's `preDeployCommand` on the two API services — `alembic upgrade head` against the environment's Neon branch before every deploy. Idempotent.
 
 ---

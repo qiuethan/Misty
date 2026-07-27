@@ -105,9 +105,28 @@ TT_DATABASE_URL="<team-tracking Neon branch DATABASE_URL for this env>" \
 ```
 
 This issues scoped `team-tracking-keys` for discord-bot + documentation-system
-and sets each service's `DIRECTORY_API_KEY`. Re-running issues a fresh key and
+and sets each service's `DIRECTORY_API_KEY`. The discord-bot key's scopes
+include `people:elevate` (alongside its `people:*`/`teams:*`/`memberships:*`
+scopes) so its `/seed` can promote people to `admin`/`superuser` — plain
+`people:write` cannot set a non-`member` `access_level`. The
+documentation-system key stays read-only (`people:read teams:read`). Re-running issues a fresh key and
 repoints the consumer; the previous key stays active until you revoke it
 manually (`team-tracking-keys revoke <id>`).
+
+> **Gotcha — `src` package collision when minting keys.** Both
+> `services/team-tracking` and `services/documentation-system` declare a top-level
+> `src` package, each with a console script pointing at `src.cli:main`
+> (`team-tracking-keys` and `doc-keys` respectively — see their
+> `[project.scripts]`). In the shared workspace venv these collide, so a bare
+> `team-tracking-keys …` can resolve **documentation-system's** CLI and mint a
+> `doc_`-envelope key. team-tracking's auth rejects that: `parse_prefix`
+> ([`packages/auth/platform_auth/hashing.py`](../packages/auth/platform_auth/hashing.py))
+> returns `None` for any token that doesn't start with the `tt_` envelope, so the
+> key is dead on arrival. This actually bit us during key provisioning. Always
+> invoke the CLI with the project pinned —
+> `uv --project services/team-tracking run team-tracking-keys …`, which
+> `scripts/provision-directory-key.sh` already does — and **verify the minted
+> token's prefix is `tt_`, not `doc_`, before wiring it as `DIRECTORY_API_KEY`.**
 
 ## 5. Register Discord slash commands
 The bot has to tell Discord which slash commands it supports. Re-run whenever the

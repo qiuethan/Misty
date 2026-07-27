@@ -19,6 +19,74 @@ export const authMessages = {
   }),
 };
 
+/** Reply payloads for help-command errors. */
+export const helpMessages = {
+  unknownCommand: (name) => ({
+    content: `I couldn't find a command named \`/${name}\` that you can use. Run \`/help\` to see available commands.`,
+    ephemeral: true,
+  }),
+};
+
+/**
+ * Format one neutral command option for a Discord embed field.
+ *
+ * @param {object} option Command option metadata.
+ * @returns {string} Human-readable option summary.
+ */
+function formatOption(option) {
+  const required = option.required ? 'required' : 'optional';
+  return `\`${option.name}\` (${required}) — ${option.description || 'No description'}`;
+}
+
+/**
+ * Build an ephemeral embed listing commands visible to the caller.
+ *
+ * @param {Iterable<object>} commands Visible command definitions.
+ * @returns {object} Surface-neutral reply payload.
+ */
+export function buildHelpEmbed(commands) {
+  const sorted = [...commands].sort((a, b) => a.name.localeCompare(b.name));
+  return {
+    embeds: [{
+      title: 'Available commands',
+      description: sorted.length === 0
+        ? 'No commands are available.'
+        : sorted.map((command) => `**/${command.name}** — ${command.description}`).join('\n'),
+      footer: { text: 'Use /help command:<name> for details.' },
+    }],
+    ephemeral: true,
+  };
+}
+
+/**
+ * Build an ephemeral detail embed for a permission-filtered command.
+ *
+ * @param {object} command Visible command metadata and subcommands.
+ * @returns {object} Surface-neutral reply payload.
+ */
+export function buildCommandDetailEmbed(command) {
+  const fields = [];
+  if (command.options.length > 0) {
+    fields.push({ name: 'Options', value: command.options.map(formatOption).join('\n') });
+  }
+  if (command.subcommands.length > 0) {
+    fields.push({
+      name: 'Subcommands',
+      value: command.subcommands
+        .map((sub) => `**${sub.name}** — ${sub.description || 'No description'}`)
+        .join('\n'),
+    });
+  }
+  return {
+    embeds: [{
+      title: `/${command.name}`,
+      description: command.description,
+      ...(fields.length > 0 ? { fields } : {}),
+    }],
+    ephemeral: true,
+  };
+}
+
 export function renderLinkResult(result) {
   const content = (() => {
     switch (result.outcome) {
@@ -343,6 +411,48 @@ export function renderDocShowResult(result) {
     }
   })();
   return { content, ephemeral: false };
+}
+
+export function renderAddEmailResult(result) {
+  const content = (() => {
+    switch (result.outcome) {
+      case 'CODE_SENT':
+        return `📧 I've emailed a code to **${result.email}** — run \`/verify-email <code>\` to add it.`;
+      case 'RATE_LIMITED':
+        return 'That email was just sent a code. Please wait a moment and try again.';
+      case 'VERIFICATION_DOWN':
+        return 'The verification service is unavailable right now. Please try again shortly.';
+      default:
+        return 'Something went wrong. Please try again.';
+    }
+  })();
+  return { content, ephemeral: true };
+}
+
+export function renderVerifyEmailResult(result) {
+  const content = (() => {
+    switch (result.outcome) {
+      case 'ADDED':
+        return `✅ Added **${result.email}** to your account.`;
+      case 'EMAIL_TAKEN':
+        return "That email is already registered to a member, so I can't add it to your account.";
+      case 'CODE_EXPIRED':
+        return 'That code has expired. Run `/add-email` again to get a new one.';
+      case 'TOO_MANY_ATTEMPTS':
+        return 'Too many incorrect attempts. Run `/add-email` again to get a new code.';
+      case 'INVALID_CODE':
+        return "That code doesn't match. Double-check it and try again.";
+      case 'NO_PENDING_CODE':
+        return 'I have no pending code for you. Run `/add-email <email>` first.';
+      case 'VERIFICATION_DOWN':
+        return 'The verification service is unavailable right now. Please try again shortly.';
+      case 'DIRECTORY_DOWN':
+        return 'The directory is temporarily unavailable. Please try again shortly.';
+      default:
+        return 'Something went wrong. Please try again.';
+    }
+  })();
+  return { content, ephemeral: true };
 }
 
 export function renderDocRemoveResult(result) {

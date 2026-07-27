@@ -7,9 +7,9 @@ function findSub(name) {
   return doc.subcommands.find((s) => s.name === name);
 }
 
-test('doc command is beta with four subcommands', () => {
+test('doc command is stable with four subcommands', () => {
   assert.equal(doc.name, 'doc');
-  assert.equal(doc.beta, true);
+  assert.equal(doc.beta, false);
   assert.deepEqual(doc.subcommands.map((s) => s.name).sort(), ['add', 'list', 'remove', 'show']);
 });
 
@@ -100,4 +100,66 @@ test('stacked autocomplete timeouts stay under Discord\'s 3s window', () => {
     PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS + AUTOCOMPLETE_TIMEOUT_MS <= 2800,
     `principal (${PRINCIPAL_AUTOCOMPLETE_TIMEOUT_MS}) + lookup (${AUTOCOMPLETE_TIMEOUT_MS}) must stay well under 3000ms`,
   );
+});
+
+test('list handler passes the caller person id as onBehalfOf', async () => {
+  let received;
+  const ctx = {
+    docService: { listDocs: async (args) => { received = args; return { outcome: 'LISTED', docs: [] }; } },
+  };
+  await findSub('list').handler({
+    options: { team: null, tag: null, source: null },
+    principal: { person: { id: 'p1' } }, ctx,
+  });
+  assert.equal(received.onBehalfOf, 'p1');
+});
+
+test('show handler passes the caller person id as onBehalfOf', async () => {
+  let received;
+  const ctx = {
+    docService: { showDoc: async (args) => { received = args; return { outcome: 'NOT_FOUND' }; } },
+  };
+  await findSub('show').handler({
+    options: { id: 'd1' },
+    principal: { person: { id: 'p1' } }, ctx,
+  });
+  assert.equal(received.id, 'd1');
+  assert.equal(received.onBehalfOf, 'p1');
+});
+
+test('list handler omits onBehalfOf when the caller is not linked (fail-closed)', async () => {
+  let received;
+  const ctx = {
+    docService: { listDocs: async (args) => { received = args; return { outcome: 'LISTED', docs: [] }; } },
+  };
+  await findSub('list').handler({
+    options: { team: null, tag: null, source: null },
+    principal: null, ctx,
+  });
+  assert.equal(received.onBehalfOf, undefined);
+});
+
+test('show handler omits onBehalfOf when the caller is not linked (fail-closed)', async () => {
+  let received;
+  const ctx = {
+    docService: { showDoc: async (args) => { received = args; return { outcome: 'NOT_FOUND' }; } },
+  };
+  await findSub('show').handler({
+    options: { id: 'd1' },
+    principal: null, ctx,
+  });
+  assert.equal(received.id, 'd1');
+  assert.equal(received.onBehalfOf, undefined);
+});
+
+test('add handler owns the doc as the caller (owningPersonId)', async () => {
+  let received;
+  const ctx = {
+    docService: { addDoc: async (args) => { received = args; return { outcome: 'ADDED', doc: { title: 'X', url: 'https://x.com', id: 'd1' }, warnings: [] }; } },
+  };
+  await findSub('add').handler({
+    options: { url: 'https://x.com', title: null, team: null, tags: null },
+    principal: { person: { id: 'p1' } }, ctx,
+  });
+  assert.equal(received.owningPersonId, 'p1');
 });

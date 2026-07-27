@@ -5,8 +5,10 @@ from pydantic import BaseModel, ConfigDict
 
 from contracts.directory import DirectoryClient, DirectoryUnavailable
 from contracts.storage import StorageAdapter
-from contracts.types import Doc, DocIngest, DocUpdate, IngestResult
+from contracts.types import Doc, DocGrantInput, DocIngest, DocUpdate, IngestResult
+from contracts.visibility import ActorContext
 from src.api.auth import AuthedKey, get_actor, require_scope
+from src.api.authz import get_visible_doc_or_404, read_context, write_context
 from src.api.deps import get_directory, get_fetchers, get_storage
 from src.fetch.registry import FetcherRegistry
 from src.ingest import BadReference, ingest_doc
@@ -47,12 +49,12 @@ def list_docs(
     tag: str | None = None,
     active_only: bool = True,
     storage: StorageAdapter = Depends(get_storage),
-    _: AuthedKey = Depends(require_scope("docs:read")),
+    ctx: ActorContext = Depends(read_context),
 ) -> list[Doc]:
     return storage.list_docs(
         owning_team_id=owning_team_id, owning_person_id=owning_person_id,
         source_id=source_id, tag=tag.strip().lower() if tag is not None else None,
-        active_only=active_only,
+        active_only=active_only, visibility=ctx,
     )
 
 
@@ -61,9 +63,9 @@ def get_doc(
     doc_id: UUID,
     storage: StorageAdapter = Depends(get_storage),
     directory: DirectoryClient = Depends(get_directory),
-    _: AuthedKey = Depends(require_scope("docs:read")),
+    ctx: ActorContext = Depends(read_context),
 ) -> Doc:
-    doc = storage.get_doc(doc_id)
+    doc = storage.get_doc(doc_id, visibility=ctx)
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="doc not found")
     return _backfill_labels(doc, storage, directory)
@@ -76,8 +78,10 @@ def update_doc(
     storage: StorageAdapter = Depends(get_storage),
     directory: DirectoryClient = Depends(get_directory),
     actor: str = Depends(get_actor),
+    wctx: ActorContext = Depends(write_context),
     _: AuthedKey = Depends(require_scope("docs:write")),
 ) -> Doc:
+    get_visible_doc_or_404(doc_id, wctx, storage)
     values = payload.model_dump(exclude_unset=True)
     # Re-resolve labels when an owner id changes and the directory is reachable.
     # A genuinely unknown id (directory reachable, record not found) is a 400,
@@ -102,8 +106,10 @@ def add_tag(
     doc_id: UUID,
     body: TagBody,
     storage: StorageAdapter = Depends(get_storage),
+    wctx: ActorContext = Depends(write_context),
     _: AuthedKey = Depends(require_scope("docs:write")),
 ) -> Doc:
+    get_visible_doc_or_404(doc_id, wctx, storage)
     if not storage.add_tag(doc_id, body.tag.strip().lower()):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="doc not found")
     return storage.get_doc(doc_id)
@@ -114,12 +120,40 @@ def remove_tag(
     doc_id: UUID,
     tag: str,
     storage: StorageAdapter = Depends(get_storage),
+    wctx: ActorContext = Depends(write_context),
     _: AuthedKey = Depends(require_scope("docs:write")),
 ) -> Doc:
-    doc = storage.get_doc(doc_id)
-    if doc is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="doc not found")
+    # get_visible_doc_or_404 already 404s if the doc is missing/invisible, so
+    # the extra existence-check fetch it used to do here is redundant.
+    get_visible_doc_or_404(doc_id, wctx, storage)
     storage.remove_tag(doc_id, tag.strip().lower())
+    return storage.get_doc(doc_id)
+
+
+@router.post("/{doc_id}/grants", response_model=Doc)
+def add_grant(
+    doc_id: UUID,
+    body: DocGrantInput,
+    storage: StorageAdapter = Depends(get_storage),
+    wctx: ActorContext = Depends(write_context),
+    actor: str = Depends(get_actor),
+    _: AuthedKey = Depends(require_scope("docs:write")),
+) -> Doc:
+    get_visible_doc_or_404(doc_id, wctx, storage)  # 404 if actor can't see it
+    storage.add_grant(doc_id, grantee_type=body.grantee_type, grantee_id=body.grantee_id, actor=actor)
+    return storage.get_doc(doc_id)
+
+
+@router.delete("/{doc_id}/grants", response_model=Doc)
+def remove_grant(
+    doc_id: UUID,
+    body: DocGrantInput,
+    storage: StorageAdapter = Depends(get_storage),
+    wctx: ActorContext = Depends(write_context),
+    _: AuthedKey = Depends(require_scope("docs:write")),
+) -> Doc:
+    get_visible_doc_or_404(doc_id, wctx, storage)
+    storage.remove_grant(doc_id, grantee_type=body.grantee_type, grantee_id=body.grantee_id)
     return storage.get_doc(doc_id)
 
 
@@ -129,12 +163,14 @@ def refetch(
     storage: StorageAdapter = Depends(get_storage),
     fetchers: FetcherRegistry = Depends(get_fetchers),
     actor: str = Depends(get_actor),
+    wctx: ActorContext = Depends(write_context),
     _: AuthedKey = Depends(require_scope("docs:write")),
 ) -> Doc:
     from datetime import datetime, timezone
 
     from contracts.fetcher import FetchError
 
+    get_visible_doc_or_404(doc_id, wctx, storage)
     doc = storage.get_doc(doc_id)
     if doc is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="doc not found")
@@ -192,5 +228,8 @@ def _backfill_labels(doc: Doc, storage: StorageAdapter, directory: DirectoryClie
         if label is not None:
             values["owning_person_label"] = label
     if values:
-        return storage.update_doc(doc.id, values, actor="label-backfill")
+        updated = storage.update_doc(doc.id, values, actor="label-backfill")
+        # update_doc's Doc reconstruction always yields grants=[]; the input
+        # doc is already hydrated with grants, so carry them forward.
+        return updated.model_copy(update={"grants": doc.grants})
     return doc

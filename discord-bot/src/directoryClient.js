@@ -1,15 +1,9 @@
+import { createHttpClient } from './httpClient.js';
+
 export class DirectoryUnavailable extends Error {
   constructor(message) {
     super(message);
     this.name = 'DirectoryUnavailable';
-  }
-}
-
-async function parseJson(resp) {
-  try {
-    return await resp.json();
-  } catch {
-    throw new DirectoryUnavailable('malformed directory response');
   }
 }
 
@@ -53,16 +47,23 @@ export class PersonExists extends Error {
   }
 }
 
+export class EmailAlreadyRegistered extends Error {
+  constructor(detail) {
+    super(detail);
+    this.name = 'EmailAlreadyRegistered';
+    this.detail = detail;
+  }
+}
+
 export function createDirectoryClient({ baseUrl, apiKey, fetchImpl = fetch }) {
   const headers = { 'X-API-Key': apiKey, 'Content-Type': 'application/json' };
-
-  async function send(path, options = {}) {
-    try {
-      return await fetchImpl(`${baseUrl}${path}`, { ...options, headers });
-    } catch {
-      throw new DirectoryUnavailable('network error reaching directory');
-    }
-  }
+  const { send, parseJson } = createHttpClient({
+    baseUrl,
+    headers,
+    fetchImpl,
+    networkError: () => new DirectoryUnavailable('network error reaching directory'),
+    parseError: () => new DirectoryUnavailable('malformed directory response'),
+  });
 
   async function getByPath(path) {
     const resp = await send(path);
@@ -103,6 +104,19 @@ export function createDirectoryClient({ baseUrl, apiKey, fetchImpl = fetch }) {
       if (resp.status === 409) {
         const body = await resp.json().catch(() => ({}));
         throw new AlreadyLinked(body.detail ?? 'already linked');
+      }
+      throw new DirectoryUnavailable(`directory returned ${resp.status}`);
+    },
+
+    async addEmailIdentifier(personId, email) {
+      const resp = await send(`/people/${encodeURIComponent(personId)}/emails`, {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      });
+      if (resp.status === 201) return parseJson(resp);
+      if (resp.status === 409) {
+        const body = await resp.json().catch(() => ({}));
+        throw new EmailAlreadyRegistered(body.detail ?? 'email already registered');
       }
       throw new DirectoryUnavailable(`directory returned ${resp.status}`);
     },

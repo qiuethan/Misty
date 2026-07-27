@@ -16,7 +16,12 @@ from src.api.hashing import generate_key
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="llm-keys", description="Mint an internal LLM API key.")
     parser.add_argument("--name", required=True, help="Consumer label, e.g. 'reviewer-summaries'")
-    parser.add_argument("--scopes", nargs="*", default=[], help="Scopes (default: none)")
+    parser.add_argument(
+        "--scopes",
+        nargs="*",
+        default=[],
+        help="Scopes (default: none). Grant 'chat' to allow calling POST /chat.",
+    )
     args = parser.parse_args(argv)
 
     plaintext, prefix, key_hash = generate_key()

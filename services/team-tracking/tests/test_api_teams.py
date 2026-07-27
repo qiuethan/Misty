@@ -55,6 +55,31 @@ def test_duplicate_slug_returns_409(client):
     assert dup.status_code == 409
 
 
+def test_nonexistent_parent_id_returns_400_not_409(client):
+    """A unique slug with a bogus parent_id is a bad request, not a slug conflict."""
+    from uuid import uuid4
+
+    resp = client.post(
+        "/teams",
+        json={"slug": "orphan", "label": "Orphan", "parent_id": str(uuid4())},
+        headers=AUTH,
+    )
+    assert resp.status_code == 400
+    assert resp.status_code != 409
+    assert "parent" in resp.json()["detail"].lower()
+
+
+def test_valid_parent_id_returns_201(client):
+    parent = client.post("/teams", json={"slug": "events", "label": "Events"}, headers=AUTH).json()
+    resp = client.post(
+        "/teams",
+        json={"slug": "events.agi", "label": "AGI", "parent_id": parent["id"]},
+        headers=AUTH,
+    )
+    assert resp.status_code == 201
+    assert resp.json()["parent_id"] == parent["id"]
+
+
 def test_update_team(client):
     created = client.post("/teams", json={"slug": "ops", "label": "Ops"}, headers=AUTH).json()
     resp = client.patch(f"/teams/{created['id']}", json={"label": "Internal Ops"}, headers=AUTH)

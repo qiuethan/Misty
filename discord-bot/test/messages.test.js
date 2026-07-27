@@ -17,6 +17,8 @@ import {
   renderDocListResult,
   renderDocShowResult,
   renderDocRemoveResult,
+  renderAddEmailResult,
+  renderVerifyEmailResult,
 } from '../src/messages.js';
 
 test('authMessages.unavailable returns ReplyPayload', () => {
@@ -339,5 +341,45 @@ test('renderDocRemoveResult REMOVED is ephemeral', () => {
 test('doc renderers map DOC_DOWN', () => {
   for (const fn of [renderDocAddResult, renderDocListResult, renderDocShowResult, renderDocRemoveResult]) {
     assert.match(fn({ outcome: 'DOC_DOWN' }).content, /unavailable/i);
+  }
+});
+
+test('renderAddEmailResult CODE_SENT mentions the email', () => {
+  const r = renderAddEmailResult({ outcome: 'CODE_SENT', email: 'a@b.com' });
+  assert.match(r.content, /a@b.com/);
+  assert.equal(r.ephemeral, true);
+});
+
+test('renderVerifyEmailResult covers ADDED and EMAIL_TAKEN', () => {
+  const added = renderVerifyEmailResult({ outcome: 'ADDED', email: 'a@b.com' });
+  assert.match(added.content, /a@b.com/);
+  assert.equal(added.ephemeral, true);
+  const taken = renderVerifyEmailResult({ outcome: 'EMAIL_TAKEN' });
+  assert.match(taken.content, /already/i);
+  assert.equal(taken.ephemeral, true);
+});
+
+test('renderAddEmailResult covers RATE_LIMITED, VERIFICATION_DOWN, and unknown outcomes', () => {
+  for (const outcome of ['RATE_LIMITED', 'VERIFICATION_DOWN', 'SOMETHING_ELSE']) {
+    const r = renderAddEmailResult({ outcome });
+    assert.equal(typeof r.content, 'string');
+    assert.ok(r.content.length > 0);
+    assert.equal(r.ephemeral, true);
+  }
+});
+
+test('renderVerifyEmailResult covers CODE_EXPIRED, TOO_MANY_ATTEMPTS, INVALID_CODE, NO_PENDING_CODE, DIRECTORY_DOWN, and unknown outcomes', () => {
+  for (const outcome of [
+    'CODE_EXPIRED',
+    'TOO_MANY_ATTEMPTS',
+    'INVALID_CODE',
+    'NO_PENDING_CODE',
+    'DIRECTORY_DOWN',
+    'SOMETHING_ELSE',
+  ]) {
+    const r = renderVerifyEmailResult({ outcome });
+    assert.equal(typeof r.content, 'string');
+    assert.ok(r.content.length > 0);
+    assert.equal(r.ephemeral, true);
   }
 });

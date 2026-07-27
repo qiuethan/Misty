@@ -6,6 +6,12 @@ import { dispatch } from '../router.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Build the local web-playground server around the neutral command registry.
+ *
+ * @param {object} dependencies Registry, application context, and reset hook.
+ * @returns {Promise<object>} Configured Fastify server.
+ */
 export async function buildServer({ commands, appContext, onReset }) {
   const server = Fastify({ logger: false });
 
@@ -87,6 +93,7 @@ export async function buildServer({ commands, appContext, onReset }) {
     }
 
     const intent = {
+      surface: 'web',
       commandName: command.name,
       options: coerced,
       subcommand,

@@ -1,3 +1,5 @@
+import { createHttpClient } from './httpClient.js';
+
 export class DocUnavailable extends Error {
   constructor(message) {
     super(message);
@@ -13,24 +15,22 @@ export class DocBadReference extends Error {
   }
 }
 
-async function parseJson(resp) {
-  try {
-    return await resp.json();
-  } catch {
-    throw new DocUnavailable('malformed doc-service response');
-  }
+// Assert an actor for a read so the doc service filters visibility as that user
+// (on-behalf-of, gated by the key's act-as-user scope). Omit the header entirely
+// when there's no actor — the service then applies its no-actor policy.
+function oboHeader(onBehalfOf) {
+  return onBehalfOf ? { headers: { 'X-On-Behalf-Of': onBehalfOf } } : {};
 }
 
 export function createDocClient({ baseUrl, apiKey, fetchImpl = fetch }) {
   const headers = { 'X-API-Key': apiKey, 'Content-Type': 'application/json' };
-
-  async function send(path, options = {}) {
-    try {
-      return await fetchImpl(`${baseUrl}${path}`, { ...options, headers });
-    } catch {
-      throw new DocUnavailable('network error reaching doc service');
-    }
-  }
+  const { send, parseJson } = createHttpClient({
+    baseUrl,
+    headers,
+    fetchImpl,
+    networkError: () => new DocUnavailable('network error reaching doc service'),
+    parseError: () => new DocUnavailable('malformed doc-service response'),
+  });
 
   function unavailable(status, context) {
     // Surface unexpected statuses (notably 401/403 from a bad or mis-scoped
@@ -58,7 +58,7 @@ export function createDocClient({ baseUrl, apiKey, fetchImpl = fetch }) {
       throw unavailable(resp.status, 'POST /docs');
     },
 
-    async listDocs({ owningTeamId, owningPersonId, sourceId, tag, activeOnly } = {}) {
+    async listDocs({ owningTeamId, owningPersonId, sourceId, tag, activeOnly, onBehalfOf } = {}) {
       const qs = new URLSearchParams();
       if (owningTeamId) qs.set('owning_team_id', owningTeamId);
       if (owningPersonId) qs.set('owning_person_id', owningPersonId);
@@ -66,13 +66,13 @@ export function createDocClient({ baseUrl, apiKey, fetchImpl = fetch }) {
       if (tag) qs.set('tag', tag);
       if (activeOnly !== undefined) qs.set('active_only', String(activeOnly));
       const qstr = qs.toString();
-      const resp = await send(qstr ? `/docs?${qstr}` : '/docs');
+      const resp = await send(qstr ? `/docs?${qstr}` : '/docs', oboHeader(onBehalfOf));
       if (!resp.ok) throw unavailable(resp.status, 'GET /docs');
       return parseJson(resp);
     },
 
-    async getDoc(id) {
-      const resp = await send(`/docs/${encodeURIComponent(id)}`);
+    async getDoc(id, { onBehalfOf } = {}) {
+      const resp = await send(`/docs/${encodeURIComponent(id)}`, oboHeader(onBehalfOf));
       if (resp.status === 404) return null;
       if (!resp.ok) throw unavailable(resp.status, 'GET /docs/{id}');
       return parseJson(resp);

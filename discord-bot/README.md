@@ -55,11 +55,15 @@ Also issue an API key for the Discord bot (only if you'll use Discord mode):
 
 ```bash
 cd services/team-tracking
-uv run team-tracking-keys issue --name discord-bot \
-  --scopes people:read people:write identifiers:read identifiers:write \
+uv --project . run team-tracking-keys issue --name discord-bot \
+  --scopes people:read people:write people:elevate identifiers:read identifiers:write \
            teams:read teams:write memberships:read memberships:write role_kinds:read
 # Copy the tt_... key into discord-bot/.env as DIRECTORY_API_KEY.
 # IMPORTANT: this key must be issued against MAIN (port 8000), not scratch.
+# Verify the token starts with tt_ — a doc_-prefixed key means the shared venv
+# resolved documentation-system's CLI instead, and team-tracking will reject it.
+# scripts/provision-directory-key.sh is the source of truth for the bot's scopes
+# (people:elevate is what lets /seed promote people to admin/superuser).
 ```
 
 ### Daily startup
@@ -162,10 +166,12 @@ and skips them.
 
 ## Commands
 
-- `/link email:<your UTMIST email>` (public) — links your Discord account to your
-  directory record. Your email must already be in the directory (execs seed
-  members). No email verification yet — see the `// TODO: verification` in
-  `src/linkService.js`.
+- `/link email:<your UTMIST email>` (public) — starts linking your Discord account
+  to your directory record. Your email must already be in the directory (execs seed
+  members). It emails a one-time code to that address; run `/verify-code` with the
+  code to finish linking. Backed by the verification service via `src/linkService.js`.
+- `/verify-code code:<6-digit>` (public) — confirms the code emailed by `/link` and
+  completes the link.
 - `/whoami` (linked) — shows which directory record you're linked to. Requires you
   to be linked; the auth layer handles the "not linked" case.
 - `/seed email:<> name:<> [level:member|admin|superuser]` (admin) — add a member to
@@ -178,8 +184,46 @@ and skips them.
 - `/team remove user:<@mention> team:<slug>` (admin) — soft-end a membership as of today.
 - `/team roster team:<slug> [as_of:<YYYY-MM-DD>]` (linked) — show a team's current roster.
 - `/my-teams` (linked) — list your active memberships.
+- `/doc <add|list|show|remove>` (linked; `remove` is admin) — catalog and look up UTMIST documents and links.
 
-`/team` and `/my-teams` are currently on the **beta** channel (test guild only) — promote by setting `beta = false` in the command modules and re-running `npm run register`.
+- `/record start` (linked) — joins your current voice channel and starts
+  recording the meeting. `/record status` (linked) — shows elapsed recording
+  time. `/record stop` (linked) — ends the recording and, within roughly
+  30–60s, posts a `meeting-minutes.pdf` (summary, decisions, action items,
+  full transcript) and `meeting-audio.mp3` back into the text channel. No audio
+  or transcript is persisted — temp files are cleaned up after posting.
+
+Every command is on the **stable** channel (`beta = false`), so they all register
+globally in every server the bot is in. There are currently no beta commands.
+
+> `/record` requires the `meeting` service to be deployed in the target
+> environment, with `MEETING_BASE_URL` + `MEETING_API_KEY` set on the bot. It was
+> promoted from beta in the staging → main release; provision `meeting` in an
+> environment **before** registering commands there, or `/record` will be visible
+> and fail.
+
+### Meeting recording (`/record`) infra
+
+As of v2, recording is split across two services: the bot only joins voice and
+streams raw Opus audio over a WebSocket to the separate `meeting` service,
+which owns decoding/mixing (ffmpeg), transcription (AWS Transcribe), minutes
+generation, and posts the results back. See
+[`docs/MEETING-RECORDING.md`](../docs/MEETING-RECORDING.md) for the full
+architecture.
+
+The bot itself needs only:
+
+- `MEETING_BASE_URL` — the `meeting` service's base URL (HTTP; the bot derives
+  the WebSocket URL from it).
+- `MEETING_API_KEY` — the API key the bot authenticates to the `meeting`
+  service with.
+- The `GuildVoiceStates` gateway intent and Connect permission in the voice
+  channel (already required to join voice at all).
+
+The bot does **not** need ffmpeg, AWS credentials, or `MAX_RECORDING_MS` /
+`RECORDING_SILENCE_MS` — those are requirements of the `meeting` service
+(`services/meeting`), not the bot. See `services/meeting/README.md` and its
+`.env.example` for that service's infra requirements.
 
 ## Auth layer
 
@@ -207,9 +251,14 @@ parallel to team-tracking's scoped-key auth.
    - `DIRECTORY_API_KEY` — issue one from team-tracking:
      ```bash
      cd ../services/team-tracking
-     uv run team-tracking-keys issue --name discord-bot \
-       --scopes people:read people:write identifiers:read identifiers:write \
+     uv --project . run team-tracking-keys issue --name discord-bot \
+       --scopes people:read people:write people:elevate identifiers:read identifiers:write \
                 teams:read teams:write memberships:read memberships:write role_kinds:read
+     # The token must start with tt_ (a doc_-prefixed key means the shared venv
+     # resolved documentation-system's CLI). scripts/provision-directory-key.sh
+     # is the source of truth for these scopes — people:elevate is required so
+     # /seed can promote people to admin/superuser (without it, /seed to a
+     # privileged level returns 403).
      ```
      **Important:** the CLI writes to whichever DB `.env`'s `DATABASE_URL` points
      at, which is your main `team_tracking` DB by default. Do NOT issue this key
@@ -359,7 +408,7 @@ local `.env`.
 | `src/config.js` | Load + validate env. |
 | `src/context.js` | Wire application services once. |
 | `src/directoryClient.js` | The only module that knows the team-tracking HTTP shape. |
-| `src/linkService.js` | Orchestrates the `/link` action. Holds the verification TODO. |
+| `src/linkService.js` | Orchestrates `/link` + `/verify-code` — email one-time-code verification via the verification service. |
 | `src/auth/principal.js` | Authentication: Discord id → Principal. |
 | `src/auth/policy.js` | Authorization: policy + principal → allow/deny. |
 | `src/router.js` | Policy Enforcement Point: authN → authZ → dispatch. |
@@ -389,7 +438,7 @@ tested against a mocked directory client. discord.js handlers are kept thin.
 
 ## Deferred
 
-Email verification code (still a `TODO: verification` in `src/linkService.js`),
-Discord role sync, `/unlink`, and any bot-side persistence.
+Discord role sync, `/unlink`, and any bot-side persistence. (Email verification is
+now implemented — `/link` + `/verify-code` via the verification service.)
 
 Team archive/unarchive, `/team info`, editing role/team-admin on existing memberships, team-admin delegation authority, dynamic role_kinds fetch for slash choices, LLM adapter.

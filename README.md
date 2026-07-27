@@ -15,13 +15,17 @@ UTMIST is a student org with rotating leadership and mixed technical fluency. Ev
 **Stable (registered globally — visible in every UTMIST server the bot is in):**
 
 - **`/link`** — attach your Discord account to your directory record so the bot knows who you are. Public (you don't need to be linked yet).
+- **`/verify-code`** — confirm the one-time code emailed to you to finish linking. Public.
+- **`/add-email`** — verify and add another email to your directory record. Requires you to be linked.
+- **`/verify-email`** — confirm the code emailed to you to finish adding that email. Requires you to be linked.
 - **`/whoami`** — see your linked identity, teams you're on, and access level. Requires you to be linked.
 - **`/team`** — look up, create, rename, add/remove members, and view rosters (subcommands: `create`, `list`, `rename`, `add`, `remove`, `roster`). Reads are public; writes are admin-only.
 - **`/my-teams`** — list your active memberships. Requires you to be linked.
-
-**Beta (currently visible only in the test guild; promote by flipping `beta: false` in each command module + re-registering):**
-
 - **`/doc`** — catalog and browse links (subcommands: `add`, `list`, `show`, `remove`), backed by documentation-system. Reads are public; writes are admin-only. Team-owner field has slug autocomplete.
+- **`/record`** — record the voice channel you're in and get meeting minutes back (subcommands: `start`, `status`, `stop`). On `stop`, posts a `meeting-minutes.pdf` (summary, decisions, action items, transcript) plus `meeting-audio.mp3` into the channel; nothing is persisted server-side. Requires you to be linked.
+- **`/help`** — list the commands you can use, or show details for one. Public.
+
+There are currently no beta commands.
 
 ### As an admin (in Discord)
 
@@ -33,7 +37,7 @@ UTMIST is a student org with rotating leadership and mixed technical fluency. Ev
 Every domain has a first-class HTTP API — build your own dashboard, sync job, or automation on top:
 
 - **[team-tracking](services/team-tracking/README.md)** — 23 endpoints across `people`, `teams`, `role_kinds`, `team_memberships`, `providers`, `person_identifiers`, `api_keys`. Full point-in-time roster queries. Scoped API keys, per-request audit log. **Actively consumed** by the Discord bot in production.
-- **[documentation-system](services/documentation-system/README.md)** — endpoints over `docs` and `sources`; ingest a URL and it's normalized, dedup'd, fetched (title + snapshot for supported sources), and owner-validated against team-tracking. Ownership degrades gracefully if the directory is unreachable. **Consumed** by the Discord bot's `/doc` command group (`add`, `list`, `show`, `remove`), currently in beta.
+- **[documentation-system](services/documentation-system/README.md)** — endpoints over `docs` and `sources`; ingest a URL and it's normalized, dedup'd, fetched (title + snapshot for supported sources), and owner-validated against team-tracking. Ownership degrades gracefully if the directory is unreachable. **Consumed** by the Discord bot's `/doc` command group (`add`, `list`, `show`, `remove`).
 
 Both APIs speak OpenAPI. Point Swagger UI or codegen at them.
 
@@ -50,8 +54,11 @@ Both APIs speak OpenAPI. Point Swagger UI or codegen at them.
 | Service | What it holds | Status |
 |---------|---------------|--------|
 | [`services/team-tracking/`](services/team-tracking/README.md) | People, teams, roles, memberships, external identity mapping (Discord/GitHub/Notion/UofT email → person) | **Deployed** (staging + prod). Directory is empty on prod until seeded. |
-| [`services/documentation-system/`](services/documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, and best-effort content snapshots | **Deployed** (staging + prod). Consumed by the bot's `/doc` command group (`add`/`list`/`show`/`remove`), currently in beta (test guild only). |
-| [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend + a browser-based "web playground" for iterating on commands without a Discord token | **Deployed** (staging + prod). 5 stable commands (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`) registered globally; 1 beta (`/doc`) in test guild only. |
+| [`services/documentation-system/`](services/documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, and best-effort content snapshots | **Deployed** (staging + prod). Consumed by the bot's `/doc` command group (`add`/`list`/`show`/`remove`), registered globally. |
+| [`services/llm/`](services/llm/README.md) | Stateless (no DB) internal `POST /chat` API over AWS Bedrock; requires the `chat` scope | **Deployed** (staging + prod). No database — a thin proxy over Bedrock. |
+| [`services/verification/`](services/verification/README.md) | Email verification: request a one-time code and confirm it, linking a subject (e.g. `discord:<id>`) to a verified email; requires the `verification:write` scope | **Deployed** (staging + prod). |
+| [`services/meeting/`](services/meeting/README.md) | Meeting recording: transcribes a Discord voice session (Amazon Transcribe) and returns LLM-generated minutes as a branded PDF; no DB, nothing persisted | **Deployed** (staging). Consumed by the bot's `/record` command group; requires the `meetings` scope. |
+| [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend + a browser-based "web playground" for iterating on commands without a Discord token | **Deployed** (staging + prod). All slash commands are stable and registered globally; 0 beta. |
 | Search / retrieval | Full-text + semantic search over the catalog's snapshots | Deferred (not built) |
 
 **How they relate.** team-tracking is the foundation — everything else references it. documentation-system validates every doc's owner against team-tracking. The discord-bot's commands read/write the directory over HTTP. Each service owns its own database; they never share tables.

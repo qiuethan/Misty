@@ -10,6 +10,7 @@ test('defineCommand normalizes defaults', () => {
   });
   assert.equal(cmd.auth, 'linked');
   assert.equal(cmd.beta, false);
+  assert.equal(cmd.identifyCaller, false);
   assert.deepEqual(cmd.options, []);
 });
 
@@ -19,11 +20,13 @@ test('defineCommand preserves explicit values', () => {
     description: 'Foo',
     auth: 'public',
     beta: true,
+    identifyCaller: true,
     options: [{ name: 'x', type: 'string', required: true, description: 'X' }],
     handler: async () => ({ content: 'ok' }),
   });
   assert.equal(cmd.auth, 'public');
   assert.equal(cmd.beta, true);
+  assert.equal(cmd.identifyCaller, true);
   assert.equal(cmd.options[0].name, 'x');
 });
 

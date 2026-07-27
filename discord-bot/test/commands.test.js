@@ -399,10 +399,14 @@ test('registry includes team and my-teams', () => {
   assert.equal(commands.get('my-teams'), myTeamsCmd);
 });
 
-test('doc is the only beta-channel command', () => {
+test('every command is stable (registered globally); none are beta', () => {
   const { stable, beta } = partitionCommands([...commands.values()]);
-  assert.deepEqual(new Set(beta.map((c) => c.name)), new Set(['doc']));
-  assert.equal(stable.length, commands.size - 1);
+  assert.ok(stable.some((c) => c.name === 'doc'));
+  // `record` was promoted off the beta channel in the staging → main release, so
+  // the beta partition is now empty. registerCommands still sends the (empty)
+  // beta body to the testing guild, which clears the stale guild-scoped copy.
+  assert.deepEqual(beta.map((c) => c.name), []);
+  assert.equal(stable.length, commands.size);
 });
 
 test('buildDiscordData marks autocomplete string options', () => {

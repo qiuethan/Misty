@@ -8,7 +8,10 @@ import {
   payloadToDiscordReply,
   resolveEphemeral,
   wireDiscordClient,
+  createAutoStop,
 } from '../src/adapters/discord.js';
+import { DirectoryUnavailable } from '../src/directoryClient.js';
+import record from '../src/commands/record.js';
 
 // A minimal fake discord.js interaction that tracks the response lifecycle the
 // way the real one does: deferReply() flips `deferred`, reply() flips `replied`.
@@ -65,6 +68,7 @@ const linkLike = defineCommand({
 test('interactionToIntent extracts flat options', () => {
   const interaction = {
     commandName: 'link',
+    guildId: 'guild-1',
     user: { id: '1', username: 'alex' },
     options: {
       getString: (n) => (n === 'email' ? 'a@x' : null),
@@ -73,6 +77,8 @@ test('interactionToIntent extracts flat options', () => {
   };
   const intent = interactionToIntent(interaction, linkLike);
   assert.equal(intent.commandName, 'link');
+  assert.equal(intent.surface, 'discord');
+  assert.equal(intent.discordGuildId, 'guild-1');
   assert.equal(intent.options.email, 'a@x');
   assert.equal(intent.discordUserId, '1');
   assert.equal(intent.discordHandle, 'alex');
@@ -292,3 +298,270 @@ test('wireDiscordClient responds to autocomplete with suggestions', async () => 
   const respond = calls.find((c) => c.method === 'respond');
   assert.deepEqual(respond.choices, [{ name: 'ML', value: 'ml' }]);
 });
+
+// --- /record auth enforcement (dedicated adapter path, bypasses the router PEP) ---
+
+function fakeRecordInteraction({ subcommand, voiceChannel = null, calls }) {
+  return {
+    commandName: 'record',
+    guildId: 'g1',
+    user: { id: 'u1', username: 'alex' },
+    channel: { id: 'tc1' },
+    member: { voice: { channel: voiceChannel } },
+    isChatInputCommand: () => true,
+    isAutocomplete: () => false,
+    options: { getSubcommand: () => subcommand },
+    async deferReply(opts) { calls.push({ method: 'deferReply', opts }); },
+    async editReply(payload) { calls.push({ method: 'editReply', payload }); },
+  };
+}
+
+// The real `record` command in the registry so the adapter reads its per-
+// subcommand auth (start='linked', status/stop='public') straight from metadata.
+const recordCommands = new Map([['record', record]]);
+
+test('/record start is denied for an UNLINKED caller and never starts recording', async () => {
+  const calls = [];
+  let startCalled = false;
+  const appContext = {
+    directory: { getPersonByDiscordId: async () => null },
+    meetingSurface: { start: () => { startCalled = true; return { status: 'recording' }; } },
+  };
+  const client = fakeClient();
+  wireDiscordClient(client, { commands: recordCommands, appContext });
+
+  await client.emit(fakeRecordInteraction({ subcommand: 'start', voiceChannel: { id: 'vc1' }, calls }));
+
+  const edit = calls.find((c) => c.method === 'editReply');
+  assert.match(edit.payload.content, /link your account/i);
+  assert.equal(startCalled, false, 'an unlinked caller must not reach meetingSurface.start');
+});
+
+test('/record start proceeds for a LINKED caller in a voice channel', async () => {
+  const calls = [];
+  let startArgs = null;
+  const voiceChannel = { id: 'vc1' };
+  const appContext = {
+    directory: { getPersonByDiscordId: async () => ({ id: 'p1' }) },
+    meetingSurface: { start: (args) => { startArgs = args; return { status: 'recording' }; } },
+  };
+  const client = fakeClient();
+  wireDiscordClient(client, { commands: recordCommands, appContext });
+
+  await client.emit(fakeRecordInteraction({ subcommand: 'start', voiceChannel, calls }));
+
+  assert.ok(startArgs, 'a linked caller should reach meetingSurface.start');
+  assert.equal(startArgs.voiceChannel, voiceChannel);
+  const edit = calls.find((c) => c.method === 'editReply');
+  assert.match(edit.payload.content, /recording/i);
+});
+
+test('/record start fails closed (no start) when the directory is unavailable', async () => {
+  const calls = [];
+  let startCalled = false;
+  const appContext = {
+    directory: { getPersonByDiscordId: async () => { throw new DirectoryUnavailable('down'); } },
+    meetingSurface: { start: () => { startCalled = true; return { status: 'recording' }; } },
+  };
+  const client = fakeClient();
+  wireDiscordClient(client, { commands: recordCommands, appContext });
+
+  await client.emit(fakeRecordInteraction({ subcommand: 'start', voiceChannel: { id: 'vc1' }, calls }));
+
+  const edit = calls.find((c) => c.method === 'editReply');
+  assert.match(edit.payload.content, /unavailable/i);
+  assert.equal(startCalled, false);
+});
+
+test('/record stop is PUBLIC: an unlinked caller can still stop a runaway recording', async () => {
+  const calls = [];
+  let stopped = false;
+  const appContext = {
+    // A directory OUTAGE must not strand a live recording -- stop must not even
+    // depend on the lookup. (Throw to prove stop never calls resolvePrincipal.)
+    directory: { getPersonByDiscordId: async () => { throw new DirectoryUnavailable('down'); } },
+    meetingSurface: { stop: async () => { stopped = true; return { status: 'stopped' }; } },
+  };
+  const client = fakeClient();
+  wireDiscordClient(client, { commands: recordCommands, appContext });
+
+  await client.emit(fakeRecordInteraction({ subcommand: 'stop', calls }));
+
+  assert.equal(stopped, true, 'stop is public and must proceed regardless of link/directory state');
+});
+
+test('/record status is PUBLIC: works for an unlinked caller without a directory call', async () => {
+  const calls = [];
+  const appContext = {
+    directory: { getPersonByDiscordId: async () => { throw new DirectoryUnavailable('down'); } },
+    meetingSurface: { status: () => ({ status: 'not-recording' }) },
+  };
+  const client = fakeClient();
+  wireDiscordClient(client, { commands: recordCommands, appContext });
+
+  await client.emit(fakeRecordInteraction({ subcommand: 'status', calls }));
+
+  const edit = calls.find((c) => c.method === 'editReply');
+  assert.match(edit.payload.content, /no recording in progress/i);
+});
+
+// --- auto-stop when everyone leaves the recorded voice channel (debounced) ---
+
+// The head-count reads guild.voiceStates.cache (populated by GuildVoiceStates),
+// NOT channel.members (which needs the privileged GuildMembers intent). Model
+// exactly that: a channel with an id + a guild whose voiceStates.cache lists the
+// occupants of THIS channel as { id: userId, channelId, member }. `resolved:false`
+// simulates a member the bot couldn't resolve (no GuildMembers intent) -- the
+// exact case that made channel.members miscount and auto-stop never fire.
+const BOT_ID = 'bot-1';
+function fakeVoiceChannel(id, occupants) {
+  const cache = new Map();
+  for (const o of occupants) {
+    cache.set(o.userId, {
+      id: o.userId,
+      channelId: id,
+      member: o.resolved === false ? null : { user: { bot: !!o.bot } },
+    });
+  }
+  return { id, guild: { voiceStates: { cache } } };
+}
+const botOcc = { userId: BOT_ID, bot: true };
+const botOccUnresolved = { userId: BOT_ID, resolved: false }; // member not cached
+const humanOcc = (userId = 'h1') => ({ userId, bot: false });
+const activeSessionOf = (sessionId, channelId, occupants) =>
+  ({ sessionId, voiceChannel: fakeVoiceChannel(channelId, occupants) });
+
+// A controllable timer: setTimer captures the callback, fire() runs it.
+function fakeTimer() {
+  const state = { cb: null, cleared: 0 };
+  return {
+    setTimer: (fn) => { state.cb = fn; return 1; },
+    clearTimer: () => { state.cleared += 1; state.cb = null; },
+    fire: () => { const fn = state.cb; state.cb = null; if (fn) return fn(); },
+    get scheduled() { return state.cb !== null; },
+    get cleared() { return state.cleared; },
+  };
+}
+
+const makeAutoStop = (timer, meetingSurface) =>
+  createAutoStop({ meetingSurface, getBotId: () => BOT_ID, setTimer: timer.setTimer, clearTimer: timer.clearTimer });
+
+const leaveEvent = { channelId: 'vc1', guild: { id: 'g1' } };
+const nowInVc2 = { channelId: 'vc2', guild: { id: 'g1' } };
+const left = { channelId: null, guild: { id: 'g1' } };
+
+test('auto-stop: the recorder bot alone does NOT count as an occupant (even if its member is uncached)', async () => {
+  // Regression for the live bug: channel.members miscounted the bot without the
+  // GuildMembers intent, so the channel never looked empty. Counting voice states
+  // and excluding the bot by id fixes it -- even when the bot's member is null.
+  const timer = fakeTimer();
+  const meetingSurface = {
+    activeSession: () => activeSessionOf('s1', 'vc1', [botOccUnresolved]),
+    stop: async () => {},
+  };
+  makeAutoStop(timer, meetingSurface)(leaveEvent, left);
+  assert.equal(timer.scheduled, true, 'a channel with only the bot must read as empty and schedule a stop');
+});
+
+test('auto-stop: DEBOUNCES -- schedules on empty, stops only after the grace timer fires', async () => {
+  const timer = fakeTimer();
+  let stopped = null;
+  const meetingSurface = {
+    activeSession: () => activeSessionOf('s1', 'vc1', [botOcc]), // only the bot
+    stop: async (g) => { stopped = g; return { status: 'stopped' }; },
+  };
+  makeAutoStop(timer, meetingSurface)(leaveEvent, left);
+  assert.equal(timer.scheduled, true, 'stop must be SCHEDULED, not fired immediately');
+  assert.equal(stopped, null);
+
+  await timer.fire();
+  assert.equal(stopped, 'g1');
+});
+
+test('auto-stop: cancels the pending stop if a human returns before the timer fires', async () => {
+  const timer = fakeTimer();
+  let stopCalled = false;
+  let occupants = [botOcc]; // empty of humans
+  const meetingSurface = {
+    activeSession: () => activeSessionOf('s1', 'vc1', occupants),
+    stop: async () => { stopCalled = true; },
+  };
+  const onVSU = makeAutoStop(timer, meetingSurface);
+
+  onVSU(leaveEvent, left);
+  assert.equal(timer.scheduled, true);
+
+  occupants = [botOcc, humanOcc()]; // a human is back
+  onVSU(left, { channelId: 'vc1', guild: { id: 'g1' } });
+  assert.equal(timer.cleared, 1, 'a returning human must cancel the pending stop');
+  assert.equal(timer.scheduled, false);
+
+  await timer.fire(); // no-op: callback was cleared
+  assert.equal(stopCalled, false);
+});
+
+test('auto-stop: re-checks at fire time and does NOT stop if a human is back', async () => {
+  const timer = fakeTimer();
+  let stopCalled = false;
+  let occupants = [botOcc];
+  const meetingSurface = {
+    activeSession: () => activeSessionOf('s1', 'vc1', occupants),
+    stop: async () => { stopCalled = true; },
+  };
+  const onVSU = makeAutoStop(timer, meetingSurface);
+
+  onVSU(leaveEvent, left);
+  occupants = [botOcc, humanOcc()]; // human back, but no cancelling event arrived
+  await timer.fire();
+  assert.equal(stopCalled, false, 'the fire-time re-check must bail when humans are present');
+});
+
+test('auto-stop: a stale timer from an ENDED session never stops a LATER recording in the guild', async () => {
+  const timer = fakeTimer();
+  let session = activeSessionOf('A', 'vc1', [botOcc]); // A, empty of humans
+  const stops = [];
+  const meetingSurface = { activeSession: () => session, stop: async (g) => { stops.push(g); } };
+  const onVSU = makeAutoStop(timer, meetingSurface);
+
+  onVSU(leaveEvent, left);
+  assert.equal(timer.scheduled, true); // A's timer pending
+
+  // A ends, B starts (same guild, empty). B's empty event must REPLACE A's stale
+  // timer and schedule a fresh one bound to B.
+  session = activeSessionOf('B', 'vc1', [botOcc]);
+  onVSU(leaveEvent, left);
+  assert.equal(timer.cleared, 1, "B's empty event must clear A's stale timer");
+  assert.equal(timer.scheduled, true);
+
+  await timer.fire();
+  assert.deepEqual(stops, ['g1']);
+});
+
+test('auto-stop: covers the channel-MOVE case (member moves out, leaving it empty)', async () => {
+  const timer = fakeTimer();
+  const meetingSurface = {
+    activeSession: () => activeSessionOf('s1', 'vc1', [botOcc]),
+    stop: async () => {},
+  };
+  // Both channelIds non-null: the last human MOVED from vc1 (recorded) to vc2.
+  makeAutoStop(timer, meetingSurface)(leaveEvent, nowInVc2);
+  assert.equal(timer.scheduled, true);
+});
+
+test('auto-stop: does not schedule while humans remain', async () => {
+  const timer = fakeTimer();
+  const meetingSurface = {
+    activeSession: () => activeSessionOf('s1', 'vc1', [botOcc, humanOcc()]),
+    stop: async () => {},
+  };
+  makeAutoStop(timer, meetingSurface)(leaveEvent, left);
+  assert.equal(timer.scheduled, false);
+});
+
+test('auto-stop: no-op (and clears any pending) when nothing is being recorded', async () => {
+  const timer = fakeTimer();
+  const meetingSurface = { activeSession: () => null, stop: async () => {} };
+  makeAutoStop(timer, meetingSurface)(leaveEvent, left);
+  assert.equal(timer.scheduled, false);
+});
+
