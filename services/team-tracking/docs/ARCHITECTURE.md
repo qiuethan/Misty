@@ -193,7 +193,7 @@ Concrete, step-by-step walkthroughs — add an endpoint, add a storage-adapter m
 
 ## Non-goals
 
-Explicitly out of scope (see [archive/2026-06-30-DESIGN.md](archive/2026-06-30-DESIGN.md) for rationale):
+Explicitly out of scope:
 
 - No Discord/Google/GitHub/Notion sync jobs — connectors are separate processes that speak the HTTP API.
 - No permission-enforcement engine — downstream systems derive access from membership data.

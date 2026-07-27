@@ -129,6 +129,30 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
+  # No Postgres service container and no AWS credentials: `meeting` has no
+  # database, and its Transcribe/LLM clients are faked via
+  # `app.dependency_overrides`, so the suite runs offline.
+  #
+  # `ruff format --check` is deliberately NOT run here yet: several files under
+  # services/meeting are unformatted, so adding the step would land this job red.
+  # `ruff check` (lint) passes and is enforced. To enable it, run
+  # `uv run ruff format .` in services/meeting and add the step back.
+  meeting-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/meeting
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Run tests
+        run: uv run pytest
+      - name: Ruff check
+        run: uv run ruff check .
+
   documentation-system-test:
     runs-on: ubuntu-latest
     permissions:
@@ -215,3 +239,7 @@ jobs:
         run: docker build -f services/verification/Dockerfile -t verification:ci .
       - name: Smoke-test verification image (imports incl. contracts/ resolve at boot)
         run: docker run --rm verification:ci python -c "import src.api.app"
+      - name: Build meeting image
+        run: docker build -f services/meeting/Dockerfile -t meeting:ci .
+      - name: Smoke-test meeting image (imports incl. PyAV/ffmpeg resolve at boot)
+        run: docker run --rm meeting:ci python -c "import src.api.app"

@@ -29,10 +29,24 @@ Discord bot as a consumer:
 > **Meeting recording** spans two components (the `meeting` service + a Discord *voice surface* in the bot) and is the platform's one stateful service and its one non-neutral-command bot path. Its cross-cutting design — and *why* it breaks both conventions — is documented separately in **[MEETING-RECORDING.md](MEETING-RECORDING.md)**.
 
 The rest of this document details the team-tracking ↔ documentation-system
-ownership relationship (the one cross-service data flow today); `llm` and
-`verification` are independent services that share the same conventions below
-(scoped API-key auth, `contracts/` Protocol boundary, Alembic migrations where
-they own state — `llm` is stateless).
+relationship, the platform's main cross-service data flow. It has **two** legs:
+
+1. **Ownership validation** at ingest — resolving an owner id to a label (detailed below).
+2. **Visibility resolution** on reads — the catalog asks the directory for an
+   actor's active team ids to decide which docs that person may see.
+
+Both are plain authenticated HTTP calls through the same `DirectoryClient`
+Protocol, and both degrade rather than fail when the directory is down — see
+"degrade-on-directory-down" below and
+[documentation-system's ARCHITECTURE](../services/documentation-system/docs/ARCHITECTURE.md)
+for the visibility rule itself.
+
+The other services are independent and share the conventions below:
+`verification` owns its own database and migrations; `llm` is stateless with no
+database at all; `meeting` has no database either but *is* stateful in memory.
+`meeting` is also the one service that consumes another backend service —
+it calls `llm` for minutes generation, making `meeting → llm` the platform's
+only service-to-service dependency outside the catalog → directory pair.
 
 ## The core principle: a source of truth is API-only
 
@@ -60,7 +74,7 @@ Why enforce this:
 
 ## Cross-service data flow: cataloguing a doc
 
-The one place the two services touch today is **ownership validation**. When someone
+The first of the two legs above is **ownership validation**. When someone
 ingests a URL into the catalog and attributes it to a team or person, the catalog
 resolves that owner against the directory. Here's the path:
 
@@ -158,7 +172,30 @@ describes how it applies them concretely.
   turns over.
 - **Alembic migrations.** Schema is versioned as Alembic migrations applied with
   `alembic upgrade head`. The SQLAlchemy Core table definitions in
-  `src/storage/schema.py` are the schema source of truth.
+  `src/storage/schema.py` are the schema source of truth. This applies to the
+  three services that own a database (team-tracking **007**,
+  documentation-system **004**, verification **001**); `llm` and `meeting` have
+  no schema and therefore no `preDeployCommand`.
+- **Three auth storage models.** The convention is scoped, argon2-hashed keys
+  behind `platform_auth`'s `ApiKeyStore` protocol — but where they *live* varies
+  with how many consumers a service has:
+  - **team-tracking, documentation-system** — an `api_keys` table, minted by a
+    CLI that writes to it (`team-tracking-keys`, `doc-keys`). Revocation is a
+    row update.
+  - **`llm`, `meeting`** — no table. Keys are seeded at boot from a
+    `CONSUMER_KEYS` JSON array env var, so their "mint" CLIs only *print* a key
+    and its JSON entry. Adding or revoking one is a variable edit plus a
+    redeploy, and a malformed `CONSUMER_KEYS` fails the deploy at boot by design.
+  - **`verification`** — a `NullApiKeyStore`: no per-consumer keys exist, and
+    only the bootstrap `API_KEY` env var authenticates. It has exactly one
+    consumer (the bot), so issuing keys would be ceremony without benefit.
+
+  The protocol is what makes this vary cleanly — each service picks a store, and
+  no route code changes.
+- **Row-level visibility, where a domain needs it.** Scopes gate *endpoints*;
+  documentation-system adds a second layer gating *rows* (who may see which doc),
+  driven by an actor supplied via `X-On-Behalf-Of` rather than by the key alone.
+  No other service needs this today.
 
 ## Why the directory is built first
 

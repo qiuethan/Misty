@@ -143,7 +143,7 @@ team-tracking/
 ├── tests/                  Two-mode test suite (see Testing below)
 │
 ├── docs/
-│   ├── API.md              Consumer-facing endpoint reference (all 23 endpoints)
+│   ├── API.md              Consumer-facing endpoint reference (all 26 endpoints)
 │   ├── ARCHITECTURE.md     Contributor orientation: boundaries, adapters, auth, data model
 │   ├── CONTRIBUTING.md     Task walkthroughs: add an endpoint, adapter method, migration, tests
 │   └── DEPLOYMENT.md       Ops reference: security posture, key management CLI, audit log
@@ -154,7 +154,7 @@ team-tracking/
 ```
 
 **Seven tables:** `people`, `teams`, `role_kinds`, `team_memberships`, `api_keys`, `providers`, `person_identifiers`.
-**Six routers, 23 endpoints.** **Seven migrations (001–007);** the latest, 007, adds the membership temporal-overlap constraint.
+**Seven routers, 26 endpoints.** **Seven migrations (001–007);** the latest, 007, adds the membership temporal-overlap constraint.
 
 **Dependency direction:** `contracts/` imports nothing from `src/`. The API layer imports only from `contracts/` and `src/config`. The storage layer imports `contracts/` for types and defines its own schema. Nothing imports from `src/storage/` except `src/api/deps.py` (the single wiring point). This is the **Protocol boundary** — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -234,7 +234,7 @@ See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for task walkthroughs.
 
 ## Where to find things
 
-- [docs/API.md](docs/API.md) — consumer-facing endpoint reference (all 23 endpoints, scopes, errors, curl)
+- [docs/API.md](docs/API.md) — consumer-facing endpoint reference (all 26 endpoints, scopes, errors, curl)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — contributor orientation: Protocol boundary, adapters, temporal memberships, Level-2 auth, data model
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — task walkthroughs for adding endpoints, adapter methods, migrations
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — ops reference: security posture, key management CLI, audit log
@@ -243,7 +243,7 @@ Machine-readable OpenAPI schema: `GET /openapi.json`. Interactive Swagger UI: `G
 
 ## Status
 
-Seven tables (`people`, `teams`, `role_kinds`, `team_memberships`, `api_keys`, `providers`, `person_identifiers`), 23 endpoints across 6 routers, two storage adapters, migrations 001–007 (latest: 007, membership temporal-overlap constraint). Level-2 auth (DB-issued scoped argon2 keys + attested actor + audit log) is merged, as is the `person_identifiers`/providers identity-mapping feature.
+Seven tables (`people`, `teams`, `role_kinds`, `team_memberships`, `api_keys`, `providers`, `person_identifiers`), 26 endpoints across 7 routers, two storage adapters, migrations 001–007 (latest: 007, membership temporal-overlap constraint). Level-2 auth (DB-issued scoped argon2 keys + attested actor + audit log) is merged, as is the `person_identifiers`/providers identity-mapping feature.
 
 **Not implemented (by design):**
 

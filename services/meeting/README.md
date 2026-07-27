@@ -26,20 +26,20 @@ cp .env.example .env
 uv sync --extra dev
 
 # 3. Start the API server
-uv run uvicorn src.api.app:app --reload --port 8003
+uv run uvicorn src.api.app:app --reload --port 8004
 ```
 
 > The repo is a single [uv workspace](https://docs.astral.sh/uv/concepts/workspaces/) (root `pyproject.toml` with `[tool.uv.workspace] members = ["services/*", "packages/*"]`, one root `uv.lock`). meeting depends on the shared `platform-auth` package (`[tool.uv.sources] platform-auth = { workspace = true }`) but the commands above are unchanged — `uv sync` and `uv run pytest` work exactly as shown when run from this directory.
 
-The API is now at `http://localhost:8003`. Interactive Swagger UI is at `http://localhost:8003/docs`; the machine-readable schema is at `http://localhost:8003/openapi.json` (HTTP routes only — the WebSocket route isn't represented in OpenAPI).
+The API is now at `http://localhost:8004`. Interactive Swagger UI is at `http://localhost:8004/docs`; the machine-readable schema is at `http://localhost:8004/openapi.json` (HTTP routes only — the WebSocket route isn't represented in OpenAPI).
 
 The default dev bootstrap key is `dev-api-key-change-me` (set in `.env`, carries the `admin` wildcard scope). Pass it as `X-API-Key` on the HTTP endpoints, or `?key=` on the WebSocket.
 
-**Ports:** this service runs on **8003** (team-tracking uses 8000, documentation-system 8001, llm 8002) — chosen to avoid colliding when running the services locally.
+**Ports:** this service runs on **8004** (team-tracking 8000, documentation-system 8001, llm 8002, verification 8003) — chosen to avoid colliding when running the services locally. It has no database, so it claims no Postgres host port.
 
 ### Environment tiers (`MEETING_ENV`)
 
-`MEETING_ENV` declares which environment this instance represents: `local` (default), `staging`, or `production`. Outside `local`, `create_app()` calls `verify_production_secrets()` and **refuses to start** unless `API_KEY` is overridden from the dev default, `AWS_REGION` is set, and `LLM_BASE_URL` is set — a misconfigured deploy dies at boot, not on first request.
+`MEETING_ENV` declares which environment this instance represents: `local` (default), `staging`, or `production`. Outside `local`, `create_app()` calls `verify_production_secrets()` and **refuses to start** unless all four of `API_KEY` (overridden from the dev default), `AWS_REGION`, `LLM_BASE_URL`, and `LLM_API_KEY` are set to real values — the error names every one that isn't. A misconfigured deploy dies at boot, not on first request.
 
 ### Configuration
 
