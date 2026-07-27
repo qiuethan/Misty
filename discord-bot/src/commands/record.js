@@ -16,7 +16,7 @@ export default defineCommand({
   name: 'record',
   description: 'Record the current voice channel and post meeting minutes',
   auth: 'linked',
-  beta: true, // testing-guild only while the voice surface is validated
+  beta: false, // stable → registered globally (all prod servers)
   options: [],
   subcommands: [
     {

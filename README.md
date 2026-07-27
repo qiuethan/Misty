@@ -22,6 +22,7 @@ UTMIST is a student org with rotating leadership and mixed technical fluency. Ev
 - **`/team`** — look up, create, rename, add/remove members, and view rosters (subcommands: `create`, `list`, `rename`, `add`, `remove`, `roster`). Reads are public; writes are admin-only.
 - **`/my-teams`** — list your active memberships. Requires you to be linked.
 - **`/doc`** — catalog and browse links (subcommands: `add`, `list`, `show`, `remove`), backed by documentation-system. Reads are public; writes are admin-only. Team-owner field has slug autocomplete.
+- **`/record`** — record the voice channel you're in and get meeting minutes back (subcommands: `start`, `status`, `stop`). On `stop`, posts a `meeting-minutes.pdf` (summary, decisions, action items, transcript) plus `meeting-audio.mp3` into the channel; nothing is persisted server-side. Requires you to be linked.
 - **`/help`** — list the commands you can use, or show details for one. Public.
 
 There are currently no beta commands.
@@ -56,6 +57,7 @@ Both APIs speak OpenAPI. Point Swagger UI or codegen at them.
 | [`services/documentation-system/`](services/documentation-system/README.md) | Catalog of URLs (docs/sheets/repos/videos) with owners, tags, and best-effort content snapshots | **Deployed** (staging + prod). Consumed by the bot's `/doc` command group (`add`/`list`/`show`/`remove`), registered globally. |
 | [`services/llm/`](services/llm/README.md) | Stateless (no DB) internal `POST /chat` API over AWS Bedrock; requires the `chat` scope | **Deployed** (staging + prod). No database — a thin proxy over Bedrock. |
 | [`services/verification/`](services/verification/README.md) | Email verification: request a one-time code and confirm it, linking a subject (e.g. `discord:<id>`) to a verified email; requires the `verification:write` scope | **Deployed** (staging + prod). |
+| [`services/meeting/`](services/meeting/README.md) | Meeting recording: transcribes a Discord voice session (Amazon Transcribe) and returns LLM-generated minutes as a branded PDF; no DB, nothing persisted | **Deployed** (staging). Consumed by the bot's `/record` command group; requires the `meetings` scope. |
 | [`discord-bot/`](discord-bot/README.md) | Discord slash-command frontend + a browser-based "web playground" for iterating on commands without a Discord token | **Deployed** (staging + prod). All slash commands are stable and registered globally; 0 beta. |
 | Search / retrieval | Full-text + semantic search over the catalog's snapshots | Deferred (not built) |
 
