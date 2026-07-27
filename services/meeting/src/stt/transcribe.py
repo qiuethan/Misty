@@ -121,11 +121,14 @@ class _StreamingTranscription:
         """
         if self._closing or self._loop is None or self._queue is None:
             return
-        self._sent_bytes += len(pcm)
         try:
             self._loop.call_soon_threadsafe(self._queue.put_nowait, pcm)
         except RuntimeError:
             pass  # loop already closed; nothing to do
+        else:
+            # Only count audio that was actually queued, so _sent_bytes and
+            # _delivered_bytes stay comparable if an enqueue ever fails.
+            self._sent_bytes += len(pcm)
 
     def words(self) -> list[dict]:
         """Finalized words so far, on the speaker's buffer timeline. A read --

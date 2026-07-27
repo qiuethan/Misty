@@ -191,8 +191,9 @@ and skips them.
   time. `/record stop` (linked) — ends the recording and, within roughly
   30–60s, posts a `meeting-minutes.pdf` (summary, decisions, action items,
   full transcript) back into the text channel, @-mentioning whoever started the
-  recording. No audio or transcript is persisted — the service streams audio
-  straight to AWS and never writes it to disk.
+  recording. The meeting service persists nothing: it streams audio straight to
+  AWS and never writes audio or transcript to disk. The posted PDF does contain
+  the full transcript, and that lives in Discord like any other attachment.
 
 Every command is on the **stable** channel (`beta = false`), so they all register
 globally in every server the bot is in. There are currently no beta commands.

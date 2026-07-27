@@ -86,9 +86,9 @@ Every **protected** endpoint (HTTP and WS) requires `X-API-Key` + the `meetings`
 | POST | `/meetings/{id}/stop` | End the session: close the Transcribe streams, finalize transcript, generate minutes + PDF, tear the session down → `StopResponse`. |
 | WS | `/meetings/{id}/stream` | Live audio ingest + control channel (see below). |
 
-`{id}` (`session_id`) must match `^[A-Za-z0-9_-]{1,64}$` — it's used to build a filesystem path for temp audio. A `session_id` unknown to the in-memory registry (never started, already stopped, or the process restarted) returns **404** on `/transcript` and `/stop`.
+`{id}` (`session_id`) must match `^[A-Za-z0-9_-]{1,64}$`. (The service writes nothing to disk, so this is input hygiene rather than path safety — see `test_session_lifecycle_never_touches_the_filesystem`.) A `session_id` unknown to the in-memory registry (never started, already stopped, or the process restarted) returns **404** on `/transcript` and `/stop`.
 
-**`GET /meetings/{id}/transcript` → `TranscriptView`:** `{"segments": [{"speaker", "start_ms", "text"}, ...]}`. Re-runs transcription over each speaker's buffered-so-far audio, so successive polls can refine earlier text — this is a "periodic" view, not a diff/append stream.
+**`GET /meetings/{id}/transcript` → `TranscriptView`:** `{"segments": [{"speaker", "start_ms", "text"}, ...]}`. Reads whatever each speaker's live Transcribe stream has finalized so far. Polling is **free** — no AWS call, no audio re-sent — so it can be polled as often as you like. It is a cumulative view, not a diff/append stream.
 
 **`POST /meetings/{id}/stop` → `StopResponse`:** `{"transcript", "minutes": {"title", "summary", "decisions": [...], "action_items": [...]}, "pdf_b64"}`. `pdf_b64` is the base64-encoded minutes PDF. **No meeting audio is returned** — it exists only as transcription input and is never mixed or persisted.
 

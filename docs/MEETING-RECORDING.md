@@ -47,7 +47,7 @@ Discord voice  ──Opus──▶  bot recorder ──sendFrame──▶  meeti
 
 **Stop:** `POST /meetings/{id}/stop` closes each speaker's Transcribe stream (concurrently, so latency is one flush and not N), assembles the transcript, calls the `llm` service for minutes, renders the PDF, returns it base64-encoded, and discards the session.
 
-**Timeline correctness:** each forwarded frame carries `ts_ms` = milliseconds since the meeting started. AWS Transcribe reports word times relative to *each speaker's own* audio, so the service anchors every speaker's words by that speaker's first `ts_ms`. Without this, a person who joins the conversation late would sort to the *top* of the merged transcript. (This exact bug was caught in review — `ts_ms` must always be sent and honored.)
+**Timeline correctness:** each forwarded frame carries `ts_ms` = milliseconds since the meeting started. AWS Transcribe reports word times relative to *each speaker's own* stream, and a speaker's stream carries only the frames they actually spoke — silence is never sent. So the service records an **anchor** whenever a frame arrives later than the audio already streamed accounts for, and maps word times through the nearest preceding anchor. Anchoring on the first `ts_ms` alone is not enough: it fixes only the speaker's first word, leaving cross-speaker order wrong past the opening minute and collapsing each speaker into one segment (the gap rule never sees a gap). `ts_ms` must always be sent and honored.
 
 ## The wire contract (keep both sides in lock-step)
 
@@ -86,5 +86,4 @@ If `start` is ever silently downgraded to public, any guild member could drive l
 - **AWS session restarts:** Transcribe ends a session on its own (idle timeout, 4h cap). The wrapper reopens on the next audio and offsets the new session's word times by the audio already delivered — unit-tested against a fake, not yet observed against a real timeout.
 - **Speaker-timeline anchoring:** a speaker's stream carries only the frames they spoke, so word times are mapped onto meeting time via anchors recorded at each detected silence. The 200 ms tolerance is reasoned from Discord's ~20 ms cadence, not measured live.
 - **Meeting length backstop:** the normal end is `/record stop` or auto-stop-on-empty, with a **4h `max_meeting_ms` backstop** so a forgotten meeting can't run indefinitely. Set `MAX_MEETING_MS` to another value, or `None`, to change or disable it.
-- **Concurrency:** one AWS Transcribe stream per active speaker; watch the account's concurrent-stream limit.
 - **Not built yet:** the in-meeting `/ask` Q&A feature (only the `GET /transcript` hook it will use).
