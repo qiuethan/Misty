@@ -108,7 +108,8 @@ Live transcription needs AWS Transcribe credentials plus a reachable `llm`
 service; the test suite fakes both, so you only need those to exercise a real
 recording.
 
-**Discord bot — playground mode** (recommended dev loop, no Discord token):
+**Discord bot — playground mode** (recommended dev loop, no Discord token —
+but Docker must be running):
 
 ```bash
 cd discord-bot
@@ -118,9 +119,19 @@ npm run dev:web
 ```
 
 Open `http://127.0.0.1:3001`, paste `100000000000000000` into "Acting as", pick
-a command, run it. `Ctrl+C` tears the whole stack down. This one command boots
-its own scratch team-tracking + throwaway DB, so you do **not** need port 8000
-running for it.
+a command, run it. `Ctrl+C` tears the whole stack down.
+
+This one command boots its own scratch team-tracking + throwaway DB, so you do
+**not** need port 8000 running for it — but it is not free of infrastructure.
+It will:
+
+- run `docker compose up -d postgres` in `services/team-tracking`, i.e. bring up
+  **Postgres on 5433** and clone `team_tracking` into a scratch
+  `team_tracking_playground` database;
+- spawn its own team-tracking process on **port 8001**.
+
+> ⚠️ Port **8001** is also `documentation-system`'s API port. Stop the catalog
+> before running `npm run dev:web`, or the scratch instance fails to bind.
 
 Stuck, or new to this stack? Keep reading.
 
@@ -129,13 +140,17 @@ Stuck, or new to this stack? Keep reading.
 ## Prerequisites (new to this stack?)
 
 Install these once per machine. All five services are Python; the bot is Node.
-Only the three DB-backed services need Docker (for their local Postgres).
+Docker is needed by the three DB-backed services **and by the bot's playground**.
 
 - **git** — you have it if `git --version` works.
 - **Docker** ([Docker Desktop](https://www.docker.com/products/docker-desktop/)) —
   runs the local Postgres for the three DB-backed services.
   `docker compose up -d postgres` starts it; the data lives in a named volume
-  that survives reboots. Not needed at all for `llm` or `meeting`.
+  that survives reboots. Not needed for `llm` or `meeting`, but it **is** needed
+  for the bot's playground: `npm run dev:web` shells out to
+  `docker compose up -d postgres` inside `services/team-tracking` and clones a
+  scratch database from it, so Docker must be running even though you're only
+  touching Node code.
 - **Python 3.11+** and **[`uv`](https://github.com/astral-sh/uv)** — `uv` is the
   package manager and runner for every Python service. It creates the
   virtualenv, installs deps (`uv sync`), and runs commands inside it
@@ -152,6 +167,61 @@ Only the three DB-backed services need Docker (for their local Postgres).
 
 Sanity check: `git --version`, `docker --version`, `uv --version`, `node --version`
 should all print a version.
+
+---
+
+## Environment configuration
+
+Every service and the bot ship a committed `.env.example`. The setup is always
+the same — `cp .env.example .env` inside that directory — and `.env` is
+gitignored everywhere, so a filled-in file never gets committed.
+
+**The important thing to know: the Python services all boot with zero edits.**
+Their examples are pre-filled with working local defaults (`TT_ENV=local`,
+`API_KEY=dev-api-key-change-me`, a `DATABASE_URL` matching the service's own
+`docker-compose.yml`). Copy and run. The `*_ENV=local` tier is what makes that
+safe: outside `local`, each service calls `verify_production_secrets()` at boot
+and refuses to start while any secret is still a built-in default.
+
+What you must supply yourself, and only when you need that capability:
+
+| Variable(s) | Needed for | Where it comes from |
+|---|---|---|
+| `DISCORD_TOKEN`, `DISCORD_CLIENT_ID` | `npm start` — the real Discord surface | [Discord Developer Portal](https://discord.com/developers/applications). **Not needed for `npm run dev:web`.** |
+| `DIRECTORY_API_KEY` | the bot talking to team-tracking | Mint it — see below. Blank in the example on purpose. |
+| `AWS_REGION` + AWS credentials | `llm` actually calling Bedrock; `meeting` actually transcribing | Your AWS profile, or explicit `AWS_ACCESS_KEY_ID`/`SECRET`. Both services **boot and answer `/health` without them**; only the real calls fail. The test suites fake both. |
+| `RESEND_API_KEY` / `GMAIL_*` | `verification` sending real mail | Not needed locally — `EMAIL_BACKEND=fake` is the default and drops mail. |
+
+**The bot is the strict one.** `discord-bot/src/config.js` hard-fails at startup
+with `Missing required env vars: …` if any of these ten are unset:
+`DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DIRECTORY_BASE_URL`, `DIRECTORY_API_KEY`,
+`DOC_BASE_URL`, `DOC_API_KEY`, `LLM_BASE_URL`, `LLM_API_KEY`,
+`VERIFICATION_BASE_URL`, `VERIFICATION_API_KEY`. The example fills every one
+except `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, and `DIRECTORY_API_KEY` — those
+three are yours to provide. `MEETING_*` is genuinely optional: leave
+`MEETING_BASE_URL` blank and the bot boots fine with `/record` reporting
+"not configured".
+
+**Minting `DIRECTORY_API_KEY`** (against a running team-tracking on 8000):
+
+```bash
+uv --project services/team-tracking run team-tracking-keys issue \
+  --name discord-bot \
+  --scopes people:read people:write people:elevate \
+           identifiers:read identifiers:write \
+           teams:read teams:write memberships:read memberships:write \
+           role_kinds:read
+```
+
+That scope list is the one
+[`scripts/provision-directory-key.sh`](../scripts/provision-directory-key.sh)
+uses, and it's the authoritative set. A shorter key still lets the bot boot —
+it just 403s on `/team`, `/seed`, and `/my-teams` at runtime, which is a
+confusing way to discover the problem. Always pass `--project`; see the
+`src`-collision gotcha in [Troubleshooting](#troubleshooting) for why a bare
+`team-tracking-keys` can mint an unusable key. `llm` and `meeting` mint
+differently (they have no key table) — see
+[Run the platform, in order](#run-the-platform-in-order).
 
 ---
 
@@ -232,7 +302,9 @@ or catalog with real owner validation), bring them up in this order:
      `npm start`. Full steps, including the key scopes, are in the
      [discord-bot README → Complete startup](../discord-bot/README.md#complete-startup-from-cold).
    - **Discord bot, playground** — just `npm run dev:web`; it needs none of the
-     above (it runs its own scratch team-tracking on 8001).
+     above (it runs its own scratch team-tracking on 8001). It does still need
+     Docker, and it will occupy **8001** and **5433** — so stop
+     `documentation-system` first if it's running.
    - **`/link` / `/add-email` end-to-end** — also start `verification` (8003) and
      set `VERIFICATION_BASE_URL` / `VERIFICATION_API_KEY` in `discord-bot/.env`.
      With `EMAIL_BACKEND=fake` no mail is sent; read the code out of the
@@ -298,8 +370,10 @@ is the workflow around them.
    For the bot: `cd discord-bot && npm test`. If you touched the shared auth
    library, its own tests live alongside it: `cd packages/auth && uv run pytest`.
 
-   Lint before pushing too — CI runs `ruff` on every Python service except
-   documentation-system: `uv run ruff check . && uv run ruff format --check .`
+   Lint before pushing too: `uv run ruff check . && uv run ruff format --check .`
+   CI's coverage is uneven — `documentation-system` is gated by neither, and
+   `meeting` runs `ruff check` but not `ruff format --check` (see the note
+   below). Everywhere else, both are enforced.
 
 4. **Open a PR into `staging`.** Every PR runs
    [`ci.yml`](../.github/workflows/ci.yml): full test suites against real
@@ -315,7 +389,7 @@ is the workflow around them.
    > **`services/meeting` went to staging with no CI coverage at all** — no test
    > job, and `docker-build` skipped its image. Both are now wired up
    > (`meeting-test` + a meeting build/smoke step). `ruff format --check` is
-   > still deferred there: several files are unformatted, so enabling it would
+   > still deferred there: 8 files are unformatted, so enabling it would
    > fail the job outright. Run `uv run ruff format .` in `services/meeting`
    > before adding that step back.
 
@@ -340,6 +414,10 @@ is the workflow around them.
   the *other* service's database and Alembic reports a revision it doesn't
   recognize. Remap one of them (`-p 5435:5432`) and update that service's
   `DATABASE_URL` to match.
+- **`npm run dev:web` fails to bind 8001, or dies on `docker compose up`.** The
+  playground spawns its own team-tracking on **8001** — the same port
+  `documentation-system` uses — and requires Docker for the Postgres it clones
+  its scratch DB from. Stop the catalog, start Docker, retry.
 - **`relation does not exist` / empty tables.** You skipped
   `uv run alembic upgrade head`. Run it from the service directory after Postgres
   is up.

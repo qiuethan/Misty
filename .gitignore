@@ -8,3 +8,10 @@
 # Python
 __pycache__/
 *.py[cod]
+.venv/
+
+# Secrets — every service also has its own .gitignore rule, but keep a
+# repo-wide backstop so a new service can never leak a filled-in .env.
+.env
+.env.*
+!.env.example
