@@ -121,29 +121,35 @@ export function stripLeadingMention(content, botId) {
   return trimmed;
 }
 
-// Chronological array of fetched messages -> neutral /chat messages array.
-// bot -> assistant, everyone else -> user; strip a leading mention from user
-// turns; drop empties; collapse consecutive same-role turns (join with \n);
-// drop leading assistant turns. Bedrock Converse needs strict user/assistant
-// alternation starting with a user turn.
-export function threadHistoryToMessages(fetched, botId) {
-  const mapped = fetched
-    .map((m) => {
-      const role = m.author?.id === botId ? 'assistant' : 'user';
-      const raw = m.content ?? '';
-      const content = role === 'user' ? stripLeadingMention(raw, botId) : raw;
-      return { role, content: content.trim() };
-    })
-    .filter((m) => m.content.length > 0);
+// Nickname when the member is resolved, else the global/user name — the label a
+// human would recognize, and the fallback when the directory can't identify them.
+function authorLabel(message) {
+  return message.member?.displayName ?? message.author?.globalName ?? message.author?.username ?? '';
+}
 
-  const collapsed = [];
-  for (const m of mapped) {
-    const last = collapsed[collapsed.length - 1];
-    if (last && last.role === m.role) last.content += `\n${m.content}`;
-    else collapsed.push({ ...m });
-  }
-  while (collapsed.length && collapsed[0].role === 'assistant') collapsed.shift();
-  return collapsed;
+// Chronological array of fetched messages -> neutral turns carrying author
+// metadata. bot -> assistant, everyone else -> user; strip a leading mention
+// from user turns; drop empties; drop leading assistant turns.
+//
+// Same-role turns are deliberately NOT collapsed here: adjacent user messages
+// can come from different people, and each needs its own identity tag. The
+// service merges them once they're rendered.
+export function threadHistoryToTurns(fetched, botId) {
+  return fetched
+    .map((m) => {
+      const isBot = m.author?.id === botId;
+      const raw = m.content ?? '';
+      const text = (isBot ? raw : stripLeadingMention(raw, botId)).trim();
+      if (isBot) return { role: 'assistant', text };
+      return { role: 'user', text, authorId: m.author?.id, authorName: authorLabel(m) };
+    })
+    .filter((t) => t.text.length > 0)
+    .reduce((turns, t) => {
+      // Leading assistant turns carry no question to answer.
+      if (!turns.length && t.role === 'assistant') return turns;
+      turns.push(t);
+      return turns;
+    }, []);
 }
 
 export function chunkForDiscord(text) {
@@ -159,7 +165,7 @@ export function chunkForDiscord(text) {
   return chunks;
 }
 
-const HISTORY_LIMIT = 20;
+const HISTORY_LIMIT = 100; // Discord's messages.fetch maximum; no pagination
 const LINK_PROMPT = 'You need to link your account first. Run `/link` to identify yourself, then try again.';
 const VERIFY_UNAVAILABLE = "I can't verify you right now — the directory is unavailable. Please try again shortly.";
 const LLM_UNAVAILABLE = "I'm having trouble reaching the assistant right now — please try again shortly.";
@@ -189,7 +195,7 @@ export async function handleMention(message, { appContext, botId }) {
   }
 
   let target;
-  let messages;
+  let turns;
   try {
     if (message.channel.isThread()) {
       target = message.channel;
@@ -197,22 +203,27 @@ export async function handleMention(message, { appContext, botId }) {
       const ordered = [...fetched.values()].sort(
         (a, b) => (a.createdTimestamp ?? 0) - (b.createdTimestamp ?? 0),
       );
-      messages = threadHistoryToMessages(ordered, botId);
+      turns = threadHistoryToTurns(ordered, botId);
     } else {
       target = await message.startThread({ name: question.slice(0, 100) });
-      messages = [{ role: 'user', content: question }];
+      turns = [{
+        role: 'user',
+        text: question,
+        authorId: message.author?.id,
+        authorName: authorLabel(message),
+      }];
     }
   } catch (e) {
     console.error('thread create/fetch failed:', e.message);
     await message.reply(THREAD_UNAVAILABLE).catch(() => {});
     return;
   }
-  if (!messages.length) return;
+  if (!turns.length) return;
 
   await target.sendTyping().catch(() => {});
   let content;
   try {
-    ({ content } = await appContext.helperService.answer({ messages, principal }));
+    ({ content } = await appContext.helperService.answer({ turns, principal }));
   } catch (err) {
     console.error('helper answer failed:', err.message);
     await target.send(LLM_UNAVAILABLE).catch(() => {});
