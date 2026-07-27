@@ -598,7 +598,14 @@ def test_aclose_returns_even_if_the_sentinel_enqueue_raises():
 
         stream._queue = _ExplodingQueue()
 
-        # Must return rather than hang; words finalized before the break survive.
-        await asyncio.wait_for(stream.aclose(), 5)
+        # Must return rather than hang -- AND actually keep what was finalized
+        # before the break, which is the claim that matters to a reader.
+        client.streams[0].output_stream.push(_final_event())
+        await asyncio.sleep(0)
+        words = await asyncio.wait_for(stream.aclose(), 5)
+        assert words == [
+            {"text": "hello", "start_ms": 100},
+            {"text": "world", "start_ms": 512},
+        ]
 
     asyncio.run(scenario())
