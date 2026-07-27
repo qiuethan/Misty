@@ -186,17 +186,21 @@ and skips them.
 - `/my-teams` (linked) — list your active memberships.
 - `/doc <add|list|show|remove>` (linked; `remove` is admin) — catalog and look up UTMIST documents and links.
 
-- `/record start` (linked, **beta**) — joins your current voice channel and starts
-  recording the meeting. `/record status` (linked, beta) — shows elapsed recording
-  time. `/record stop` (linked, beta) — ends the recording and, within roughly
+- `/record start` (linked) — joins your current voice channel and starts
+  recording the meeting. `/record status` (linked) — shows elapsed recording
+  time. `/record stop` (linked) — ends the recording and, within roughly
   30–60s, posts a `meeting-minutes.pdf` (summary, decisions, action items,
   full transcript) and `meeting-audio.mp3` back into the text channel. No audio
   or transcript is persisted — temp files are cleaned up after posting.
 
-`/record` is currently on the **beta** channel, so it's only registered in the
-testing guild (`DISCORD_GUILD_ID`); it is not yet available in production servers.
+Every command is on the **stable** channel (`beta = false`), so they all register
+globally in every server the bot is in. There are currently no beta commands.
 
-All other commands are on the **stable** channel (`beta = false`), so they register globally in every server the bot is in.
+> `/record` requires the `meeting` service to be deployed in the target
+> environment, with `MEETING_BASE_URL` + `MEETING_API_KEY` set on the bot. It was
+> promoted from beta in the staging → main release; provision `meeting` in an
+> environment **before** registering commands there, or `/record` will be visible
+> and fail.
 
 ### Meeting recording (`/record`) infra
 
