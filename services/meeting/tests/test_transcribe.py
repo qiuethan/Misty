@@ -530,3 +530,82 @@ def test_aclose_gives_up_on_a_stream_that_never_closes():
         ]
 
     asyncio.run(scenario())
+
+
+def test_audio_sent_just_before_close_is_not_jumped_by_the_sentinel():
+    """`send()` hands audio to the loop via `call_soon_threadsafe`, so the
+    enqueue is DEFERRED. If `aclose()` enqueues its sentinel directly it
+    overtakes that pending audio: the pump ends the stream, and the audio then
+    lands in a queue nobody reads.
+
+    In production this is the end of every meeting -- the WS ingest worker
+    thread delivers the last frames and `POST /stop` arrives right behind them
+    -- so the symptom is a transcript that cuts off before the last thing
+    anyone said."""
+    import threading
+
+    async def scenario():
+        client = _LiveClient()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
+        stream.send(b"early" * 128)
+        await drain(stream)
+
+        # Final frames arrive from the ingest worker thread...
+        handed_off = threading.Event()
+
+        def worker():
+            stream.send(b"LAST1" * 128)
+            stream.send(b"LAST2" * 128)
+            handed_off.set()
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        handed_off.wait(5)
+        thread.join(5)
+
+        # ...and /stop lands immediately behind them.
+        await stream.aclose()
+
+        delivered = [bytes(c)[:5] for st in client.streams for c in st.input_stream.sent_chunks]
+        assert b"LAST1" in delivered and b"LAST2" in delivered, (
+            f"the end of the meeting was dropped; AWS only got {delivered}"
+        )
+
+    asyncio.run(scenario())
+
+
+def test_aclose_returns_even_if_the_sentinel_enqueue_raises():
+    """`aclose()` waits on a future that the sentinel callback resolves. If that
+    callback raises, the loop swallows the exception and the future is never
+    resolved -- so `/stop` waits forever, wedging the whole meeting finalize
+    (it runs inside `MeetingSession.stop`'s gather, which has no timeout of its
+    own). Resolving in a `finally` keeps a broken enqueue recoverable."""
+
+    async def scenario():
+        client = _LiveClient()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
+        stream.send(b"\x00" * 640)
+        await drain(stream)
+
+        class _ExplodingQueue:
+            def put_nowait(self, item):
+                raise RuntimeError("queue is broken")
+
+            def empty(self):
+                return True
+
+        stream._queue = _ExplodingQueue()
+
+        # Must return rather than hang -- AND actually keep what was finalized
+        # before the break, which is the claim that matters to a reader.
+        client.streams[0].output_stream.push(_final_event())
+        await asyncio.sleep(0)
+        words = await asyncio.wait_for(stream.aclose(), 5)
+        assert words == [
+            {"text": "hello", "start_ms": 100},
+            {"text": "world", "start_ms": 512},
+        ]
+
+    asyncio.run(scenario())
