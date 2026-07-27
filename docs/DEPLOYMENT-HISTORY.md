@@ -7,17 +7,30 @@ Why the UTMIST ops platform is deployed the way it is, and the non-obvious lesso
 ## The shape
 
 ```
-                                Railway staging environment           Railway production environment
-GitHub                          ├── team-tracking service              ├── team-tracking service
-├── staging branch  ──deploys──▶├── documentation-system service       ├── documentation-system service
-└── main branch     ──deploys──▶└── discord-bot service                └── discord-bot service
-                                        │                                      │
-                                        ▼                                      ▼
-                                  Neon: team-tracking + docs-system      Neon: team-tracking + docs-system
-                                  projects, `staging` branch of each     projects, `main` branch of each
+                                Railway staging environment        Railway production environment
+GitHub                          ├── team-tracking                   ├── team-tracking
+├── staging branch  ──deploys──▶├── documentation-system            ├── documentation-system
+└── main branch     ──deploys──▶├── verification                    ├── verification
+                                ├── llm          (no DB)            ├── llm          (no DB)
+                                ├── meeting      (no DB, stateful)  └── discord-bot
+                                └── discord-bot
+                                        │                                   │
+                                        ▼                                   ▼
+                                  Neon: team-tracking, docs-system,   Neon: same three projects,
+                                  verification — `staging` branch     `main` branch of each
+                                  of each
 ```
 
-Two environments (staging, production). Three shared services (each is one Railway entity; variable *values* differ per environment). Two Neon projects (one per API), each with two branches (one per environment). One repo, two long-lived branches, feature → staging → main.
+Two environments (staging, production). Six shared services (each is one Railway
+entity; variable *values* differ per environment). Three Neon projects — one per
+DB-owning service — each with two branches (one per environment). `llm` and
+`meeting` own no database. One repo, two long-lived branches, feature → staging →
+main.
+
+**`meeting` is staging-only for now.** It is the newest service and has not been
+promoted to production; `/record` is registered globally but answers "not
+configured" in production until `meeting` is provisioned there and
+`MEETING_BASE_URL` is set on the production bot.
 
 ---
 
@@ -37,7 +50,29 @@ Each service owns its DB. team-tracking's DB never contains a doc catalog entry;
 
 ### Shared services with per-environment variables
 
-Three services, each existing once at the Railway project level and exposed in *both* environments with different variable values. This is Railway's idiomatic pattern: adding a variable later is one dashboard change, not two. Cross-service references (`${{team-tracking.RAILWAY_PRIVATE_DOMAIN}}`) resolve to the right environment automatically.
+Each service exists once at the Railway project level and is exposed in *both* environments with different variable values. This is Railway's idiomatic pattern: adding a variable later is one dashboard change, not two. Cross-service references (`${{team-tracking.RAILWAY_PRIVATE_DOMAIN}}`) resolve to the right environment automatically.
+
+### Two services deliberately have no database
+
+`llm` is a thin stateless proxy over Bedrock; `meeting` holds only ephemeral
+in-memory sessions. Neither owns a domain worth persisting, so neither got a
+Neon project, an `api_keys` table, or Alembic. Their API keys are seeded from a
+`CONSUMER_KEYS` JSON env var parsed at boot.
+
+The trade: **key rotation is a redeploy**, not a CLI call, and there is no
+revoke command — you drop the entry and redeploy. That's acceptable for two
+services with exactly one internal consumer each, and it avoids provisioning a
+database purely to store two rows.
+
+### `meeting` is the one stateful service
+
+Everything else is stateless and scales freely. `meeting` keeps each live
+meeting's session in process memory, so it **must run as a single replica**
+unless sticky routing on `session_id` is added — a given meeting's WebSocket,
+`/transcript` polls, and `/stop` must all reach the same process. This was a
+considered trade (live transcription needs *somewhere* to hold a rolling
+transcript, and the bot is deliberately processing-free), not an oversight. See
+[`MEETING-RECORDING.md`](MEETING-RECORDING.md).
 
 ### Branching model: feature → staging → main
 
@@ -57,23 +92,48 @@ Scopes:
 - **discord-bot:** `people:read people:write people:elevate identifiers:read identifiers:write teams:read teams:write memberships:read memberships:write role_kinds:read` (needs identity + membership management; `people:elevate` lets `/seed` promote people to `admin`/`superuser`)
 - **documentation-system:** `people:read teams:read` (only needs to look up an owner's label)
 
+The DB-free services follow the same *principle* with a different mechanism —
+scoped, per-consumer, argon2-hashed keys, just seeded from `CONSUMER_KEYS`
+rather than a table, and so **not** covered by `provision-directory-key.sh`:
+- **`llm`** issues a `chat`-scoped key to `meeting` (its only consumer today).
+- **`meeting`** issues a `meetings`-scoped key to `discord-bot`.
+
+Minting them is a manual per-environment step — see the runbook's
+[step 4b](RAILWAY-DEPLOYMENT.md).
+
 ### CI on every PR to `staging` or `main`
 
-`.github/workflows/ci.yml` runs **8 jobs**:
+`.github/workflows/ci.yml` runs **9 jobs**:
 - **`python-test`** — team-tracking, Postgres 16 service container, applies migrations, runs the full pytest suite
 - **`python-lint`** — team-tracking ruff check + format
 - **`auth-lib-test`** — the shared `packages/auth` (`platform_auth`) pytest suite + ruff check
 - **`verification-test`** — services/verification, Postgres 16 service container, `alembic upgrade head`, then `pytest` + ruff check/format
 - **`llm-test`** — services/llm pytest suite + ruff check/format
+- **`meeting-test`** — services/meeting pytest suite + ruff check. No Postgres container and no AWS credentials: the service has no database, and its Transcribe/LLM clients are faked via `app.dependency_overrides`, so the suite runs fully offline. `ruff format --check` is **deferred** here (several files are unformatted; adding the step would land the job red)
 - **`documentation-system-test`** — Postgres 16 service container, runs `alembic upgrade head`, then `pytest` with `RUN_PG_TESTS=1` (does not yet run ruff — deferred)
 - **`node-test`** — the bot's `node --test` suite
-- **`docker-build`** — builds *and boot-smoke-tests* the service images (`python -c "import src.api.app"` for the APIs, `node --check src/index.js` for the bot)
+- **`docker-build`** — builds *and boot-smoke-tests* every service image (`python -c "import src.api.app"` for the five APIs, `node --check src/index.js` for the bot)
 
 Only **four** of these are **required status checks** in branch protection —
-`python-test`, `python-lint`, `node-test`, `docker-build`. The other four
-(`auth-lib-test`, `verification-test`, `llm-test`, `documentation-system-test`)
-run on every PR but aren't yet gating merges. Plus `main-source-guard` on PRs to
-`main`.
+`python-test`, `python-lint`, `node-test`, `docker-build`. The other five
+(`auth-lib-test`, `verification-test`, `llm-test`, `meeting-test`,
+`documentation-system-test`) run on every PR but aren't yet gating merges. Plus
+`main-source-guard` on PRs to `main`.
+
+> `meeting-test` and the meeting `docker-build` steps were added late — the
+> service shipped to staging with **no CI coverage at all** for a couple of
+> weeks. If you add a service, add its CI job in the same PR.
+
+Three further workflows fire on PRs but gate nothing:
+- **`pr-zone-check`** — warns (non-blocking) when a PR spans more than one
+  CODEOWNERS zone. Flip its trailing `exit 0` to `exit 1` to enforce.
+- **`discord-pr-notify`** — posts to Discord when a PR needs attention; the
+  target channel is a repo secret (`DISCORD_STAGING_WEBHOOK` /
+  `DISCORD_PROD_WEBHOOK`), so changing it needs no code change. Unset secret =
+  no-op.
+- **`blocked-ready-automation`** — keeps `blocked`/`ready` issue labels in sync
+  from `Blocked by: #N` lines in issue bodies, and drops `ready` when an issue
+  is assigned.
 
 ---
 
@@ -111,6 +171,51 @@ Set `PORT=8000` (or whatever you like) as an **explicit** Railway variable on an
 
 ## Release log
 
+### 2026-07-26 — meeting recording v2 (staging)
+
+The `/record` feature landed on `staging` as a **new fifth service** plus a
+dedicated voice surface in the bot. This is the largest structural change since
+the platform was first deployed.
+
+- **New service `services/meeting`.** Stateful HTTP + WebSocket service: ingests
+  live per-speaker Discord Opus over one WS per meeting, decodes in-process via
+  PyAV, transcribes with Amazon Transcribe streaming, summarizes via the `llm`
+  service, and returns minutes as a branded PDF. No database — keys come from
+  `CONSUMER_KEYS`, and there is no Alembic directory.
+- **New bot surface.** `/record start|status|stop` bypasses the neutral
+  command router entirely and drives a dedicated adapter path, because a
+  long-lived stateful recording that posts attachments doesn't fit the
+  request/response reply contract. It re-runs the router's authorization check
+  itself so the two can't drift. See [`MEETING-RECORDING.md`](MEETING-RECORDING.md).
+- **Auto-stop.** Recording ends automatically once the voice channel empties
+  (debounced, re-checked at fire time, timers bound to `sessionId` so a stale
+  timer can't kill a later recording), with a **4h `max_meeting_ms` backstop**
+  so a forgotten meeting can't grow memory without bound. Head-count is read
+  from `voiceStates`, not `channel.members` — the latter needs the privileged
+  `GuildMembers` intent and silently miscounted, which made auto-stop never fire
+  in an early version.
+- **`@discordjs/voice` 0.18 → 0.19.2**, required for Discord's now-mandatory
+  DAVE voice E2EE.
+- **`/record` promoted beta → stable** (#131), so it registers globally.
+- **No migrations.** `meeting` owns no schema; nothing to apply.
+
+**Follow-up, same release train (#136).** Per-speaker Transcribe streams were
+made **persistent**: audio is pushed in as it arrives and never replayed, so a
+second of speech is billed once and polling `GET /transcript` is free. The
+earlier model re-transcribed each speaker's whole buffer on every poll, making
+AWS cost grow with the *square* of meeting length. The same change **dropped
+audio output entirely** — no MP3 mix, no `audio_b64`, no `ffmpeg` binary in the
+image, and no disk writes at any point. Only the minutes PDF is returned.
+
+**Not in production.** `meeting` is provisioned on staging only. `/record` is
+globally registered, so it is *visible* in production but answers "not
+configured" there until the service is deployed and `MEETING_BASE_URL` is set on
+the production bot.
+
+**Keys:** two new manually-minted consumer keys per environment — `llm` issues a
+`chat`-scoped key to `meeting`, and `meeting` issues a `meetings`-scoped key to
+`discord-bot`. These are *not* handled by `provision-directory-key.sh`.
+
 ### 2026-07-14 — security-review remediation (staging)
 
 The remediation from the 2026-07-13 security review merged to `staging`. In one release:
@@ -144,10 +249,17 @@ Railway's `preDeployCommand` (`alembic upgrade head`).
 
 ## Current state
 
-- Both environments fully deployed and healthy.
-- APIs are **private-only** on Railway (no public domains). Only in-project services (the bot, docs-system) reach them, over Railway's internal network. Add a public domain later if an external caller ever needs one — both APIs already have API-key auth.
-- **Discord commands.** All stable commands (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`, `/doc`, plus the email-verification set `/add-email`, `/verify-email`, `/verify-code`, and `/help`) are registered globally on the production bot; **0 beta commands** remain guild-scoped (every command in `discord-bot/src/commands/index.js` is `beta: false`). To ship a future beta command, add it with `beta: true`, validate it in the staging test guild, then flip `beta: false` in its module + re-run `registerCommands` to promote it globally.
-- **Migrations run automatically** as Railway's `preDeployCommand` on the two API services — `alembic upgrade head` against the environment's Neon branch before every deploy. Idempotent.
+- Both environments deployed and healthy, with one gap: **`meeting` is staging-only** (see the 2026-07-26 release note).
+- APIs are **private-only** on Railway (no public domains). Only in-project services reach them, over Railway's internal network. Add a public domain later if an external caller ever needs one — every service already has API-key auth.
+- **Discord commands.** All stable commands (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`, `/doc`, `/record`, plus the email-verification set `/add-email`, `/verify-email`, `/verify-code`, and `/help`) are registered globally on the production bot; **0 beta commands** remain guild-scoped (every command in `discord-bot/src/commands/index.js` is `beta: false`). To ship a future beta command, add it with `beta: true`, validate it in the staging test guild, then flip `beta: false` in its module + re-run `registerCommands` to promote it globally.
+- **Migrations run automatically** as Railway's `preDeployCommand` on the three DB-backed services (team-tracking, documentation-system, verification) — `alembic upgrade head` against the environment's Neon branch before every deploy. Idempotent. `llm` and `meeting` have no `preDeployCommand` because they own no schema.
+- **Migration counts:** team-tracking **007**, documentation-system **004**, verification **001**.
+
+### Known gaps
+
+- **`/record` is visible but non-functional in production** until `meeting` is provisioned there. Deliberate (the command degrades gracefully rather than erroring), but it *is* user-visible.
+- **`documentation-system` and `verification` dev Postgres both bind host 5434**, so they can't run locally at the same time as configured. Affects local dev only, not deployments — each has its own Neon project in Railway.
+- **`ruff format` is not enforced** for `documentation-system` or `meeting`; both have unformatted files. Lint (`ruff check`) *is* enforced for meeting.
 
 ---
 

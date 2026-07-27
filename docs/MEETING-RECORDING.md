@@ -87,3 +87,4 @@ If `start` is ever silently downgraded to public, any guild member could drive l
 - **Speaker-timeline anchoring:** a speaker's stream carries only the frames they spoke, so word times are mapped onto meeting time via anchors recorded at each detected silence. The 200 ms tolerance is reasoned from Discord's ~20 ms cadence, not measured live.
 - **Meeting length backstop:** the normal end is `/record stop` or auto-stop-on-empty, with a **4h `max_meeting_ms` backstop** so a forgotten meeting can't run indefinitely. Set `MAX_MEETING_MS` to another value, or `None`, to change or disable it.
 - **Not built yet:** the in-meeting `/ask` Q&A feature (only the `GET /transcript` hook it will use).
+
