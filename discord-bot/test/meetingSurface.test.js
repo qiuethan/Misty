@@ -14,6 +14,7 @@ function makeFakes({ stopImpl, posterImpl } = {}) {
   const openStreamOpts = [];
 
   const stream = {
+    endAudio: () => { callOrder.push('stream.endAudio'); },
     close: (...args) => {
       callOrder.push('stream.close');
       closeCalls.push(args);
@@ -139,7 +140,7 @@ test('stop calls recorder.stop, stream.close, meetingClient.stop, then poster wi
   // before stream.close() -- closing the WS first races the session into
   // being discarded server-side (WS-disconnect-without-prior-/stop => discard,
   // no finalize), which would lose the minutes/PDF/audio.
-  assert.deepEqual(fakes.callOrder, ['recorder.stop', 'client.stop', 'stream.close']);
+  assert.deepEqual(fakes.callOrder, ['recorder.stop', 'stream.endAudio', 'client.stop', 'stream.close']);
 });
 
 test('stop with no active session returns not-recording', async () => {
@@ -299,4 +300,23 @@ test('activeSession returns {sessionId, voiceChannel} while active and null othe
 
   await surface.stop('g1');
   assert.equal(surface.activeSession('g1'), null);
+});
+
+test('stop signals end-of-audio after the recorder stops and before /stop', async () => {
+  const fakes = makeFakes();
+  const surface = createMeetingSurface({ ...fakes, genId: () => 'sess-1' });
+  surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
+
+  await surface.stop('g1');
+
+  // Order is the whole point. The recorder must stop first (no more frames),
+  // then the end-of-audio signal goes down the WS behind all the audio, and
+  // only then does /stop run -- which waits for that signal before finalizing.
+  // Any other order lets /stop cut the meeting off mid-tail.
+  assert.deepEqual(fakes.callOrder, [
+    'recorder.stop',
+    'stream.endAudio',
+    'client.stop',
+    'stream.close',
+  ]);
 });

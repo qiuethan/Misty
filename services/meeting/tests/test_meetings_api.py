@@ -22,6 +22,7 @@ class FakeSession:
         self.discard_called = False
         self._segments = [Segment(speaker="alice", start_ms=0, text="hello")]
         self.raise_on_feed_for: set[str] = set()
+        self.audio_complete = False
 
     def feed(self, speaker_id, display_name, opus_payload, ts_ms):
         if speaker_id in self.raise_on_feed_for:
@@ -38,6 +39,9 @@ class FakeSession:
             minutes=Minutes(summary="s", decisions=[], action_items=[]),
             pdf_b64="ZmFrZQ==",
         )
+
+    def mark_audio_complete(self):
+        self.audio_complete = True
 
     def discard(self):
         self.discard_called = True
@@ -242,3 +246,22 @@ def test_ws_stream_decode_error_drops_frame_but_keeps_session_alive(client, regi
     # The connection stayed alive through the bad frame and tore down normally
     # via the disconnect path (not an unhandled-exception 1011).
     assert session.discard_called is True
+
+
+def test_ws_end_of_audio_control_frame_marks_the_session(client, registry, consumer_key):
+    """The barrier POST /stop waits on. Because the socket delivers in order,
+    this frame arriving proves every audio frame before it has been fed -- so it
+    must be routed to the session, and must not be mistaken for a speaker
+    registration."""
+    with client.websocket_connect(
+        f"/meetings/ws-eoa/stream?key={consumer_key}&guild_id=g1"
+    ) as ws:
+        ws.send_text('{"speaker_id": "alice-id", "display_name": "Alice"}')
+        ws.send_bytes(_frame("alice-id", 0, b"opus-frame-1"))
+        ws.send_text('{"end_of_audio": true}')
+
+    session = registry.sessions["ws-eoa"]
+    assert session.audio_complete is True
+    # The audio that preceded it still landed, and the signal itself is not a
+    # speaker.
+    assert session.feed_calls == [("alice-id", "Alice", b"opus-frame-1", 0)]

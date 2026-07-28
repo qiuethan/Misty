@@ -95,6 +95,8 @@ def _make_deps(streams_by_speaker, audio=None, now=None):
         "make_transcription_stream": make_transcription_stream,
         "audio": audio or FakeAudio(),
         "report_builder": _fake_report_builder,
+        # Tests that don't exercise the barrier shouldn't pay its timeout.
+        "audio_drain_timeout_s": 0.05,
         "now": now or (lambda: datetime(2026, 7, 25, 18, 0, tzinfo=timezone.utc)),
     }
 
@@ -798,3 +800,62 @@ def test_a_natural_pause_still_starts_a_new_segment():
     segments = words_to_segments("alice", words)
 
     assert [(s.start_ms, s.text) for s in segments] == [(0, "hello there"), (9000, "later")]
+
+
+# --- end-of-audio barrier ----------------------------------------------------
+
+
+def test_stop_waits_for_end_of_audio_before_finalizing():
+    """The WS ingest loop and the POST /stop handler are independent tasks, so
+    /stop can begin while the last frames are still being read off the socket.
+    Those frames were then refused and the transcript lost its tail.
+
+    The bot signals end-of-audio on the WS after it stops recording. Because the
+    socket delivers in order, seeing that signal means every prior audio frame
+    has already been fed -- so stop() must wait for it before snapshotting."""
+    stream = FakeTranscriptionStream([{"text": "last words", "start_ms": 0}])
+    deps = _make_deps([stream])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-barrier", "guild-1")
+
+    async def scenario():
+        stop_task = asyncio.ensure_future(session.stop())
+        await asyncio.sleep(0)  # let stop() start and reach the barrier
+
+        # A tail frame still coming off the socket must still be accepted.
+        session.feed("alice-id", "alice", _pcm(20), ts_ms=0)
+        session.mark_audio_complete()
+        return await stop_task
+
+    result = asyncio.run(scenario())
+
+    assert stream.sent, "the tail frame was refused; stop() did not wait"
+    assert "last words" in result.transcript
+
+
+def test_stop_does_not_hang_when_end_of_audio_never_arrives():
+    """An older bot, a crash, or a dropped socket means the signal never comes.
+    Finalize must proceed on a bounded wait rather than hanging /stop."""
+    deps = _make_deps([])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-nosignal", "guild-1")
+
+    result = asyncio.run(asyncio.wait_for(session.stop(), 5))
+
+    assert result.transcript == ""
+
+
+def test_feed_is_still_refused_after_the_audio_barrier_passes():
+    """Once end-of-audio is signalled and finalize is under way, a late frame
+    has nowhere to go and must not be appended to an already-closed stream."""
+    stream = FakeTranscriptionStream([])
+    deps = _make_deps([stream])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-after", "guild-1")
+    session.mark_audio_complete()
+
+    asyncio.run(session.stop())
+    before = len(stream.sent)
+    session.feed("bob-id", "bob", _pcm(20), ts_ms=0)
+
+    assert len(stream.sent) == before

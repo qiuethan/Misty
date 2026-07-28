@@ -43,6 +43,12 @@ _SEGMENT_GAP_MS = 1500
 # displaced -- at 10s, an interjection can never appear more than ~10s late.
 _MAX_SEGMENT_MS = 10_000
 
+# How long stop() waits for the bot's end-of-audio signal before finalizing
+# anyway. Covers an older bot that never sends it, a crashed bot, or a dropped
+# socket -- none of which may hang /stop.
+AUDIO_DRAIN_TIMEOUT_S = 5.0
+
+
 class SessionAlreadyExistsError(ValueError):
     """Raised by ``SessionRegistry.create`` when the session_id is already active."""
 
@@ -257,6 +263,13 @@ class MeetingSession:
         # a buffer that has already been transcribed -- accepted, then silently
         # dropped from the transcript. Refuse it outright instead.
         self._stopping = False
+        # Set when the bot signals it has sent every audio frame. The WS ingest
+        # loop and the POST /stop handler are independent tasks, so without this
+        # /stop could finalize while the last frames were still being read off
+        # the socket -- and _stopping would then refuse them, cutting the tail
+        # off the transcript. The socket delivers in order, so the signal
+        # arriving means all prior audio has already been fed.
+        self._audio_complete = asyncio.Event()
         self._cap_hit_logged = False
 
     def feed(self, speaker_id: str, display_name: str, opus_frame_bytes: bytes, ts_ms: int) -> None:
@@ -342,9 +355,36 @@ class MeetingSession:
             "participants": participants,
         }
 
+    def mark_audio_complete(self) -> None:
+        """Called by the WS ingest loop when the bot signals end-of-audio.
+
+        Safe to call more than once, and before stop() -- the flag is what
+        matters, not the ordering.
+        """
+        self._audio_complete.set()
+
+    async def _await_audio_complete(self) -> None:
+        """Block until the tail of the meeting has been fed, or give up."""
+        if self._audio_complete.is_set():
+            return
+        timeout = self._deps.get("audio_drain_timeout_s", AUDIO_DRAIN_TIMEOUT_S)
+        try:
+            await asyncio.wait_for(self._audio_complete.wait(), timeout)
+        except asyncio.TimeoutError:
+            _logger.warning(
+                "session %s: no end-of-audio signal after %ss; finalizing anyway "
+                "(the end of the transcript may be short)",
+                self.session_id,
+                timeout,
+            )
+
     async def stop(self) -> StopResponse:
-        # Quiesce ingest BEFORE the snapshot below, so no frame can slip into a
-        # buffer between the snapshot and the end of finalization.
+        # Wait for the tail BEFORE quiescing: the last frames may still be in
+        # flight on the WS, and refusing them is exactly how the transcript lost
+        # its ending. Stream them in, THEN cut.
+        await self._await_audio_complete()
+        # Now quiesce, so no frame can slip in between the snapshot and the end
+        # of finalization.
         self._stopping = True
         try:
             segments: list[Segment] = []

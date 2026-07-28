@@ -92,6 +92,17 @@ export function createMeetingSurface({
       // finalize) -- closing the WS first would race the session into being
       // discarded, so the subsequent /stop 404s and we lose the minutes.
       await recorder.stop();
+      // Then tell the service that was the last of the audio. This rides the
+      // WS behind every frame already sent, so the service can wait for it
+      // before finalizing instead of racing the tail. Without it, POST /stop
+      // can finalize while the last frames are still in flight and the
+      // transcript ends early. Best-effort: a failure here must not cost us
+      // the minutes -- the service falls back to a timeout.
+      try {
+        stream.endAudio();
+      } catch (err) {
+        console.error(`meetingSurface: end-of-audio signal failed for guild ${guildId}:`, err);
+      }
       const report = await meetingClient.stop(sessionId);
       await poster({ channel: textChannel, report, requesterId });
       return { status: 'stopped' };
