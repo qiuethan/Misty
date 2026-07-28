@@ -11,6 +11,7 @@ import pytest
 
 from src.contracts import Minutes
 from src.sessions import (
+    _MAX_SEGMENT_MS,
     _PCM_BYTES_PER_MS,
     SessionAlreadyExistsError,
     SessionRegistry,
@@ -746,3 +747,54 @@ def test_stop_finalizes_speakers_concurrently():
         f"stop() took {elapsed:.3f}s for {n_speakers} speakers at {delay}s each "
         "-- finalization is serialized"
     )
+
+
+# --- interleaving ------------------------------------------------------------
+
+
+def test_a_long_turn_is_split_so_others_can_interleave():
+    """Segments are sorted by start time, so a segment that spans minutes gets
+    emitted as one block -- and anyone who spoke DURING it is printed after it,
+    reading as though they replied before the other person spoke.
+
+    Splitting only on a 3s gap never fires during continuous speech, so a
+    monologue was a single segment. Long turns must be broken up on duration
+    too, even with no pause, so overlapping speech interleaves in real order.
+    """
+    alice = [{"text": f"a{i}", "start_ms": i * 1000} for i in range(60)]
+    bob = [{"text": f"b{i}", "start_ms": 30_000 + i * 1000} for i in range(5)]
+
+    segments = words_to_segments("alice", alice) + words_to_segments("bob", bob)
+    segments.sort(key=lambda s: s.start_ms)
+
+    speakers_in_order = [s.speaker for s in segments]
+    assert "bob" in speakers_in_order
+    bob_at = speakers_in_order.index("bob")
+    # Alice must both precede AND follow Bob: he spoke in the middle of her turn.
+    assert "alice" in speakers_in_order[:bob_at], "Bob's interjection sorted before all of Alice"
+    assert "alice" in speakers_in_order[bob_at + 1 :], (
+        "Alice's speech after Bob was emitted before him -- the interleaving is lost"
+    )
+
+
+def test_no_segment_spans_more_than_the_cap():
+    """The cap is what bounds how far out of order an overlapping speaker can
+    be pushed, so it must hold even for unbroken speech."""
+    words = [{"text": f"w{i}", "start_ms": i * 500} for i in range(120)]  # 60s, no pauses
+
+    for segment in words_to_segments("alice", words):
+        span = segment.text.count(" ")  # words-1
+        assert span * 500 <= _MAX_SEGMENT_MS, f"segment spans {span * 500}ms"
+
+
+def test_a_natural_pause_still_starts_a_new_segment():
+    """The gap rule still applies; the duration cap is an addition, not a
+    replacement."""
+    words = [
+        {"text": "hello", "start_ms": 0},
+        {"text": "there", "start_ms": 400},
+        {"text": "later", "start_ms": 9000},
+    ]
+    segments = words_to_segments("alice", words)
+
+    assert [(s.start_ms, s.text) for s in segments] == [(0, "hello there"), (9000, "later")]
