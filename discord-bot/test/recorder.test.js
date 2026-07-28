@@ -5,12 +5,16 @@ import { createRecorder } from '../src/meeting/recorder.js';
 
 // A controllable clock + wait, so drain timing is deterministic rather than
 // dependent on real timers.
-function makeClock() {
+function makeClock(onWait) {
   let t = 0;
   return {
     now: () => t,
     advance: (ms) => { t += ms; },
-    wait: async (ms) => { t += ms; },
+    // `onWait` runs on every poll of the drain loop. It is what lets a test
+    // simulate audio still arriving DURING the drain -- a setInterval never
+    // gets a turn here, because these awaits resolve as microtasks and the
+    // loop finishes before the event loop reaches any macrotask.
+    wait: async (ms) => { t += ms; if (onWait) onWait(); },
   };
 }
 
@@ -86,24 +90,26 @@ test('stop stops forwarding once the connection is torn down', async () => {
   assert.equal(sink.frames.length, before);
 });
 
-test('stop gives up draining if audio keeps arriving', async () => {
-  const clock = makeClock();
+test('stop gives up draining if audio keeps arriving', { timeout: 5000 }, async () => {
+  let onPoll = () => {};
+  const clock = makeClock(() => onPoll());
   const conn = makeConnection();
   const sink = makeSink();
   const recorder = await startedRecorder(clock, conn, sink);
   conn.receiver.speaking.emit('start', 'u1');
   const stream = conn.streams.get('u1');
 
-  // Someone talks straight through the stop. Draining must be bounded, or
-  // /record stop would hang for as long as they keep going.
-  const feeder = setInterval(() => stream.emit('data', Buffer.from('x')), 0);
-  try {
-    await recorder.stop();
-  } finally {
-    clearInterval(feeder);
-  }
+  // Someone talks straight through the stop: every poll delivers another
+  // packet, so the quiet condition can NEVER be met and only the hard deadline
+  // can end the drain. Without that deadline this loops forever and the test
+  // times out -- which is the point of the timeout above.
+  onPoll = () => stream.emit('data', Buffer.from('x'));
+
+  await recorder.stop();
 
   assert.equal(conn.destroyed, true);
+  assert.ok(clock.now() >= 2000, `drained only ${clock.now()}ms; the 2s bound did not apply`);
+  assert.ok(clock.now() < 2500, `drained ${clock.now()}ms; the bound is not tight`);
 });
 
 test('stop is safe to call twice', async () => {
