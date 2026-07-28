@@ -8,8 +8,13 @@ const MAX_NAME_LEN = 80;
 
 // A thread can hold several people, so identity rides on every user turn rather
 // than in the system prompt. The tag is only trustworthy if a member can't type
-// one: escape angle brackets in bodies, and strip attribute-breaking characters
-// from names and labels.
+// one: escape angle brackets in EVERY body, and strip attribute-breaking
+// characters from names and labels.
+//
+// Assistant bodies are escaped too, or the forgery just takes one extra hop:
+// ask the bot to repeat a <msg ...> string, and its answer lands in the thread
+// and replays as live-looking markup on the next mention.
+//
 // & first, or the escapes below would themselves be ambiguous: a member who
 // literally types "&lt;" must not be indistinguishable from one who typed "<".
 function escapeText(text) {
@@ -141,7 +146,7 @@ export function createHelperService({ llmClient, directory }) {
       const identities = await resolveIdentities(directory, turns, knownPeople);
       const rendered = turns.map((t) => ({
         role: t.role,
-        content: t.role === 'user' ? renderUserTurn(t, identities.get(t.authorId)) : t.text,
+        content: t.role === 'user' ? renderUserTurn(t, identities.get(t.authorId)) : escapeText(t.text),
       }));
       const messages = normalize(trimToBudget(rendered));
       // Nothing answerable survived (e.g. a fetch race left an assistant turn
