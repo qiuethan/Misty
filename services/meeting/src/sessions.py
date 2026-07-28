@@ -40,8 +40,10 @@ _SEGMENT_GAP_MS = 1500
 
 # Hard cap on how long one segment may span with no pause at all. Segments are
 # ordered as whole blocks, so this bounds how far an overlapping speaker can be
-# displaced -- at 10s, an interjection can never appear more than ~10s late.
-_MAX_SEGMENT_MS = 10_000
+# displaced -- at 5s, an interjection can never appear more than ~5s late.
+# Measured: at 10s an interjection inside the first 10s of someone's turn still
+# sorted after their whole block, which is the case this exists to fix.
+_MAX_SEGMENT_MS = 5_000
 
 # How long stop() waits for the bot's end-of-audio signal before finalizing
 # anyway. Covers an older bot that never sends it, a crashed bot, or a dropped
@@ -108,6 +110,7 @@ _PCM_BYTES_PER_MS = 32
 # 200ms is ~10 frames of slack: comfortably above jitter, far below any pause
 # that matters in a transcript.
 _ANCHOR_GAP_TOLERANCE_MS = 200
+
 
 
 class _SpeakerBuffer:
@@ -198,7 +201,16 @@ class _SpeakerBuffer:
     def _to_meeting_ms(buffer_ms: int, anchors: list[tuple[int, int]]) -> int:
         """Map a buffer-relative time onto the meeting timeline via the nearest
         preceding anchor. Anchors are ordered, and there are at most a handful
-        per speaker (one per silence), so a linear scan is fine."""
+        per speaker (one per silence), so a linear scan is fine.
+
+        Known residual: a word AWS reports slightly BEFORE an anchor maps
+        through the previous anchor, moving it back by that silence gap.
+        Snapping words near a boundary forward was tried and reverted -- the
+        distance between anchors in BUFFER time is often only a frame or two
+        (a long wall-clock pause is no audio at all), so any snap window wide
+        enough to absorb AWS's jitter also swallows genuinely earlier speech,
+        which is both more common and more wrong.
+        """
         if not anchors:
             return buffer_ms
         offset, meeting_ts = anchors[0]
@@ -206,6 +218,7 @@ class _SpeakerBuffer:
             if anchor_offset > buffer_ms:
                 break
             offset, meeting_ts = anchor_offset, anchor_ts
+        # Never let the snap push a word before its own anchor.
         return meeting_ts + (buffer_ms - offset)
 
     def _map(self, words: list[dict], anchors: list[tuple[int, int]]) -> list[dict]:

@@ -26,8 +26,7 @@ class Settings(BaseSettings):
     # the normal end condition -- recordings usually end on /record stop or
     # auto-stop-on-empty (the bot ends a recording when everyone leaves the voice
     # channel). The cap bounds worst-case memory because the current design
-    # buffers all PCM in memory until the incremental-transcription redesign
-    # (Misty #121). Set MAX_MEETING_MS to another value, or None, to change or
+        # (Misty #121). Set MAX_MEETING_MS to another value, or None, to change or
     # disable it.
     max_meeting_ms: int | None = Field(default=14_400_000, gt=0)  # 4 hours
 

@@ -20,6 +20,12 @@ PRONUNCIATION_ITEM_TYPE = "pronunciation"
 # How long aclose() waits for AWS to flush its final results after end_stream().
 FINAL_FLUSH_TIMEOUT_S = 15
 
+# Opening a Transcribe session has no timeout of its own. Without this a hung
+# connect blocks the pump, aclose()'s `await self._task` never returns, and
+# MeetingSession.stop() -- which has no timeout either -- hangs with it, leaving
+# the session registered and the meeting unfinalized.
+SESSION_CONNECT_TIMEOUT_S = 20
+
 # Consecutive AWS sessions that may end without accepting any audio before we
 # stop reopening for this speaker (prevents a hot reopen loop).
 _MAX_BARREN_SESSIONS = 3
@@ -313,10 +319,13 @@ class _StreamingTranscription:
         # ``_sent_bytes``, which also counts audio still sitting in the queue
         # and about to go through THIS session at its own relative time zero.
         sent_bytes_at_stream_start = self._delivered_bytes
-        stream = await client.start_stream_transcription(
-            language_code=LANGUAGE_CODE,
-            media_sample_rate_hz=self._sample_rate,
-            media_encoding=MEDIA_ENCODING,
+        stream = await asyncio.wait_for(
+            client.start_stream_transcription(
+                language_code=LANGUAGE_CODE,
+                media_sample_rate_hz=self._sample_rate,
+                media_encoding=MEDIA_ENCODING,
+            ),
+            SESSION_CONNECT_TIMEOUT_S,
         )
         offset_ms = sent_bytes_at_stream_start // self._bytes_per_ms
 

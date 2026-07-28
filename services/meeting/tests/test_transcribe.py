@@ -710,3 +710,33 @@ def test_a_session_that_never_delivers_still_counts_as_a_failure():
         assert client.calls <= 4, f"retried {client.calls} times; the give-up bound is gone"
 
     asyncio.run(scenario())
+
+
+def test_a_hanging_connect_does_not_wedge_finalize():
+    """`start_stream_transcription` has no timeout of its own. If AWS accepts
+    the socket and never answers, the pump blocks forever, `aclose()`'s
+    `await self._task` never returns, and `MeetingSession.stop()` -- which has
+    no timeout either -- hangs with it, leaving the session registered. The only
+    thing that eventually unwedges it is the bot's HTTP client giving up."""
+
+    class _HangingClient:
+        async def start_stream_transcription(self, **kwargs):
+            await asyncio.sleep(3600)
+
+    async def scenario():
+        stream = create_transcription_stream(region="us-east-1", client=_HangingClient())
+        stream.start()
+        stream.send(b"\x00" * 640)
+        await asyncio.sleep(0)
+
+        import src.stt.transcribe as mod
+
+        original = mod.SESSION_CONNECT_TIMEOUT_S
+        mod.SESSION_CONNECT_TIMEOUT_S = 0.05
+        try:
+            words = await asyncio.wait_for(stream.aclose(), 5)
+        finally:
+            mod.SESSION_CONNECT_TIMEOUT_S = original
+        assert words == []
+
+    asyncio.run(scenario())

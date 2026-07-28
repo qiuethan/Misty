@@ -11,6 +11,13 @@ _logger = logging.getLogger(__name__)
 # minutes were routinely truncated mid-JSON.
 MINUTES_MAX_TOKENS = 4000
 
+# Longest transcript we will send. A multi-hour meeting can otherwise overflow
+# the model's context, which fails the whole call -- and an LlmUnavailable
+# yields "(minutes unavailable: LLM service error)", strictly worse than
+# minutes drawn from most of the meeting. Keeps the START (agenda, framing) and
+# the END (decisions, actions), which is where the substance is.
+MAX_TRANSCRIPT_CHARS = 120_000
+
 # Salvage tries checkpoints newest-first, and each attempt costs a json.loads
 # over a growing prefix -- so an unsalvageable fragment would otherwise walk
 # every one, quadratically. A usable recovery point is essentially always within
@@ -195,7 +202,20 @@ def _string_items(raw) -> list[str]:
     return items
 
 
+def _bounded(transcript: str) -> str:
+    if len(transcript) <= MAX_TRANSCRIPT_CHARS:
+        return transcript
+    half = MAX_TRANSCRIPT_CHARS // 2
+    _logger.warning(
+        "transcript is %s chars; sending the first and last %s around an elision",
+        len(transcript),
+        half,
+    )
+    return f"{transcript[:half]}\n\n[... middle of the meeting omitted ...]\n\n{transcript[-half:]}"
+
+
 def summarize_minutes(transcript: str, llm_client, model=None) -> Minutes:
+    transcript = _bounded(transcript)
     try:
         content = llm_client.chat(
             system=MINUTES_SYSTEM_PROMPT,
