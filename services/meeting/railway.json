@@ -8,6 +8,11 @@
     "startCommand": "sh -c 'uvicorn src.api.app:app --host 0.0.0.0 --port ${PORT}'",
     "healthcheckPath": "/health",
     "restartPolicyType": "ON_FAILURE",
-    "overlapSeconds": 0
+    "overlapSeconds": 0,
+    "multiRegionConfig": {
+      "us-east4-eqdc4a": {
+        "numReplicas": 1
+      }
+    }
   }
 }
