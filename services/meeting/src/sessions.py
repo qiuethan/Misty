@@ -33,15 +33,41 @@ from src.pipeline.transcript import assemble_transcript
 _logger = logging.getLogger("meeting.audit")
 
 
+# A pause longer than this ends an utterance. Conversational pauses between
+# sentences run a few hundred ms, so 1.5s is comfortably past "drawing breath"
+# without splitting mid-thought.
+_SEGMENT_GAP_MS = 1500
+
+# Hard cap on how long one segment may span with no pause at all. Segments are
+# ordered as whole blocks, so this bounds how far an overlapping speaker can be
+# displaced -- at 10s, an interjection can never appear more than ~10s late.
+_MAX_SEGMENT_MS = 10_000
+
 class SessionAlreadyExistsError(ValueError):
     """Raised by ``SessionRegistry.create`` when the session_id is already active."""
 
 
-def words_to_segments(speaker: str, words: list[dict], gap_ms: int = 3000) -> list[Segment]:
+def words_to_segments(
+    speaker: str,
+    words: list[dict],
+    gap_ms: int = _SEGMENT_GAP_MS,
+    max_segment_ms: int = _MAX_SEGMENT_MS,
+) -> list[Segment]:
     """Group a flat, chronological word list into segments for one speaker.
 
-    A new segment starts whenever the gap between a word's start_ms and the
-    previous word's start_ms exceeds ``gap_ms``. Same semantics as the MVP.
+    A new segment starts on either of two conditions:
+
+    * **A pause** longer than ``gap_ms`` -- the natural boundary between
+      utterances.
+    * **Duration** -- the segment has run for ``max_segment_ms`` with no pause.
+
+    The duration cap is what makes overlapping speech readable. Segments are
+    sorted by start time to build the transcript, so a segment is emitted as one
+    indivisible block: if someone talks for two minutes straight, a pause-only
+    rule produces a single segment, and everyone who spoke DURING those two
+    minutes is printed after all of it -- reading as though they replied before
+    the other person had spoken. Capping the span bounds how far out of order an
+    overlapping speaker can be pushed.
     """
     segments: list[Segment] = []
     current_words: list[str] = []
@@ -50,7 +76,9 @@ def words_to_segments(speaker: str, words: list[dict], gap_ms: int = 3000) -> li
 
     for word in words:
         start = word["start_ms"]
-        if current_words and last_start is not None and (start - last_start) > gap_ms:
+        too_long = current_start is not None and (start - current_start) > max_segment_ms
+        gapped = current_words and last_start is not None and (start - last_start) > gap_ms
+        if gapped or too_long:
             segments.append(Segment(speaker=speaker, start_ms=current_start, text=" ".join(current_words)))
             current_words = []
             current_start = None
