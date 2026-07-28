@@ -204,3 +204,73 @@ test('a clock that jumps backwards never produces a negative timestamp', async (
   assert.ok(ts >= 0, `negative timestamp ${ts} would throw on encode`);
   assert.doesNotThrow(() => Buffer.alloc(8).writeBigUInt64BE(BigInt(ts), 0));
 });
+
+test('speaker names come from voice states, not the (empty) member cache', async () => {
+  const clock = makeClock();
+  const conn = makeConnection();
+  const sink = makeSink();
+  const controls = [];
+  sink.sendControl = (c) => controls.push(c);
+
+  const member = { displayName: 'Priya', user: { bot: false } };
+  const guild = {
+    id: 'g1',
+    voiceAdapterCreator: null,
+    // Empty, as it is in production: the bot does not request GuildMembers.
+    members: { cache: new Map() },
+    voiceStates: { cache: new Map([['u1', { member }]]) },
+  };
+  const recorder = createRecorder({
+    sink, now: clock.now, monotonic: clock.now, wait: clock.wait,
+    join: () => conn, ready: async () => {},
+  });
+  await recorder.start({ id: 'vc1', guild, client: { user: { id: 'bot' } } });
+
+  conn.receiver.speaking.emit('start', 'u1');
+
+  assert.deepEqual(controls, [{ speakerId: 'u1', displayName: 'Priya' }],
+    'transcript would show a raw snowflake instead of a name');
+});
+
+test('the recorder never transcribes itself', async () => {
+  const clock = makeClock();
+  const conn = makeConnection();
+  const sink = makeSink();
+  const guild = { id: 'g1', voiceAdapterCreator: null, members: { cache: new Map() }, voiceStates: { cache: new Map() } };
+  const recorder = createRecorder({
+    sink, now: clock.now, monotonic: clock.now, wait: clock.wait,
+    join: () => conn, ready: async () => {},
+  });
+  await recorder.start({ id: 'vc1', guild, client: { user: { id: 'bot-self' } } });
+
+  conn.receiver.speaking.emit('start', 'bot-self');
+
+  assert.equal(conn.streams.size, 0, 'the bot subscribed to its own audio');
+});
+
+test('an unresolved user is captured, then dropped if they turn out to be a bot', async () => {
+  const clock = makeClock();
+  const conn = makeConnection();
+  const sink = makeSink();
+  let resolveFetch;
+  const guild = {
+    id: 'g1', voiceAdapterCreator: null,
+    members: { cache: new Map(), fetch: () => new Promise((r) => { resolveFetch = r; }) },
+    voiceStates: { cache: new Map() },
+  };
+  const recorder = createRecorder({
+    sink, now: clock.now, monotonic: clock.now, wait: clock.wait,
+    join: () => conn, ready: async () => {},
+  });
+  await recorder.start({ id: 'vc1', guild, client: { user: { id: 'bot' } } });
+
+  // Unknown user: subscribe optimistically rather than dropping a real person.
+  conn.receiver.speaking.emit('start', 'u9');
+  assert.equal(conn.streams.size, 1);
+
+  // ...the API then says it was a music bot.
+  resolveFetch({ user: { bot: true }, displayName: 'Groovy' });
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(conn.streams.get('u9'), undefined, 'a bot kept being transcribed and billed');
+});
