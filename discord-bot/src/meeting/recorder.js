@@ -20,7 +20,9 @@ export function createRecorder({
   let connection = null;
   let startedAt = null;
   const knownSpeakers = new Set();
-  const activeSubscriptions = new Set();
+  // userId -> the speaker's live receive stream, held open for the whole
+  // meeting and torn down in stop().
+  const subscriptions = new Map();
   let stopped = false;
   let lastPacketAt = 0;
 
@@ -34,20 +36,30 @@ export function createRecorder({
     // already active for this userId. Skip re-subscribing so we don't attach
     // duplicate `data`/`error` listeners (which would forward each frame
     // multiple times into the transcription).
-    if (activeSubscriptions.has(userId)) return;
-    activeSubscriptions.add(userId);
+    if (subscriptions.has(userId)) return;
+
+    // Manual, NOT AfterSilence. AfterSilence ends the stream a second after
+    // someone stops talking, and the receiver silently DISCARDS packets for a
+    // user with no subscription (Receiver.onUdpMessage: `if (!stream) return`).
+    // Re-subscribing depends on SpeakingMap emitting 'start' again, and its
+    // ~100ms speaking timeout is nothing like the 1s stream timeout -- so a
+    // speaker who paused could lose everything they said afterwards. Holding
+    // one stream open per speaker removes the race entirely: there is always a
+    // subscription, so no packet is ever dropped.
     const opus = connection.receiver.subscribe(userId, {
-      end: { behavior: EndBehaviorType.AfterSilence, duration: 1000 },
+      end: { behavior: EndBehaviorType.Manual },
     });
-    const clearActive = () => activeSubscriptions.delete(userId);
+    subscriptions.set(userId, opus);
+    const clearActive = () => subscriptions.delete(userId);
     opus.on('data', (packet) => {
       if (stopped) return;
       lastPacketAt = now();
       sink.sendFrame(userId, now() - startedAt, packet);
     });
     opus.on('error', (e) => console.error(`recorder: opus stream error for ${userId}:`, e.message));
+    // A Manual stream should never end on its own; these only fire if the
+    // connection goes away underneath us, and keep the map honest if it does.
     opus.once('error', clearActive);
-    opus.once('end', clearActive);
     opus.once('close', clearActive);
   }
 
@@ -91,6 +103,16 @@ export function createRecorder({
       }
 
       stopped = true;
+      // Manual streams never end themselves, so close them explicitly rather
+      // than leaving them attached to a destroyed connection.
+      for (const opus of subscriptions.values()) {
+        try {
+          opus.destroy();
+        } catch (err) {
+          console.error('recorder: failed to close a receive stream:', err.message);
+        }
+      }
+      subscriptions.clear();
       conn.destroy();
     },
   };
