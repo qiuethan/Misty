@@ -609,3 +609,104 @@ def test_aclose_returns_even_if_the_sentinel_enqueue_raises():
         ]
 
     asyncio.run(scenario())
+
+
+class _RaisingOutputStream(_LiveOutputStream):
+    """An output stream that can RAISE mid-iteration, which is how the real
+    service ends a session.
+
+    `amazon-transcribe` surfaces `BadRequestException: no new audio was received
+    for 15 seconds` by raising out of the `async for`, not by closing the
+    iterator. `_LiveOutputStream` can only finish cleanly, so it cannot express
+    the single most common way an AWS session ends -- which is why the drop this
+    file now guards against went unnoticed.
+    """
+
+    def raise_next(self, exc):
+        self._queue.put_nowait(exc)
+
+    async def _iter(self):
+        while True:
+            event = await self._queue.get()
+            if event is None:
+                self.closed = True
+                return
+            if isinstance(event, Exception):
+                raise event
+            yield event
+
+
+class _RaisingStream:
+    def __init__(self):
+        self.output_stream = _RaisingOutputStream()
+        self.input_stream = _FakeInputStream(self.output_stream)
+
+
+class _IdlingClient:
+    def __init__(self):
+        self.streams = []
+
+    async def start_stream_transcription(self, **kwargs):
+        stream = _RaisingStream()
+        self.streams.append(stream)
+        return stream
+
+
+def test_repeated_aws_idle_timeouts_do_not_disable_a_speaker():
+    """Every pause longer than ~15s ends that speaker's AWS session with a
+    raised BadRequestException, because this design only ever sends speech --
+    silence is never buffered. So an idle timeout is not an error, it is the
+    normal shape of a conversation.
+
+    Counting each one toward the give-up threshold meant a participant who
+    paused three times was silently dropped for the REST of the meeting: their
+    opening remarks appeared and nothing else ever did."""
+
+    async def scenario():
+        client = _IdlingClient()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
+
+        for i in range(6):
+            stream.send(b"\x00" * 640)
+            await drain(stream)
+            current = client.streams[-1]
+            current.output_stream.push(_final_event())
+            await drain(stream)
+            current.output_stream.raise_next(RuntimeError("no new audio was received for 15 seconds"))
+            await drain(stream)
+
+        words = await stream.aclose()
+        # Two pronunciation items per utterance, six utterances.
+        assert len(words) == 12, (
+            f"speaker dropped after repeated idle timeouts: {len(words)} words "
+            f"from {len(client.streams)} sessions"
+        )
+
+    asyncio.run(scenario())
+
+
+def test_a_session_that_never_delivers_still_counts_as_a_failure():
+    """The give-up path must survive: a stream that fails WITHOUT ever accepting
+    audio is genuinely broken, and retrying it forever would spin."""
+
+    class _AlwaysFailing:
+        def __init__(self):
+            self.calls = 0
+
+        async def start_stream_transcription(self, **kwargs):
+            self.calls += 1
+            raise RuntimeError("AWS is down")
+
+    async def scenario():
+        client = _AlwaysFailing()
+        stream = create_transcription_stream(region="us-east-1", client=client)
+        stream.start()
+        for _ in range(6):
+            stream.send(b"\x00" * 640)
+            await drain(stream)
+        await stream.aclose()
+
+        assert client.calls <= 4, f"retried {client.calls} times; the give-up bound is gone"
+
+    asyncio.run(scenario())

@@ -245,13 +245,25 @@ class _StreamingTranscription:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 -- a dead stream must not kill the meeting
-                # NOT terminal. AWS throttles, drops connections, and returns
-                # transient errors; giving up here would silently disable this
-                # speaker for the rest of the meeting after a single blip.
-                # The audio in flight is lost (it may have been partly sent),
-                # but the next chunk opens a fresh session.
-                failures += 1
                 pending.clear()
+
+                # A session that ACCEPTED audio and then raised is not a
+                # failure: that is how AWS ends an idle session. Transcribe
+                # surfaces "no new audio was received for 15 seconds" by raising
+                # out of the output stream rather than closing it, and because
+                # this design only ever sends speech (silence is never
+                # buffered), every pause longer than that ends a session exactly
+                # this way. Counting them meant a participant who paused three
+                # times was dropped for the REST of the meeting -- their opening
+                # remarks transcribed and nothing after.
+                if self._delivered_bytes > delivered_before:
+                    _logger.debug("Transcribe session ended after delivering audio: %s", exc)
+                    failures = 0
+                    continue
+
+                # Raised WITHOUT taking any audio -- genuinely broken (connect
+                # refused, throttled, credentials). Those do count.
+                failures += 1
                 if failures >= _MAX_SESSION_FAILURES:
                     _logger.warning(
                         "transcription failed %s times in a row (%s); giving up on this "
