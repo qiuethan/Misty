@@ -25,8 +25,15 @@ function makeConnection() {
     destroyedAt: null,
     receiver: {
       speaking: new EventEmitter(),
-      subscribe(userId) {
+      subscribeCalls: [],
+      subscribe(userId, options) {
+        conn.receiver.subscribeCalls.push({ userId, options });
+        // Mirror the real receiver: an existing subscription is REUSED, and it
+        // is only forgotten once the stream closes.
+        const existing = streams.get(userId);
+        if (existing) return existing;
         const s = new EventEmitter();
+        s.destroy = () => { s.destroyed = true; streams.delete(userId); s.emit('close'); };
         streams.set(userId, s);
         return s;
       },
@@ -118,4 +125,57 @@ test('stop is safe to call twice', async () => {
   const recorder = await startedRecorder(clock, conn, makeSink());
   await recorder.stop();
   await assert.doesNotReject(() => recorder.stop());
+});
+
+test('a speaker subscription is never allowed to self-end', async () => {
+  const clock = makeClock();
+  const conn = makeConnection();
+  const recorder = await startedRecorder(clock, conn, makeSink());
+
+  conn.receiver.speaking.emit('start', 'u1');
+
+  const { options } = conn.receiver.subscribeCalls.at(-1);
+  // AfterSilence tears the subscription down 1s after someone stops talking,
+  // and the receiver DISCARDS packets for a user with no subscription
+  // (Receiver.onUdpMessage: `if (!stream) return`). Everything that speaker
+  // says next is then lost until a re-subscribe happens to win the race.
+  assert.notEqual(
+    options?.end?.behavior,
+    1, // EndBehaviorType.AfterSilence
+    'subscription may self-end, which drops that speaker for the rest of the meeting',
+  );
+});
+
+test('a speaker who pauses and resumes is still captured', async () => {
+  const clock = makeClock();
+  const conn = makeConnection();
+  const sink = makeSink();
+  const recorder = await startedRecorder(clock, conn, sink);
+
+  conn.receiver.speaking.emit('start', 'u1');
+  const stream = conn.streams.get('u1');
+  stream.emit('data', Buffer.from('first'));
+
+  // Long pause. The real stream would have self-ended here; discord.js then
+  // drops packets until something re-subscribes.
+  clock.advance(30_000);
+  conn.receiver.speaking.emit('start', 'u1'); // SpeakingMap re-fires
+  const resumed = conn.streams.get('u1');
+  assert.ok(resumed, 'the speaker lost their subscription entirely');
+  resumed.emit('data', Buffer.from('second'));
+
+  const payloads = sink.frames.map(([, , p]) => p.toString());
+  assert.deepEqual(payloads, ['first', 'second']);
+});
+
+test('stop tears down the persistent subscriptions', async () => {
+  const clock = makeClock();
+  const conn = makeConnection();
+  const recorder = await startedRecorder(clock, conn, makeSink());
+  conn.receiver.speaking.emit('start', 'u1');
+  const stream = conn.streams.get('u1');
+
+  await recorder.stop();
+
+  assert.equal(stream.destroyed, true, 'subscriptions must not outlive the recording');
 });
