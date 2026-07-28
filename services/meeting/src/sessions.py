@@ -270,6 +270,12 @@ class MeetingSession:
         # off the transcript. The socket delivers in order, so the signal
         # arriving means all prior audio has already been fed.
         self._audio_complete = asyncio.Event()
+        # Every path that discards audio increments one of these. They are
+        # reported as a single line at stop, because "words went missing" with
+        # nothing in the logs is how most of this service's bugs reached
+        # production -- each one had to be found by reading code and building a
+        # repro instead of reading a log.
+        self._drops: dict[str, int] = {}
         self._cap_hit_logged = False
 
     def feed(self, speaker_id: str, display_name: str, opus_frame_bytes: bytes, ts_ms: int) -> None:
@@ -277,6 +283,7 @@ class MeetingSession:
         # never reach the transcript, so drop it rather than buffer it into a
         # snapshot that has already been taken. See ``_stopping`` in __init__.
         if self._stopping:
+            self.note_drop("after_stop_began")
             return
 
         # Bound how long a single meeting can run, so a forgotten one cannot hold
@@ -295,6 +302,7 @@ class MeetingSession:
                         max_meeting_ms,
                         elapsed_ms,
                     )
+                self.note_drop("past_max_meeting_ms")
                 return
 
         # Get-or-create this speaker's buffer (and its OWN stateful Opus
@@ -316,6 +324,10 @@ class MeetingSession:
         # do it OUTSIDE the lock so it doesn't block readers any longer than
         # necessary.
         pcm = buf.decoder.decode(opus_frame_bytes)
+        # Real audio in, nothing out: the decoder swallowed an error (see
+        # decoder.decode's best-effort contract). Silent until now.
+        if opus_frame_bytes and not pcm:
+            self.note_drop("undecodable_frame")
 
         with self._lock:
             buf.append(pcm, ts_ms)
@@ -354,6 +366,24 @@ class MeetingSession:
             "duration_label": f"{minutes}m",
             "participants": participants,
         }
+
+    def note_drop(self, reason: str, count: int = 1) -> None:
+        """Record that audio or words were discarded. Cheap and lock-free: an
+        approximate count from a racing worker thread is fine, an exact one is
+        not worth a lock on the ingest path."""
+        self._drops[reason] = self._drops.get(reason, 0) + count
+
+    def drop_summary(self) -> dict[str, int]:
+        return dict(self._drops)
+
+    def _report_drops(self) -> None:
+        if not self._drops:
+            return
+        _logger.warning(
+            "session %s finished with discarded audio: %s",
+            self.session_id,
+            ", ".join(f"{reason}={count}" for reason, count in sorted(self._drops.items())),
+        )
 
     def mark_audio_complete(self) -> None:
         """Called by the WS ingest loop when the bot signals end-of-audio.
@@ -411,6 +441,7 @@ class MeetingSession:
                         display_name,
                         words,
                     )
+                    self.note_drop("speaker_finalize_failed")
                     continue
                 segments.extend(words_to_segments(display_name, words))
             segments.sort(key=lambda s: s.start_ms)
@@ -437,6 +468,7 @@ class MeetingSession:
                 pdf_b64=pdf_b64,
             )
         finally:
+            self._report_drops()
             self._cleanup()
 
     def discard(self) -> None:

@@ -859,3 +859,47 @@ def test_feed_is_still_refused_after_the_audio_barrier_passes():
     session.feed("bob-id", "bob", _pcm(20), ts_ms=0)
 
     assert len(stream.sent) == before
+
+
+def test_dropped_audio_is_counted_and_reported_at_stop(caplog):
+    """Every path that discards audio was silent. Diagnosing "words went
+    missing" then meant reading code and building repros rather than reading a
+    log -- which is how most of this service's bugs were actually found.
+
+    One line per meeting now names what was lost and why."""
+
+    class DeadDecoder:
+        """Mirrors decoder.decode's best-effort contract: a malformed packet
+        yields b"" rather than raising."""
+
+        def decode(self, opus_frame_bytes):
+            return b""
+
+    class DeadAudio:
+        def make_decoder(self):
+            return DeadDecoder()
+
+    deps = _make_deps([FakeTranscriptionStream([])], audio=DeadAudio())
+    registry = SessionRegistry(deps)
+    session = registry.create("session-drops", "guild-1")
+    session.mark_audio_complete()
+
+    session.feed("alice-id", "alice", b"real-opus-bytes", ts_ms=0)
+    assert session.drop_summary() == {"undecodable_frame": 1}
+
+    with caplog.at_level("WARNING"):
+        asyncio.run(session.stop())
+
+    joined = " ".join(r.message for r in caplog.records)
+    assert "undecodable_frame" in joined, f"the loss was never reported: {joined}"
+
+
+def test_no_drop_report_when_nothing_was_dropped():
+    """A clean meeting must not emit a scary warning."""
+    deps = _make_deps([FakeTranscriptionStream([])])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-clean", "guild-1")
+    session.mark_audio_complete()
+    session.feed("alice-id", "alice", _pcm(20), ts_ms=0)
+
+    assert session.drop_summary() == {}
