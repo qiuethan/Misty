@@ -27,7 +27,7 @@ import { createRecorder } from './meeting/recorder.js';
  * @param {Function} [deps.poster] Posts a decoded meeting report to a channel.
  * @returns {object} Shared application context passed through the router.
  */
-export function createAppContext(config, { poster } = {}) {
+export function createAppContext(config, { poster, notify } = {}) {
   const directory = createDirectoryClient({
     baseUrl: config.directoryBaseUrl,
     apiKey: config.directoryApiKey,
@@ -62,6 +62,7 @@ export function createAppContext(config, { poster } = {}) {
       meetingClient,
       makeRecorder: (o) => createRecorder(o),
       poster: poster ?? (async () => {}),
+      notify: notify ?? (async () => {}),
       now: Date.now,
     });
   } else {

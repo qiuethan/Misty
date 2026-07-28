@@ -7,6 +7,10 @@ export function createMeetingSurface({
   meetingClient,
   makeRecorder,
   poster,
+  // Tells the meeting's text channel that a recording died on its own. Without
+  // it a dropped connection is invisible: the session is gone, /record status
+  // says nothing is recording, and nobody knows the meeting was lost.
+  notify = async () => {},
   now = Date.now,
   genId = randomUUID,
 }) {
@@ -16,34 +20,53 @@ export function createMeetingSurface({
   // stored on the session (not read off the stopping interaction) so the
   // minutes always @-mention the person who asked for them -- including when
   // the recording ends via auto-stop, where there's no interaction at all.
-  function start({ guildId, voiceChannel, textChannel, requesterId }) {
+  async function start({ guildId, voiceChannel, textChannel, requesterId }) {
     if (sessions.has(guildId)) {
       return { status: 'already-recording' };
     }
 
     const sessionId = genId();
+    let recorder = null;
 
     // Idempotent teardown: if the guild's session has already been removed
     // (e.g. a normal stop() raced us, or this fires twice), this is a no-op.
-    const teardown = () => {
+    //
+    // It MUST stop the recorder, not just close the stream. Leaving the voice
+    // connection up means the bot sits in the channel holding open one receive
+    // stream per speaker, while `sessions.delete` makes /record status report
+    // nothing is recording and /record stop answer "no recording in progress"
+    // -- so nothing short of a restart can remove it.
+    const teardown = async (reason) => {
       if (sessions.get(guildId)?.sessionId !== sessionId) return;
       sessions.delete(guildId);
-      Promise.resolve(stream.close()).catch((err) => {
+      try {
+        if (recorder) await recorder.stop();
+      } catch (err) {
+        console.error(`meetingSurface: error stopping recorder during teardown for guild ${guildId}:`, err);
+      }
+      try {
+        await stream.close();
+      } catch (err) {
         console.error(`meetingSurface: error closing stream during teardown for guild ${guildId}:`, err);
-      });
+      }
+      await notify({
+        channel: textChannel,
+        content: `⚠️ The recording stopped unexpectedly (${reason}) and no minutes will be posted.`,
+      }).catch((err) => console.error(`meetingSurface: teardown notify failed:`, err));
     };
 
     const stream = meetingClient.openStream(sessionId, {
       guildId,
-      onError: () => teardown(),
+      onError: () => teardown('connection error'),
+      // A clean close counts too: an auth rejection, a duplicate session, or a
+      // service redeploy all close the socket without an error, and every frame
+      // after that is silently discarded by the client.
+      onClose: () => teardown('connection closed'),
     });
-    const recorder = makeRecorder({ sink: stream, now });
+    recorder = makeRecorder({ sink: stream, now });
 
-    Promise.resolve(recorder.start(voiceChannel)).catch((err) => {
-      console.error(`meetingSurface: recorder failed to start for guild ${guildId}:`, err);
-      teardown();
-    });
-
+    // Register BEFORE awaiting the join, so a teardown firing mid-join can
+    // actually find the session and tear it down (it keys off sessionId).
     sessions.set(guildId, {
       sessionId,
       stream,
@@ -53,6 +76,21 @@ export function createMeetingSurface({
       requesterId,
       startedAt: now(),
     });
+
+    // AWAIT the join. Returning "recording" before the voice connection is up
+    // means a missing Connect permission, a full channel, or a 20s timeout is
+    // reported to the user as success, and they only find out at /record stop.
+    try {
+      await recorder.start(voiceChannel);
+    } catch (err) {
+      console.error(`meetingSurface: recorder failed to start for guild ${guildId}:`, err);
+      if (sessions.get(guildId)?.sessionId === sessionId) sessions.delete(guildId);
+      await Promise.resolve(stream.close()).catch(() => {});
+      return { status: 'error' };
+    }
+
+    // A teardown may have removed us while we were joining.
+    if (sessions.get(guildId)?.sessionId !== sessionId) return { status: 'error' };
 
     return { status: 'recording', sessionId };
   }

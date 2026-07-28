@@ -13,6 +13,12 @@ const DRAIN_POLL_MS = 50;
 export function createRecorder({
   sink,
   now = Date.now,
+  // Frame timestamps must come from a MONOTONIC clock. Date.now() goes
+  // backwards on an NTP correction, which makes ts_ms negative -- and
+  // writeBigUInt64BE then throws a RangeError inside the opus 'data' handler,
+  // where nothing catches it and the bot has no uncaughtException handler.
+  // A backwards jump would also corrupt anchoring on the service side.
+  monotonic = () => performance.now(),
   wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   join = joinVoiceChannel,
   ready = (connection) => entersState(connection, VoiceConnectionStatus.Ready, 20_000),
@@ -53,8 +59,10 @@ export function createRecorder({
     const clearActive = () => subscriptions.delete(userId);
     opus.on('data', (packet) => {
       if (stopped) return;
-      lastPacketAt = now();
-      sink.sendFrame(userId, now() - startedAt, packet);
+      lastPacketAt = monotonic();
+      // Clamp defensively: a non-monotonic injected clock must degrade to a
+      // duplicate timestamp, never to a frame that throws on encode.
+      sink.sendFrame(userId, Math.max(0, Math.round(lastPacketAt - startedAt)), packet);
     });
     opus.on('error', (e) => console.error(`recorder: opus stream error for ${userId}:`, e.message));
     // A Manual stream should never end on its own; these only fire if the
@@ -79,7 +87,7 @@ export function createRecorder({
         connection = null;
         throw e;
       }
-      startedAt = now();
+      startedAt = monotonic();
       connection.receiver.speaking.on('start', (userId) => {
         const member = voiceChannel.guild.members.cache.get(userId);
         if (member?.user?.bot) return;
@@ -97,8 +105,8 @@ export function createRecorder({
       // meantime -- between them that clipped the last words of the meeting.
       conn.receiver.speaking.removeAllListeners('start');
 
-      const deadline = now() + DRAIN_MAX_MS;
-      while (now() < deadline && now() - lastPacketAt < DRAIN_QUIET_MS) {
+      const deadline = monotonic() + DRAIN_MAX_MS;
+      while (monotonic() < deadline && monotonic() - lastPacketAt < DRAIN_QUIET_MS) {
         await wait(DRAIN_POLL_MS);
       }
 

@@ -53,6 +53,7 @@ async function startedRecorder(clock, conn, sink) {
   const recorder = createRecorder({
     sink,
     now: clock.now,
+    monotonic: clock.now,
     wait: clock.wait,
     join: () => conn,
     ready: async () => {},
@@ -178,4 +179,29 @@ test('stop tears down the persistent subscriptions', async () => {
   await recorder.stop();
 
   assert.equal(stream.destroyed, true, 'subscriptions must not outlive the recording');
+});
+
+test('a clock that jumps backwards never produces a negative timestamp', async () => {
+  // Date.now() steps backwards on an NTP correction. A negative ts_ms makes
+  // writeBigUInt64BE throw RangeError inside the opus 'data' handler, which
+  // nothing catches -- and the bot registers no uncaughtException handler, so
+  // that is a crash mid-meeting.
+  let t = 10_000;
+  const clock = { now: () => t, wait: async (ms) => { t += ms; } };
+  const conn = makeConnection();
+  const sink = makeSink();
+  const recorder = createRecorder({
+    sink, now: clock.now, monotonic: clock.now, wait: clock.wait,
+    join: () => conn, ready: async () => {},
+  });
+  await recorder.start({ id: 'vc1', guild: { id: 'g1', voiceAdapterCreator: null, members: { cache: new Map() } } });
+
+  conn.receiver.speaking.emit('start', 'u1');
+  const stream = conn.streams.get('u1');
+  t = 9_000; // the clock steps back one second
+  stream.emit('data', Buffer.from('x'));
+
+  const [, ts] = sink.frames.at(-1);
+  assert.ok(ts >= 0, `negative timestamp ${ts} would throw on encode`);
+  assert.doesNotThrow(() => Buffer.alloc(8).writeBigUInt64BE(BigInt(ts), 0));
 });
