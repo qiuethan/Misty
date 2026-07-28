@@ -78,6 +78,13 @@ export function createMeetingClient({ baseUrl, wsUrl, apiKey, WebSocketImpl = Ws
       sendFrame(speakerId, tsMs, opusBuffer) {
         dispatch(encodeFrame(speakerId, tsMs, opusBuffer));
       },
+      // Tell the service every audio frame has been sent. Goes through the same
+      // dispatch path as the audio, so the socket delivers it AFTER all of it —
+      // which is what lets the service use it as a barrier and stop finalizing
+      // the meeting while the tail is still in flight.
+      endAudio() {
+        dispatch(JSON.stringify({ end_of_audio: true }));
+      },
       close() {
         ws.close();
       },

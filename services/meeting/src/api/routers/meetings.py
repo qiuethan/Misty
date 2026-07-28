@@ -32,6 +32,15 @@ Once authenticated, two kinds of application messages are accepted:
    speaker's identity becomes known/changes (e.g. a Discord user joins voice).
    Unknown/malformed text frames are ignored (not fatal).
 
+   ``{"end_of_audio": true}``
+   Sent once, after the bot stops recording and has forwarded every frame it
+   captured. Because the socket delivers in order, the server treats this as
+   proof that all audio has arrived, and ``POST /stop`` waits for it before
+   finalizing. Without it (an older bot, a crash, a dropped socket) ``/stop``
+   proceeds after ``sessions.AUDIO_DRAIN_TIMEOUT_S`` and logs a warning; the
+   tail of the transcript may then be short, which is the failure this signal
+   exists to prevent.
+
 2. Audio frames (WebSocket **binary** frames), one raw Opus packet each,
    framed as:
 
@@ -231,7 +240,13 @@ async def stream_meeting(
                     control = json.loads(text)
                 except (ValueError, TypeError):
                     continue
-                if isinstance(control, dict) and "speaker_id" in control:
+                if isinstance(control, dict) and control.get("end_of_audio"):
+                    # The bot has stopped recording and sent everything it has.
+                    # The socket delivers in order, so reaching this frame means
+                    # every audio frame before it has already been fed -- which
+                    # is exactly the barrier POST /stop needs before finalizing.
+                    session.mark_audio_complete()
+                elif isinstance(control, dict) and "speaker_id" in control:
                     speaker_id = control["speaker_id"]
                     display_names[speaker_id] = control.get("display_name", speaker_id)
                 continue

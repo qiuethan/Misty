@@ -243,3 +243,26 @@ test('openStream works without an onError callback (optional param)', () => {
     console.error = originalError;
   }
 });
+
+test('endAudio sends the end-of-audio control frame after the audio', () => {
+  const client = createMeetingClient({ baseUrl: BASE, wsUrl: WS_BASE, apiKey: KEY, WebSocketImpl: FakeWebSocket });
+  const stream = client.openStream('sess-1', { guildId: 'g1' });
+  const ws = FakeWebSocket.instances.at(-1);
+  ws._open();
+  stream.sendFrame('u1', 0, Buffer.from([1, 2, 3]));
+  stream.endAudio();
+
+  // Ordering is the whole point: the signal must be the LAST thing on the wire,
+  // so the server can treat it as proof all audio has arrived.
+  assert.equal(ws.sent.at(-1), JSON.stringify({ end_of_audio: true }));
+});
+
+test('endAudio is queued like any other frame if the socket is not open yet', () => {
+  const client = createMeetingClient({ baseUrl: BASE, wsUrl: WS_BASE, apiKey: KEY, WebSocketImpl: FakeWebSocket });
+  const stream = client.openStream('sess-1', { guildId: 'g1' });
+  const ws = FakeWebSocket.instances.at(-1);
+  stream.endAudio();
+  ws._open();
+
+  assert.equal(ws.sent.at(-1), JSON.stringify({ end_of_audio: true }));
+});
