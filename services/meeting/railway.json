@@ -13,6 +13,7 @@
       "us-east4-eqdc4a": {
         "numReplicas": 1
       }
-    }
+    },
+    "drainingSeconds": 30
   }
 }

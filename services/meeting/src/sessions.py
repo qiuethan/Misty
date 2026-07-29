@@ -468,7 +468,6 @@ class MeetingSession:
                 pdf_b64=pdf_b64,
             )
         finally:
-            self._report_drops()
             self._cleanup()
 
     def discard(self) -> None:
@@ -487,6 +486,11 @@ class MeetingSession:
         if self._finalized:
             return
         self._finalized = True
+        # Report here rather than in stop(): discard() is the ABRUPT path (the
+        # bot died, the socket dropped), which is exactly when knowing what was
+        # discarded matters most -- and it was the one path that never reported.
+        # _cleanup is idempotent, so this fires once on either route.
+        self._report_drops()
         # Covers the discard() path too: once torn down, nothing more is taken.
         self._stopping = True
         # Tear down every speaker's Transcribe stream. stop() has already

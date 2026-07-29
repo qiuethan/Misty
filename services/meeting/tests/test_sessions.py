@@ -903,3 +903,28 @@ def test_no_drop_report_when_nothing_was_dropped():
     session.feed("alice-id", "alice", _pcm(20), ts_ms=0)
 
     assert session.drop_summary() == {}
+
+
+def test_discard_reports_drops_too(caplog):
+    """discard() is the ABRUPT path -- the bot died, the socket dropped, the
+    meeting was lost. That is the case where knowing what was discarded matters
+    most, and it was the one path that never reported."""
+
+    class DeadDecoder:
+        def decode(self, opus_frame_bytes):
+            return b""
+
+    class DeadAudio:
+        def make_decoder(self):
+            return DeadDecoder()
+
+    deps = _make_deps([FakeTranscriptionStream([])], audio=DeadAudio())
+    registry = SessionRegistry(deps)
+    session = registry.create("session-discard-drops", "guild-1")
+    session.feed("alice-id", "alice", b"real-opus-bytes", ts_ms=0)
+
+    with caplog.at_level("WARNING"):
+        session.discard()
+
+    joined = " ".join(r.message for r in caplog.records)
+    assert "undecodable_frame" in joined, f"an abrupt teardown reported nothing: {joined}"

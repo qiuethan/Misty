@@ -21,7 +21,7 @@ def create_app() -> FastAPI:
 
     get_key_store()  # fail fast on a malformed CONSUMER_KEYS at boot, not first request
 
-    logging.getLogger("meeting.audit").info(_SINGLE_INSTANCE_NOTE)
+    logging.getLogger(__name__).info(_SINGLE_INSTANCE_NOTE)
     app = FastAPI(
         title="UTMIST meeting",
         version="0.1.0",
