@@ -218,7 +218,6 @@ class _SpeakerBuffer:
             if anchor_offset > buffer_ms:
                 break
             offset, meeting_ts = anchor_offset, anchor_ts
-        # Never let the snap push a word before its own anchor.
         return meeting_ts + (buffer_ms - offset)
 
     def _map(self, words: list[dict], anchors: list[tuple[int, int]]) -> list[dict]:
