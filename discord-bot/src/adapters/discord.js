@@ -344,6 +344,12 @@ async function handleRecordInteraction(interaction, appContext, recordCommand) {
       return;
     }
     if (result.status === 'already-recording') await reply('Already recording.');
+    else if (result.status === 'error') {
+      // The join failed (missing Connect permission, full channel, timeout).
+      // Without this branch the failure fell through to "🔴 Recording…" --
+      // the exact false positive this change exists to remove.
+      await reply("Couldn't start recording — I couldn't join that voice channel.");
+    }
     else if (result.status === 'unconfigured') await reply("Meeting recording isn't configured.");
     else await reply('🔴 Recording…');
     return;
