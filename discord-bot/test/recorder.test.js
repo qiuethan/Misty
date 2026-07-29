@@ -205,31 +205,41 @@ test('a clock that jumps backwards never produces a negative timestamp', async (
   assert.doesNotThrow(() => Buffer.alloc(8).writeBigUInt64BE(BigInt(ts), 0));
 });
 
-test('speaker names come from voice states, not the (empty) member cache', async () => {
+test('an unidentified speaker gets a real name once the API answers', async () => {
+  // The transcript showed raw 18-digit snowflakes for anyone already in the
+  // channel when the bot joined: their voice_states entry carries no member
+  // object, so nothing is cached and every local lookup returns the userId.
+  // (A voice-state lookup is NOT an independent source -- VoiceState.member is
+  // a getter over guild.members.cache -- so only the fetch closes that gap.)
+  //
+  // The service takes a speaker's name from the LATEST control frame, so a late
+  // answer still fixes the name everywhere in the finished transcript.
   const clock = makeClock();
   const conn = makeConnection();
-  const sink = makeSink();
   const controls = [];
+  const sink = makeSink();
   sink.sendControl = (c) => controls.push(c);
 
-  const member = { displayName: 'Priya', user: { bot: false } };
+  let resolveFetch;
   const guild = {
-    id: 'g1',
-    voiceAdapterCreator: null,
-    // Empty, as it is in production: the bot does not request GuildMembers.
-    members: { cache: new Map() },
-    voiceStates: { cache: new Map([['u1', { member }]]) },
+    id: 'g1', voiceAdapterCreator: null,
+    members: { cache: new Map(), fetch: () => new Promise((r) => { resolveFetch = r; }) },
+    voiceStates: { cache: new Map([['u1', { member: null }]]) },
   };
   const recorder = createRecorder({
-    sink, now: clock.now, monotonic: clock.now, wait: clock.wait,
+    sink, monotonic: clock.now, wait: clock.wait,
     join: () => conn, ready: async () => {},
   });
   await recorder.start({ id: 'vc1', guild, client: { user: { id: 'bot' } } });
 
   conn.receiver.speaking.emit('start', 'u1');
+  assert.deepEqual(controls, [{ speakerId: 'u1', displayName: 'u1' }]);
 
-  assert.deepEqual(controls, [{ speakerId: 'u1', displayName: 'Priya' }],
-    'transcript would show a raw snowflake instead of a name');
+  resolveFetch({ user: { bot: false }, displayName: 'Priya' });
+  await new Promise((r) => setImmediate(r));
+
+  assert.deepEqual(controls.at(-1), { speakerId: 'u1', displayName: 'Priya' },
+    'the raw snowflake was never corrected');
 });
 
 test('the recorder never transcribes itself', async () => {
@@ -238,7 +248,7 @@ test('the recorder never transcribes itself', async () => {
   const sink = makeSink();
   const guild = { id: 'g1', voiceAdapterCreator: null, members: { cache: new Map() }, voiceStates: { cache: new Map() } };
   const recorder = createRecorder({
-    sink, now: clock.now, monotonic: clock.now, wait: clock.wait,
+    sink, monotonic: clock.now, wait: clock.wait,
     join: () => conn, ready: async () => {},
   });
   await recorder.start({ id: 'vc1', guild, client: { user: { id: 'bot-self' } } });
@@ -259,7 +269,7 @@ test('an unresolved user is captured, then dropped if they turn out to be a bot'
     voiceStates: { cache: new Map() },
   };
   const recorder = createRecorder({
-    sink, now: clock.now, monotonic: clock.now, wait: clock.wait,
+    sink, monotonic: clock.now, wait: clock.wait,
     join: () => conn, ready: async () => {},
   });
   await recorder.start({ id: 'vc1', guild, client: { user: { id: 'bot' } } });
@@ -273,4 +283,30 @@ test('an unresolved user is captured, then dropped if they turn out to be a bot'
   await new Promise((r) => setImmediate(r));
 
   assert.equal(conn.streams.get('u9'), undefined, 'a bot kept being transcribed and billed');
+});
+
+test('a bot dropped after the fetch stays dropped', async () => {
+  const clock = makeClock();
+  const conn = makeConnection();
+  let resolveFetch;
+  const guild = {
+    id: 'g1', voiceAdapterCreator: null,
+    members: { cache: new Map(), fetch: () => new Promise((r) => { resolveFetch = r; }) },
+    voiceStates: { cache: new Map() },
+  };
+  const recorder = createRecorder({
+    sink: makeSink(), monotonic: clock.now, wait: clock.wait,
+    join: () => conn, ready: async () => {},
+  });
+  await recorder.start({ id: 'vc1', guild, client: { user: { id: 'bot' } } });
+
+  conn.receiver.speaking.emit('start', 'u9');
+  resolveFetch({ user: { bot: true }, displayName: 'Groovy' });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(conn.streams.get('u9'), undefined);
+
+  // It speaks again. Clearing only the subscription let it back in, because
+  // knownSpeakers already had the id so neither the fetch nor the bot check ran.
+  conn.receiver.speaking.emit('start', 'u9');
+  assert.equal(conn.streams.get('u9'), undefined, 'the dropped bot re-subscribed');
 });

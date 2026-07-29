@@ -41,19 +41,31 @@ export function createRecorder({
   let connection = null;
   let startedAt = null;
   const knownSpeakers = new Set();
+  // Speakers refused after a fetch revealed a bot. Without this, dropSpeaker
+  // only clears the subscription: the next speaking event re-enters subscribe(),
+  // skips the control frame and the fetch (knownSpeakers already has the id),
+  // and re-subscribes -- so the music bot we just dropped keeps being
+  // transcribed and billed.
+  const refusedSpeakers = new Set();
   // userId -> the speaker's live receive stream, held open for the whole
   // meeting and torn down in stop().
   const subscriptions = new Map();
   let stopped = false;
   let lastPacketAt = 0;
 
-  // A member resolved from the reliable source first. `guild.members.cache` is
-  // only kept populated by the privileged GuildMembers intent, which this bot
-  // deliberately does not request -- so it is usually EMPTY and the old lookup
-  // fell through to the raw snowflake, printing 18-digit ids in the transcript.
-  // `guild.voiceStates.cache` is maintained by GuildVoiceStates (the same
-  // intent that powers voice receive) and carries the member for anyone in a
-  // voice channel.
+  // Resolve a cached member, if there is one.
+  //
+  // NOTE: `voiceStates.cache.get(id)?.member` is NOT an independent source --
+  // discord.js's VoiceState.member is a getter over `guild.members.cache`
+  // (structures/VoiceState.js), and both caches are filled from the same
+  // payload in the same handler (actions/VoiceStateUpdate.js). So this is one
+  // lookup with a fallback spelling, kept only because the voice-state route
+  // reads naturally here.
+  //
+  // What actually fixes raw snowflakes in the transcript is the members.fetch
+  // in subscribe(): the real gap is people already in the channel at
+  // GUILD_CREATE, whose voice_states entries carry no member object at all, so
+  // nothing is cached for them until we ask the API.
   function resolveMember(guild, userId) {
     return guild?.voiceStates?.cache?.get(userId)?.member
       ?? guild?.members?.cache?.get(userId)
@@ -122,6 +134,7 @@ export function createRecorder({
   // Stop capturing a speaker and release their stream (used when a late member
   // fetch reveals a bot).
   function dropSpeaker(userId) {
+    refusedSpeakers.add(userId);
     const opus = subscriptions.get(userId);
     subscriptions.delete(userId);
     try {
@@ -172,6 +185,7 @@ export function createRecorder({
 
       connection.receiver.speaking.on('start', (userId) => {
         if (selfId && userId === selfId) return;
+        if (refusedSpeakers.has(userId)) return;
         const member = resolveMember(guild, userId);
         // A KNOWN bot is skipped outright. An unknown user is subscribed
         // optimistically -- refusing would silently drop real people, since the
