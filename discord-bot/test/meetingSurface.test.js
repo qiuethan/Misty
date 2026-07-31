@@ -13,6 +13,8 @@ function makeFakes({ stopImpl, posterImpl } = {}) {
   const callOrder = [];
   const openStreamOpts = [];
 
+  const notifies = [];
+  const notify = async (n) => { notifies.push(n); };
   const stream = {
     endAudio: () => { callOrder.push('stream.endAudio'); },
     close: (...args) => {
@@ -70,6 +72,8 @@ function makeFakes({ stopImpl, posterImpl } = {}) {
     recorderStopCalls,
     posterCalls,
     callOrder,
+    notify,
+    notifies,
   };
 }
 
@@ -80,7 +84,7 @@ test('start opens a stream, starts the recorder, and returns recording + session
 
   const voiceChannel = { id: 'vc1' };
   const textChannel = { id: 'tc1' };
-  const result = surface.start({ guildId: 'g1', voiceChannel, textChannel });
+  const result = await surface.start({ guildId: 'g1', voiceChannel, textChannel });
 
   assert.deepEqual(result, { status: 'recording', sessionId: 'sess-1' });
   assert.equal(fakes.openStreamCalls.length, 1);
@@ -102,8 +106,8 @@ test('double start for the same guild returns already-recording and does not ope
 
   const voiceChannel = { id: 'vc1' };
   const textChannel = { id: 'tc1' };
-  const first = surface.start({ guildId: 'g1', voiceChannel, textChannel });
-  const second = surface.start({ guildId: 'g1', voiceChannel, textChannel });
+  const first = await surface.start({ guildId: 'g1', voiceChannel, textChannel });
+  const second = await surface.start({ guildId: 'g1', voiceChannel, textChannel });
 
   assert.equal(first.status, 'recording');
   assert.deepEqual(second, { status: 'already-recording' });
@@ -117,7 +121,7 @@ test('stop calls recorder.stop, stream.close, meetingClient.stop, then poster wi
 
   const voiceChannel = { id: 'vc1' };
   const textChannel = { id: 'tc1' };
-  surface.start({ guildId: 'g1', voiceChannel, textChannel, requesterId: 'u-99' });
+  await surface.start({ guildId: 'g1', voiceChannel, textChannel, requesterId: 'u-99' });
 
   const result = await surface.stop('g1');
 
@@ -162,7 +166,7 @@ test('a throwing meetingClient.stop clears the session (subsequent start succeed
 
   const voiceChannel = { id: 'vc1' };
   const textChannel = { id: 'tc1' };
-  surface.start({ guildId: 'g1', voiceChannel, textChannel });
+  await surface.start({ guildId: 'g1', voiceChannel, textChannel });
 
   const result = await surface.stop('g1');
   assert.deepEqual(result, { status: 'error' });
@@ -172,7 +176,7 @@ test('a throwing meetingClient.stop clears the session (subsequent start succeed
   assert.equal(fakes.closeCalls.length, 1);
 
   // session should be cleared: a fresh start for the same guild succeeds
-  const second = surface.start({ guildId: 'g1', voiceChannel, textChannel });
+  const second = await surface.start({ guildId: 'g1', voiceChannel, textChannel });
   assert.equal(second.status, 'recording');
 });
 
@@ -188,12 +192,12 @@ test('a throwing poster clears the session (subsequent start succeeds) and retur
 
   const voiceChannel = { id: 'vc1' };
   const textChannel = { id: 'tc1' };
-  surface.start({ guildId: 'g1', voiceChannel, textChannel });
+  await surface.start({ guildId: 'g1', voiceChannel, textChannel });
 
   const result = await surface.stop('g1');
   assert.deepEqual(result, { status: 'error' });
 
-  const second = surface.start({ guildId: 'g1', voiceChannel, textChannel });
+  const second = await surface.start({ guildId: 'g1', voiceChannel, textChannel });
   assert.equal(second.status, 'recording');
 });
 
@@ -207,7 +211,7 @@ test('status returns recording + elapsedMs while active, not-recording otherwise
 
   const voiceChannel = { id: 'vc1' };
   const textChannel = { id: 'tc1' };
-  surface.start({ guildId: 'g1', voiceChannel, textChannel });
+  await surface.start({ guildId: 'g1', voiceChannel, textChannel });
 
   t = 1500;
   const active = surface.status('g1');
@@ -224,7 +228,7 @@ test('a WS stream error tears down the session so a subsequent start for that gu
 
   const voiceChannel = { id: 'vc1' };
   const textChannel = { id: 'tc1' };
-  const result = surface.start({ guildId: 'g1', voiceChannel, textChannel });
+  const result = await surface.start({ guildId: 'g1', voiceChannel, textChannel });
   assert.equal(result.status, 'recording');
 
   // the surface must have passed an onError callback into openStream
@@ -240,47 +244,45 @@ test('a WS stream error tears down the session so a subsequent start for that gu
   assert.equal(fakes.closeCalls.length, 1);
 
   // and the guild's session slot must be free again
-  const second = surface.start({ guildId: 'g1', voiceChannel, textChannel });
+  const second = await surface.start({ guildId: 'g1', voiceChannel, textChannel });
   assert.equal(second.status, 'recording');
 });
 
-test('a rejected recorder.start clears the session (subsequent start for that guild succeeds)', async () => {
+test('a failed join reports error, not recording', async () => {
   const fakes = makeFakes();
-  fakes.recorder.start = async () => {
-    throw new Error('join failed');
-  };
+  fakes.recorder.start = async () => { throw new Error('join failed'); };
   const surface = createMeetingSurface({ ...fakes, genId: () => 'sess-1' });
 
   const originalError = console.error;
   console.error = () => {};
   try {
-    const result = surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
-    assert.equal(result.status, 'recording');
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
+    // Telling the user "🔴 Recording…" when the bot never joined means a
+    // missing Connect permission or a full channel looks like success, and they
+    // only discover the meeting was never captured at /record stop.
+    const result = await surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
+    assert.equal(result.status, 'error');
 
-    const second = surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
+    // ...and the guild is left clean, so they can just try again.
+    fakes.recorder.start = async () => {};
+    const second = await surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
     assert.equal(second.status, 'recording');
   } finally {
     console.error = originalError;
   }
 });
 
-test('a rejected recorder.start does not crash the process (logged via console.error)', async () => {
+test('a failed join is logged and never throws', async () => {
   const fakes = makeFakes();
-  fakes.recorder.start = async () => {
-    throw new Error('join failed');
-  };
+  fakes.recorder.start = async () => { throw new Error('join failed'); };
   const surface = createMeetingSurface({ ...fakes, genId: () => 'sess-1' });
 
   const originalError = console.error;
   const errors = [];
   console.error = (...args) => errors.push(args);
   try {
-    const result = surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
-    assert.equal(result.status, 'recording');
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
+    await assert.doesNotReject(() =>
+      surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } }),
+    );
     assert.ok(errors.length >= 1);
   } finally {
     console.error = originalError;
@@ -295,7 +297,7 @@ test('activeSession returns {sessionId, voiceChannel} while active and null othe
   const textChannel = { id: 'tc1' };
 
   assert.equal(surface.activeSession('g1'), null);
-  surface.start({ guildId: 'g1', voiceChannel, textChannel });
+  await surface.start({ guildId: 'g1', voiceChannel, textChannel });
   assert.deepEqual(surface.activeSession('g1'), { sessionId: 'sess-1', voiceChannel });
 
   await surface.stop('g1');
@@ -305,7 +307,7 @@ test('activeSession returns {sessionId, voiceChannel} while active and null othe
 test('stop signals end-of-audio after the recorder stops and before /stop', async () => {
   const fakes = makeFakes();
   const surface = createMeetingSurface({ ...fakes, genId: () => 'sess-1' });
-  surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
+  await surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
 
   await surface.stop('g1');
 
@@ -319,4 +321,86 @@ test('stop signals end-of-audio after the recorder stops and before /stop', asyn
     'client.stop',
     'stream.close',
   ]);
+});
+
+test('a WS error stops the recorder, not just the stream', async () => {
+  const fakes = makeFakes();
+  const surface = createMeetingSurface({ ...fakes, genId: () => 'sess-1' });
+  await surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
+  fakes.callOrder.length = 0;
+
+  fakes.openStreamOpts.at(-1).onError(new Error('socket died'));
+  await new Promise((r) => setImmediate(r));
+
+  // Closing the stream but leaving the voice connection up parks the bot in the
+  // channel: it keeps one receive stream open per speaker while /record status
+  // reports nothing recording, so only a restart can remove it.
+  assert.ok(fakes.callOrder.includes('recorder.stop'), `recorder not stopped: ${fakes.callOrder}`);
+  assert.ok(fakes.notifies.length >= 1, 'the channel was never told the recording died');
+});
+
+test('a clean WS close tears down too', async () => {
+  const fakes = makeFakes();
+  const surface = createMeetingSurface({ ...fakes, genId: () => 'sess-1' });
+  await surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
+  fakes.callOrder.length = 0;
+
+  // An auth rejection, a duplicate session, or a redeploy closes the socket
+  // with no error at all; frames after that are dropped silently.
+  fakes.openStreamOpts.at(-1).onClose();
+  await new Promise((r) => setImmediate(r));
+
+  assert.ok(fakes.callOrder.includes('recorder.stop'), `recorder not stopped: ${fakes.callOrder}`);
+  assert.equal(surface.status('g1').status, 'not-recording');
+});
+
+test('a stream that fails synchronously never registers a session', async () => {
+  // openStream can invoke onError before it returns (a bad URL, a transport
+  // that throws on construction). The teardown fires first, finds no session
+  // to key off, and no-ops -- so without a separate "was a teardown asked
+  // for?" flag, start() carried on and registered a session over an
+  // already-dead socket: /record status says recording, every frame is
+  // discarded, and only /record stop reveals it.
+  const fakes = makeFakes();
+  fakes.meetingClient.openStream = (sessionId, opts) => {
+    fakes.openStreamOpts.push(opts);
+    opts.onError(new Error('connect refused'));
+    return fakes.stream;
+  };
+  const surface = createMeetingSurface({ ...fakes, genId: () => 'sess-1' });
+
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    const result = await surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
+    assert.equal(result.status, 'error');
+  } finally {
+    console.error = originalError;
+  }
+
+  assert.equal(surface.status('g1').status, 'not-recording');
+  // The command reply already tells them it failed; a second "the recording
+  // stopped unexpectedly" notice for a recording that never began is noise.
+  assert.equal(fakes.notifies.length, 0, `spurious notice: ${JSON.stringify(fakes.notifies)}`);
+});
+
+test('a normal stop does not announce that the recording died', async () => {
+  // A REGRESSION GUARD, not a bug fix -- this already held. stop() deletes the
+  // session and then closes the stream, which fires onClose straight back into
+  // teardown; the sessionId check is what stops it there. The `tornDown` flag
+  // added above runs BEFORE that check, so it would be easy to widen teardown
+  // into posting "⚠️ the recording stopped unexpectedly" seconds after the
+  // minutes landed. Pin the behaviour so that stays impossible.
+  const fakes = makeFakes();
+  const surface = createMeetingSurface({ ...fakes, genId: () => 'sess-1' });
+  await surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
+
+  const result = await surface.stop('g1');
+  assert.equal(result.status, 'stopped');
+
+  fakes.openStreamOpts.at(-1).onClose();
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(fakes.notifies.length, 0, `told the user a completed meeting died: ${JSON.stringify(fakes.notifies)}`);
+  assert.equal(fakes.recorderStopCalls.length, 1, 'the recorder was stopped twice');
 });

@@ -273,6 +273,18 @@ export async function handleMention(message, { appContext, botId }) {
 // Only the minutes PDF is posted. The meeting service no longer returns mixed
 // audio at all (see services/meeting's StopResponse), so there's no second
 // attachment and no oversized-payload fallback to make.
+// Tells a meeting's text channel that its recording died on its own. Never
+// throws -- it runs inside teardown, which must complete regardless.
+export function makeChannelNotifier() {
+  return async ({ channel, content }) => {
+    try {
+      await channel?.send({ content });
+    } catch (e) {
+      console.error('meeting notice failed:', e.message);
+    }
+  };
+}
+
 export function makeAttachmentPoster() {
   return async ({ channel, report, requesterId }) => {
     try {
@@ -281,11 +293,15 @@ export function makeAttachmentPoster() {
       // any path that couldn't resolve one) => post unaddressed rather than
       // dropping the minutes.
       const content = requesterId ? `<@${requesterId}> 📄 Meeting minutes` : '📄 Meeting minutes';
-      await channel.send({ content, files: [pdfFile] }).catch((e) => {
-        console.error('meeting minutes post failed:', e.message);
-      });
+      // Deliberately NOT swallowed. The service session is destroyed the moment
+      // it responds, so if this send fails the minutes are gone for good --
+      // reporting success would tell the user "minutes will post here shortly"
+      // for a meeting that no longer exists anywhere. Let it propagate so
+      // /record stop reports an error and they know to look.
+      await channel.send({ content, files: [pdfFile] });
     } catch (e) {
-      console.error('meeting attachment poster failed:', e.message);
+      console.error('meeting minutes post failed:', e.message);
+      throw e;
     }
   };
 }
@@ -354,6 +370,12 @@ async function handleRecordInteraction(interaction, appContext, recordCommand) {
       return;
     }
     if (result.status === 'already-recording') await reply('Already recording.');
+    else if (result.status === 'error') {
+      // The join failed (missing Connect permission, full channel, timeout).
+      // Without this branch the failure fell through to "🔴 Recording…" --
+      // the exact false positive this change exists to remove.
+      await reply("Couldn't start recording — I couldn't join that voice channel.");
+    }
     else if (result.status === 'unconfigured') await reply("Meeting recording isn't configured.");
     else await reply('🔴 Recording…');
     return;
