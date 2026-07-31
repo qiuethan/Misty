@@ -9,6 +9,11 @@
     "healthcheckPath": "/health",
     "restartPolicyType": "ON_FAILURE",
     "overlapSeconds": 0,
-    "drainingSeconds": 30
+    "drainingSeconds": 30,
+    "multiRegionConfig": {
+      "us-east4-eqdc4a": {
+        "numReplicas": 1
+      }
+    }
   }
 }
