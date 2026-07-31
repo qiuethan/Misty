@@ -1,9 +1,19 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
-  "build": { "builder": "DOCKERFILE", "dockerfilePath": "services/meeting/Dockerfile" },
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "services/meeting/Dockerfile"
+  },
   "deploy": {
     "startCommand": "sh -c 'uvicorn src.api.app:app --host 0.0.0.0 --port ${PORT}'",
     "healthcheckPath": "/health",
-    "restartPolicyType": "ON_FAILURE"
+    "restartPolicyType": "ON_FAILURE",
+    "overlapSeconds": 0,
+    "drainingSeconds": 30,
+    "multiRegionConfig": {
+      "us-east4-eqdc4a": {
+        "numReplicas": 1
+      }
+    }
   }
 }
