@@ -404,3 +404,30 @@ test('a normal stop does not announce that the recording died', async () => {
   assert.equal(fakes.notifies.length, 0, `told the user a completed meeting died: ${JSON.stringify(fakes.notifies)}`);
   assert.equal(fakes.recorderStopCalls.length, 1, 'the recorder was stopped twice');
 });
+
+test('a permanently lost voice connection finalizes the meeting', async () => {
+  // The recorder detects the loss (a 4014 park, or retries exhausted) and calls
+  // onVoiceLost. Nothing used to pass that callback, so it defaulted to a no-op
+  // and the detection never left recorder.js: capture stopped, the session
+  // stayed open, and /record stop later returned a truncated transcript with no
+  // hint anything was missing.
+  //
+  // Audio already sent is safe -- the service has it -- so this FINALIZES
+  // rather than tearing down, and the user gets minutes for what was captured.
+  const fakes = makeFakes();
+  const surface = createMeetingSurface({ ...fakes, genId: () => 'sess-1' });
+  await surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
+
+  const { onVoiceLost } = fakes.makeRecorderCalls.at(-1);
+  assert.equal(typeof onVoiceLost, 'function', 'onVoiceLost was never wired to the recorder');
+
+  onVoiceLost();
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(fakes.posterCalls.length, 1, 'the captured audio never became minutes');
+  assert.equal(fakes.stopCalls.length, 1, 'the service session was never finalized');
+  assert.equal(surface.status('g1').status, 'not-recording');
+  // ...and they are told why the minutes stop where they do.
+  assert.match(fakes.notifies.at(0)?.content ?? '', /voice connection/i);
+});
