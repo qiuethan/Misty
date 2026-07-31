@@ -65,18 +65,35 @@ test('poster posts without a mention when the requester is unknown', async () =>
   assert.doesNotMatch(channel.calls[0].content, /<@/);
 });
 
-test('poster never throws even when every send rejects', async () => {
+test('a failed send surfaces instead of being swallowed', async () => {
+  // The service destroys the session as soon as it responds, so a failed send
+  // means the minutes are gone permanently. Swallowing it told the user
+  // "minutes will post here shortly" for a meeting that no longer exists.
   const poster = makeAttachmentPoster();
-  const channel = { send: async () => { throw new Error('down'); } };
-  await assert.doesNotReject(() =>
-    poster({ channel, report: { pdf_b64: Buffer.from('x').toString('base64') } }),
-  );
+  const channel = { send: async () => { throw new Error('missing permissions'); } };
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    await assert.rejects(
+      () => poster({ channel, report: { pdf_b64: Buffer.from('x').toString('base64') } }),
+      /missing permissions/,
+    );
+  } finally {
+    console.error = originalError;
+  }
 });
 
-test('poster never throws when the report is malformed (pdf_b64 missing)', async () => {
+test('a malformed report surfaces too', async () => {
+  // Same reasoning: no PDF reaches the channel, so /record stop must not report
+  // success.
   const poster = makeAttachmentPoster();
   const channel = fakeChannel();
-  await assert.doesNotReject(() => poster({ channel, report: {} }));
-  // No send should have succeeded since attachment construction failed.
-  assert.equal(channel.calls.length, 0);
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    await assert.rejects(() => poster({ channel, report: {} }));
+    assert.equal(channel.calls.length, 0);
+  } finally {
+    console.error = originalError;
+  }
 });
