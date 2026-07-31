@@ -9,6 +9,9 @@ const DRAIN_QUIET_MS = 250;
 // /record stop must not wait on them indefinitely.
 const DRAIN_MAX_MS = 2000;
 const DRAIN_POLL_MS = 50;
+// How long to wait for a dropped voice connection to show signs of coming back
+// before treating it as gone for good.
+const RECONNECT_PROBE_MS = 5000;
 
 export function createRecorder({
   sink,
@@ -23,22 +26,77 @@ export function createRecorder({
   monotonic = () => performance.now(),
   wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   join = joinVoiceChannel,
+  // Called when the voice connection is gone beyond recovery, so the surface
+  // can finalize what it has instead of leaving the user waiting.
+  onVoiceLost = () => {},
   ready = (connection) => entersState(connection, VoiceConnectionStatus.Ready, 20_000),
+  // Resolves if the connection is on its way back, rejects if it is gone. The
+  // canonical @discordjs/voice reconnect probe.
+  reconnecting = (connection) =>
+    Promise.race([
+      entersState(connection, VoiceConnectionStatus.Signalling, RECONNECT_PROBE_MS),
+      entersState(connection, VoiceConnectionStatus.Connecting, RECONNECT_PROBE_MS),
+    ]),
 }) {
   let connection = null;
   let startedAt = null;
   const knownSpeakers = new Set();
+  // Speakers refused after a fetch revealed a bot. Without this, dropSpeaker
+  // only clears the subscription: the next speaking event re-enters subscribe(),
+  // skips the control frame and the fetch (knownSpeakers already has the id),
+  // and re-subscribes -- so the music bot we just dropped keeps being
+  // transcribed and billed.
+  const refusedSpeakers = new Set();
   // userId -> the speaker's live receive stream, held open for the whole
   // meeting and torn down in stop().
   const subscriptions = new Map();
   let stopped = false;
   let lastPacketAt = 0;
 
-  function subscribe(userId, member) {
+  // Resolve a cached member, if there is one.
+  //
+  // NOTE: `voiceStates.cache.get(id)?.member` is NOT an independent source --
+  // discord.js's VoiceState.member is a getter over `guild.members.cache`
+  // (structures/VoiceState.js), and both caches are filled from the same
+  // payload in the same handler (actions/VoiceStateUpdate.js). So this is one
+  // lookup with a fallback spelling, kept only because the voice-state route
+  // reads naturally here.
+  //
+  // What actually fixes raw snowflakes in the transcript is the members.fetch
+  // in subscribe(): the real gap is people already in the channel at
+  // GUILD_CREATE, whose voice_states entries carry no member object at all, so
+  // nothing is cached for them until we ask the API.
+  function resolveMember(guild, userId) {
+    return guild?.voiceStates?.cache?.get(userId)?.member
+      ?? guild?.members?.cache?.get(userId)
+      ?? null;
+  }
+
+  function nameFor(member, userId) {
+    return member?.displayName ?? member?.user?.username ?? userId;
+  }
+
+  function subscribe(userId, member, guild) {
     if (!knownSpeakers.has(userId)) {
       knownSpeakers.add(userId);
-      const displayName = member?.displayName ?? member?.user?.username ?? userId;
-      sink.sendControl({ speakerId: userId, displayName });
+      sink.sendControl({ speakerId: userId, displayName: nameFor(member, userId) });
+
+      // Still unidentified: ask the API. The service takes the display name off
+      // the LATEST control frame for a speaker, so a late answer still fixes
+      // the name everywhere in the finished transcript.
+      if (!member && guild?.members?.fetch) {
+        Promise.resolve(guild.members.fetch(userId))
+          .then((fetched) => {
+            if (!fetched) return;
+            if (fetched.user?.bot) {
+              // It was a bot after all -- stop transcribing (and paying for) it.
+              dropSpeaker(userId);
+              return;
+            }
+            sink.sendControl({ speakerId: userId, displayName: nameFor(fetched, userId) });
+          })
+          .catch((e) => console.error(`recorder: could not resolve member ${userId}:`, e.message));
+      }
     }
     // `receiver.subscribe` returns the same open AudioReceiveStream if one is
     // already active for this userId. Skip re-subscribing so we don't attach
@@ -73,6 +131,19 @@ export function createRecorder({
     opus.once('close', clearActive);
   }
 
+  // Stop capturing a speaker and release their stream (used when a late member
+  // fetch reveals a bot).
+  function dropSpeaker(userId) {
+    refusedSpeakers.add(userId);
+    const opus = subscriptions.get(userId);
+    subscriptions.delete(userId);
+    try {
+      opus?.destroy();
+    } catch (err) {
+      console.error(`recorder: failed to drop speaker ${userId}:`, err.message);
+    }
+  }
+
   return {
     async start(voiceChannel) {
       connection = join({
@@ -90,10 +161,38 @@ export function createRecorder({
         throw e;
       }
       startedAt = monotonic();
+      const guild = voiceChannel.guild;
+      // Never record ourselves. This is the one identity we can always resolve,
+      // so it must not depend on the member cache.
+      const selfId = voiceChannel.client?.user?.id ?? guild?.members?.me?.id;
+
+      // A voice connection can drop mid-meeting. On close code 4014 the library
+      // parks in Disconnected forever and waits for the application to act; on
+      // other codes it retries with an unbounded attempt count the application
+      // is expected to cap. Neither was handled, so capture simply stopped and
+      // /record stop returned a truncated transcript with no hint anything was
+      // missing.
+      connection.on?.(VoiceConnectionStatus.Disconnected, () => {
+        Promise.resolve(reconnecting(connection))
+          .then(() => {
+            console.error('recorder: voice connection dropped, reconnecting');
+          })
+          .catch(() => {
+            console.error('recorder: voice connection lost for good; capture has stopped');
+            onVoiceLost();
+          });
+      });
+
       connection.receiver.speaking.on('start', (userId) => {
-        const member = voiceChannel.guild.members.cache.get(userId);
+        if (selfId && userId === selfId) return;
+        if (refusedSpeakers.has(userId)) return;
+        const member = resolveMember(guild, userId);
+        // A KNOWN bot is skipped outright. An unknown user is subscribed
+        // optimistically -- refusing would silently drop real people, since the
+        // member cache is usually empty -- and dropped later if the fetch above
+        // reveals a bot.
         if (member?.user?.bot) return;
-        subscribe(userId, member);
+        subscribe(userId, member, guild);
       });
     },
     async stop() {

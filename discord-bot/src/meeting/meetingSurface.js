@@ -89,7 +89,24 @@ export function createMeetingSurface({
       await Promise.resolve(stream?.close()).catch(() => {});
       return { status: 'error' };
     }
-    recorder = makeRecorder({ sink: stream });
+    recorder = makeRecorder({
+      sink: stream,
+      // The voice connection is gone for good (a 4014 park, or retries
+      // exhausted). Audio already sent is fine -- the service has it -- so
+      // FINALIZE rather than tear down: stop() posts minutes for what was
+      // captured. Doing nothing meant capture silently stopped and /record stop
+      // returned a truncated transcript with no hint anything was missing.
+      onVoiceLost: () => {
+        if (sessions.get(guildId)?.sessionId !== sessionId) return;
+        notify({
+          channel: textChannel,
+          content: '⚠️ I lost the voice connection. Wrapping up the recording — the minutes will cover everything up to that point.',
+        }).catch((err) => console.error('meetingSurface: voice-lost notify failed:', err));
+        stop(guildId).catch((err) => {
+          console.error(`meetingSurface: finalize after voice loss failed for guild ${guildId}:`, err);
+        });
+      },
+    });
 
     // Register BEFORE awaiting the join, so a teardown firing mid-join can
     // actually find the session and tear it down (it keys off sessionId).
