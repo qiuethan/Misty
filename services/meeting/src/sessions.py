@@ -112,7 +112,6 @@ _PCM_BYTES_PER_MS = 32
 _ANCHOR_GAP_TOLERANCE_MS = 200
 
 
-
 class _SpeakerBuffer:
     def __init__(self, display_name: str, stream, decoder):
         self.display_name = display_name

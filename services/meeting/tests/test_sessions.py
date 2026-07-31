@@ -859,4 +859,3 @@ def test_feed_is_still_refused_after_the_audio_barrier_passes():
     session.feed("bob-id", "bob", _pcm(20), ts_ms=0)
 
     assert len(stream.sent) == before
-
