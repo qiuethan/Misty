@@ -26,7 +26,16 @@ export function createMeetingSurface({
     }
 
     const sessionId = genId();
+    // Both are read by teardown, which openStream can invoke before either has
+    // been assigned -- hence `let ... = null` rather than a const below.
     let recorder = null;
+    let stream = null;
+    // A teardown can land BEFORE the session is registered (openStream may fail
+    // synchronously). The sessionId guard alone no-ops there, and start() would
+    // go on to register a session over an already-dead stream, so track the
+    // request itself.
+    let tornDown = false;
+    let registered = false;
 
     // Idempotent teardown: if the guild's session has already been removed
     // (e.g. a normal stop() raced us, or this fires twice), this is a no-op.
@@ -37,25 +46,36 @@ export function createMeetingSurface({
     // nothing is recording and /record stop answer "no recording in progress"
     // -- so nothing short of a restart can remove it.
     const teardown = async (reason) => {
-      if (sessions.get(guildId)?.sessionId !== sessionId) return;
-      sessions.delete(guildId);
+      if (tornDown) return;
+      // Once registered, only the registered owner may tear down. A normal
+      // stop() deletes the session and then closes the stream, which fires
+      // onClose right back at us -- running on would stop an already-stopped
+      // recorder and tell the channel the recording "died" seconds after its
+      // minutes posted.
+      if (registered && sessions.get(guildId)?.sessionId !== sessionId) return;
+      tornDown = true;
+      const wasRegistered = registered;
+      if (wasRegistered) sessions.delete(guildId);
       try {
         if (recorder) await recorder.stop();
       } catch (err) {
         console.error(`meetingSurface: error stopping recorder during teardown for guild ${guildId}:`, err);
       }
       try {
-        await stream.close();
+        if (stream) await stream.close();
       } catch (err) {
         console.error(`meetingSurface: error closing stream during teardown for guild ${guildId}:`, err);
       }
+      // Nothing to announce if the recording never started: start() returns
+      // 'error' and the command reply already says so.
+      if (!wasRegistered) return;
       await notify({
         channel: textChannel,
         content: `⚠️ The recording stopped unexpectedly (${reason}) and no minutes will be posted.`,
       }).catch((err) => console.error(`meetingSurface: teardown notify failed:`, err));
     };
 
-    const stream = meetingClient.openStream(sessionId, {
+    stream = meetingClient.openStream(sessionId, {
       guildId,
       onError: () => teardown('connection error'),
       // A clean close counts too: an auth rejection, a duplicate session, or a
@@ -63,7 +83,13 @@ export function createMeetingSurface({
       // after that is silently discarded by the client.
       onClose: () => teardown('connection closed'),
     });
-    recorder = makeRecorder({ sink: stream, now });
+    // openStream failed synchronously and teardown already ran -- but with no
+    // `stream` to close yet, so close it here rather than registering it.
+    if (tornDown) {
+      await Promise.resolve(stream?.close()).catch(() => {});
+      return { status: 'error' };
+    }
+    recorder = makeRecorder({ sink: stream });
 
     // Register BEFORE awaiting the join, so a teardown firing mid-join can
     // actually find the session and tear it down (it keys off sessionId).
@@ -76,6 +102,7 @@ export function createMeetingSurface({
       requesterId,
       startedAt: now(),
     });
+    registered = true;
 
     // AWAIT the join. Returning "recording" before the voice connection is up
     // means a missing Connect permission, a full channel, or a 20s timeout is

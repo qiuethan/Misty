@@ -12,12 +12,14 @@ const DRAIN_POLL_MS = 50;
 
 export function createRecorder({
   sink,
-  now = Date.now,
-  // Frame timestamps must come from a MONOTONIC clock. Date.now() goes
-  // backwards on an NTP correction, which makes ts_ms negative -- and
-  // writeBigUInt64BE then throws a RangeError inside the opus 'data' handler,
-  // where nothing catches it and the bot has no uncaughtException handler.
-  // A backwards jump would also corrupt anchoring on the service side.
+  // Every time the recorder measures is an ELAPSED duration -- frame
+  // timestamps, the drain deadline -- so all of them read this clock, and it
+  // must be MONOTONIC. Date.now() goes backwards on an NTP correction, which
+  // makes ts_ms negative, and writeBigUInt64BE then throws a RangeError inside
+  // the opus 'data' handler, where nothing catches it and the bot has no
+  // uncaughtException handler. A backwards jump would also corrupt anchoring on
+  // the service side. (There is deliberately no wall-clock `now` here: the
+  // recorder has nothing to date, only intervals to measure.)
   monotonic = () => performance.now(),
   wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   join = joinVoiceChannel,

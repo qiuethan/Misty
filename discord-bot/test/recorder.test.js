@@ -52,7 +52,6 @@ function makeSink() {
 async function startedRecorder(clock, conn, sink) {
   const recorder = createRecorder({
     sink,
-    now: clock.now,
     monotonic: clock.now,
     wait: clock.wait,
     join: () => conn,
@@ -191,7 +190,7 @@ test('a clock that jumps backwards never produces a negative timestamp', async (
   const conn = makeConnection();
   const sink = makeSink();
   const recorder = createRecorder({
-    sink, now: clock.now, monotonic: clock.now, wait: clock.wait,
+    sink, monotonic: clock.now, wait: clock.wait,
     join: () => conn, ready: async () => {},
   });
   await recorder.start({ id: 'vc1', guild: { id: 'g1', voiceAdapterCreator: null, members: { cache: new Map() } } });

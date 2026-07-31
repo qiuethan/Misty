@@ -353,3 +353,54 @@ test('a clean WS close tears down too', async () => {
   assert.ok(fakes.callOrder.includes('recorder.stop'), `recorder not stopped: ${fakes.callOrder}`);
   assert.equal(surface.status('g1').status, 'not-recording');
 });
+
+test('a stream that fails synchronously never registers a session', async () => {
+  // openStream can invoke onError before it returns (a bad URL, a transport
+  // that throws on construction). The teardown fires first, finds no session
+  // to key off, and no-ops -- so without a separate "was a teardown asked
+  // for?" flag, start() carried on and registered a session over an
+  // already-dead socket: /record status says recording, every frame is
+  // discarded, and only /record stop reveals it.
+  const fakes = makeFakes();
+  fakes.meetingClient.openStream = (sessionId, opts) => {
+    fakes.openStreamOpts.push(opts);
+    opts.onError(new Error('connect refused'));
+    return fakes.stream;
+  };
+  const surface = createMeetingSurface({ ...fakes, genId: () => 'sess-1' });
+
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    const result = await surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
+    assert.equal(result.status, 'error');
+  } finally {
+    console.error = originalError;
+  }
+
+  assert.equal(surface.status('g1').status, 'not-recording');
+  // The command reply already tells them it failed; a second "the recording
+  // stopped unexpectedly" notice for a recording that never began is noise.
+  assert.equal(fakes.notifies.length, 0, `spurious notice: ${JSON.stringify(fakes.notifies)}`);
+});
+
+test('a normal stop does not announce that the recording died', async () => {
+  // A REGRESSION GUARD, not a bug fix -- this already held. stop() deletes the
+  // session and then closes the stream, which fires onClose straight back into
+  // teardown; the sessionId check is what stops it there. The `tornDown` flag
+  // added above runs BEFORE that check, so it would be easy to widen teardown
+  // into posting "⚠️ the recording stopped unexpectedly" seconds after the
+  // minutes landed. Pin the behaviour so that stays impossible.
+  const fakes = makeFakes();
+  const surface = createMeetingSurface({ ...fakes, genId: () => 'sess-1' });
+  await surface.start({ guildId: 'g1', voiceChannel: { id: 'vc1' }, textChannel: { id: 'tc1' } });
+
+  const result = await surface.stop('g1');
+  assert.equal(result.status, 'stopped');
+
+  fakes.openStreamOpts.at(-1).onClose();
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(fakes.notifies.length, 0, `told the user a completed meeting died: ${JSON.stringify(fakes.notifies)}`);
+  assert.equal(fakes.recorderStopCalls.length, 1, 'the recorder was stopped twice');
+});
