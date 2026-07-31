@@ -225,3 +225,20 @@ def test_non_string_list_entries_are_dropped_not_stringified():
     m = summarize_minutes("x", FakeLlm('{"summary":"x","decisions":[{"a":"b","c":"d'))
 
     assert m.decisions == [], f"got a stringified object: {m.decisions}"
+
+
+def test_an_enormous_transcript_is_bounded_before_the_llm_call():
+    """A multi-hour meeting can overflow the model's context, which fails the
+    call outright -- and LlmUnavailable renders "(minutes unavailable)", strictly
+    worse than minutes drawn from most of the meeting."""
+    from src.pipeline.minutes import MAX_TRANSCRIPT_CHARS
+
+    llm = FakeLlm('{"summary":"s"}')
+    huge = "[00:00] alice: hello\n" * 40_000
+    assert len(huge) > MAX_TRANSCRIPT_CHARS
+
+    summarize_minutes(huge, llm)
+
+    sent = llm.calls[0]["messages"][-1]["content"]
+    assert len(sent) < MAX_TRANSCRIPT_CHARS + 500
+    assert "omitted" in sent
