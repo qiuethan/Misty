@@ -9,8 +9,12 @@ from src.config import verify_production_secrets
 _SINGLE_INSTANCE_NOTE = (
     "meeting holds every live session in process memory: a session's WebSocket, "
     "/transcript polls and /stop MUST all reach the same process. Run exactly one "
-    "instance -- one replica, one uvicorn worker, and overlapSeconds=0 so a "
-    "redeploy does not briefly run two."
+    "instance -- one replica, one uvicorn worker. Replica count and region are "
+    "dashboard settings; railway.json pins only overlapSeconds=0, so a redeploy "
+    "never briefly runs two. NOTE that this does not make a redeploy safe: the "
+    "outgoing process keeps its sessions in memory while it drains, but routing "
+    "has already moved on, so any meeting in progress loses its /stop and its "
+    "minutes. Redeploy between meetings until sessions live outside the process."
 )
 
 
