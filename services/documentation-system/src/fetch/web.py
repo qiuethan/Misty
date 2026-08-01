@@ -12,6 +12,11 @@ _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 _TIMEOUT = httpx.Timeout(5.0)
 
+# Full extracted text is capped only to guard against pathological pages; the
+# snapshot stays at the historical preview length and is sliced from that text.
+MAX_CONTENT_CHARS = 1_000_000
+SNAPSHOT_CHARS = 2000
+
 # SSRF egress protection.
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 _MAX_REDIRECTS = 5
@@ -39,7 +44,7 @@ def parse_title(html: str) -> str | None:
     return title or None
 
 
-def extract_text(html: str, limit: int = 2000) -> str:
+def extract_text(html: str, limit: int = MAX_CONTENT_CHARS) -> str:
     stripped = _TAG_RE.sub(" ", html)
     text = _WS_RE.sub(" ", stripped).strip()
     return text[:limit]
@@ -167,9 +172,14 @@ class WebFetcher:
                     current = str(httpx.URL(current).join(location))
                     continue
                 resp.raise_for_status()
+                text = extract_text(resp.text)
                 return FetchResult(
                     title=parse_title(resp.text),
-                    content_snapshot=extract_text(resp.text),
+                    # `content` is None for an empty page so ingest skips the
+                    # doc_content upsert entirely; the snapshot stays a plain
+                    # str (possibly "") to preserve today's response shape.
+                    content=text or None,
+                    content_snapshot=text[:SNAPSHOT_CHARS],
                 )
             raise FetchError(f"web fetch failed: too many redirects (>{_MAX_REDIRECTS})")
         except (httpx.HTTPError, httpx.InvalidURL, ValueError) as e:

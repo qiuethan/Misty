@@ -6,7 +6,8 @@ from pydantic import BaseModel, ConfigDict
 class FetchResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str | None = None
-    content_snapshot: str | None = None
+    content: str | None = None  # full extracted text (may be large)
+    content_snapshot: str | None = None  # bounded preview, derived from content
 
 
 class FetchError(Exception):

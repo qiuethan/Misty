@@ -4,7 +4,7 @@ import pytest
 from contracts.fetcher import FetchError
 from src.fetch.github import GithubFetcher, parse_github_title
 from src.fetch.registry import FetchUnsupported, FetcherRegistry
-from src.fetch.web import WebFetcher, extract_text, parse_title
+from src.fetch.web import WebFetcher, extract_text, parse_title, MAX_CONTENT_CHARS, SNAPSHOT_CHARS
 
 
 def test_parse_title_from_html():
@@ -48,3 +48,22 @@ def test_registry_routes_by_source_and_rejects_unknown():
     assert reg.fetch_for("github", "https://github.com/a/b").title == "a/b"
     with pytest.raises(FetchUnsupported):
         reg.fetch_for("web", "https://x.com")
+
+
+def test_web_fetcher_returns_full_content_and_bounded_snapshot():
+    body = "<html><title>T</title><body>" + ("word " * 2000) + "</body></html>"
+
+    def handler(request):
+        return httpx.Response(200, html=body)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    result = WebFetcher(client=client).fetch("https://93.184.216.34")
+    assert result.content is not None
+    assert len(result.content) > SNAPSHOT_CHARS
+    assert len(result.content_snapshot) == SNAPSHOT_CHARS
+    assert result.content.startswith(result.content_snapshot)
+
+
+def test_extract_text_caps_at_max_content_chars():
+    huge = "<p>" + ("x" * (MAX_CONTENT_CHARS + 5000)) + "</p>"
+    assert len(extract_text(huge)) == MAX_CONTENT_CHARS
