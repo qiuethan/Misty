@@ -3,7 +3,7 @@ import json
 import pytest
 
 from src.api.hashing import generate_key, parse_prefix, verify_key
-from src.key_store import InMemoryKeyStore, key_store_from_config
+from platform_auth import InMemoryKeyStore, key_store_from_config
 
 
 def test_add_and_lookup_by_prefix():
