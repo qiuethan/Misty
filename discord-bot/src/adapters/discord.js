@@ -172,9 +172,34 @@ const LLM_UNAVAILABLE = "I'm having trouble reaching the assistant right now —
 const EMPTY_ANSWER = "I couldn't come up with an answer that time — please try rephrasing.";
 const THREAD_UNAVAILABLE = "I couldn't open a thread for that — please try again. (I may be missing the 'Create Public Threads' or 'Read Message History' permission.)";
 
+// The message a thread was started from lives in the PARENT channel, not the
+// thread — ThreadChannel#fetchStarterMessage reads it from `parent` unless the
+// parent is thread-only (a forum), where the starter really is the thread's
+// first message. So a thread's own fetch omits the opening question, and since
+// the bot's first answer then leads the history, the leading-assistant shave
+// dropped that too: the founding exchange was missing from every replay.
+//
+// Mutates `ordered` in place, prepending the starter when it isn't already
+// there. Best-effort — a deleted or unreachable starter costs context, never
+// the answer, so this never throws into handleMention's THREAD_UNAVAILABLE path.
+async function prependStarterMessage(thread, ordered) {
+  let starter;
+  try {
+    starter = await thread.fetchStarterMessage?.();
+  } catch (e) {
+    console.error('starter message fetch failed:', e.message);
+    return;
+  }
+  if (!starter) return;
+  // Forum threads return a starter already present in the fetch. Compare only
+  // when both ids exist, so two id-less messages don't collapse into one.
+  if (starter.id && ordered.some((m) => m.id && m.id === starter.id)) return;
+  ordered.unshift(starter);
+}
+
 // Handle a message that starts with the bot's mention. Linked-only. In a
-// channel it opens a thread; in a thread it replays the thread's history as
-// memory. Never throws to discord.js.
+// channel it opens a thread; in a thread it replays the thread's history —
+// including the starter message — as memory. Never throws to discord.js.
 export async function handleMention(message, { appContext, botId }) {
   const question = stripLeadingMention(message.content, botId);
   if (!question) return; // bare ping, nothing to answer
@@ -203,6 +228,7 @@ export async function handleMention(message, { appContext, botId }) {
       const ordered = [...fetched.values()].sort(
         (a, b) => (a.createdTimestamp ?? 0) - (b.createdTimestamp ?? 0),
       );
+      await prependStarterMessage(target, ordered);
       turns = threadHistoryToTurns(ordered, botId);
     } else {
       target = await message.startThread({ name: question.slice(0, 100) });
@@ -247,6 +273,18 @@ export async function handleMention(message, { appContext, botId }) {
 // Only the minutes PDF is posted. The meeting service no longer returns mixed
 // audio at all (see services/meeting's StopResponse), so there's no second
 // attachment and no oversized-payload fallback to make.
+// Tells a meeting's text channel that its recording died on its own. Never
+// throws -- it runs inside teardown, which must complete regardless.
+export function makeChannelNotifier() {
+  return async ({ channel, content }) => {
+    try {
+      await channel?.send({ content });
+    } catch (e) {
+      console.error('meeting notice failed:', e.message);
+    }
+  };
+}
+
 export function makeAttachmentPoster() {
   return async ({ channel, report, requesterId }) => {
     try {
@@ -255,11 +293,15 @@ export function makeAttachmentPoster() {
       // any path that couldn't resolve one) => post unaddressed rather than
       // dropping the minutes.
       const content = requesterId ? `<@${requesterId}> 📄 Meeting minutes` : '📄 Meeting minutes';
-      await channel.send({ content, files: [pdfFile] }).catch((e) => {
-        console.error('meeting minutes post failed:', e.message);
-      });
+      // Deliberately NOT swallowed. The service session is destroyed the moment
+      // it responds, so if this send fails the minutes are gone for good --
+      // reporting success would tell the user "minutes will post here shortly"
+      // for a meeting that no longer exists anywhere. Let it propagate so
+      // /record stop reports an error and they know to look.
+      await channel.send({ content, files: [pdfFile] });
     } catch (e) {
-      console.error('meeting attachment poster failed:', e.message);
+      console.error('meeting minutes post failed:', e.message);
+      throw e;
     }
   };
 }
@@ -328,6 +370,12 @@ async function handleRecordInteraction(interaction, appContext, recordCommand) {
       return;
     }
     if (result.status === 'already-recording') await reply('Already recording.');
+    else if (result.status === 'error') {
+      // The join failed (missing Connect permission, full channel, timeout).
+      // Without this branch the failure fell through to "🔴 Recording…" --
+      // the exact false positive this change exists to remove.
+      await reply("Couldn't start recording — I couldn't join that voice channel.");
+    }
     else if (result.status === 'unconfigured') await reply("Meeting recording isn't configured.");
     else await reply('🔴 Recording…');
     return;

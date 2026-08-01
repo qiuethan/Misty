@@ -20,6 +20,12 @@ PRONUNCIATION_ITEM_TYPE = "pronunciation"
 # How long aclose() waits for AWS to flush its final results after end_stream().
 FINAL_FLUSH_TIMEOUT_S = 15
 
+# Opening a Transcribe session has no timeout of its own. Without this a hung
+# connect blocks the pump, aclose()'s `await self._task` never returns, and
+# MeetingSession.stop() -- which has no timeout either -- hangs with it, leaving
+# the session registered and the meeting unfinalized.
+SESSION_CONNECT_TIMEOUT_S = 20
+
 # Consecutive AWS sessions that may end without accepting any audio before we
 # stop reopening for this speaker (prevents a hot reopen loop).
 _MAX_BARREN_SESSIONS = 3
@@ -245,13 +251,25 @@ class _StreamingTranscription:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 -- a dead stream must not kill the meeting
-                # NOT terminal. AWS throttles, drops connections, and returns
-                # transient errors; giving up here would silently disable this
-                # speaker for the rest of the meeting after a single blip.
-                # The audio in flight is lost (it may have been partly sent),
-                # but the next chunk opens a fresh session.
-                failures += 1
                 pending.clear()
+
+                # A session that ACCEPTED audio and then raised is not a
+                # failure: that is how AWS ends an idle session. Transcribe
+                # surfaces "no new audio was received for 15 seconds" by raising
+                # out of the output stream rather than closing it, and because
+                # this design only ever sends speech (silence is never
+                # buffered), every pause longer than that ends a session exactly
+                # this way. Counting them meant a participant who paused three
+                # times was dropped for the REST of the meeting -- their opening
+                # remarks transcribed and nothing after.
+                if self._delivered_bytes > delivered_before:
+                    _logger.debug("Transcribe session ended after delivering audio: %s", exc)
+                    failures = 0
+                    continue
+
+                # Raised WITHOUT taking any audio -- genuinely broken (connect
+                # refused, throttled, credentials). Those do count.
+                failures += 1
                 if failures >= _MAX_SESSION_FAILURES:
                     _logger.warning(
                         "transcription failed %s times in a row (%s); giving up on this "
@@ -301,10 +319,13 @@ class _StreamingTranscription:
         # ``_sent_bytes``, which also counts audio still sitting in the queue
         # and about to go through THIS session at its own relative time zero.
         sent_bytes_at_stream_start = self._delivered_bytes
-        stream = await client.start_stream_transcription(
-            language_code=LANGUAGE_CODE,
-            media_sample_rate_hz=self._sample_rate,
-            media_encoding=MEDIA_ENCODING,
+        stream = await asyncio.wait_for(
+            client.start_stream_transcription(
+                language_code=LANGUAGE_CODE,
+                media_sample_rate_hz=self._sample_rate,
+                media_encoding=MEDIA_ENCODING,
+            ),
+            SESSION_CONNECT_TIMEOUT_S,
         )
         offset_ms = sent_bytes_at_stream_start // self._bytes_per_ms
 

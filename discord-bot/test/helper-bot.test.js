@@ -75,7 +75,10 @@ test('chunkForDiscord hard-splits a single oversized line', () => {
 const BOT_ID = '999';
 
 // Fake channel/thread: records sent messages + typing; can be a thread or not.
-function fakeChannel({ isThread = false, history = [] } = {}) {
+// `starter` models ThreadChannel#fetchStarterMessage: the message the thread was
+// opened from, which for a text-channel thread lives in the parent channel and
+// is therefore absent from `history`. `starterThrows` models a deleted one.
+function fakeChannel({ isThread = false, history = [], starter, starterThrows = false } = {}) {
   const sent = [];
   const fetched = [];
   return {
@@ -85,6 +88,10 @@ function fakeChannel({ isThread = false, history = [] } = {}) {
     isThread: () => isThread,
     async send(content) { sent.push(content); },
     async sendTyping() { this.typing += 1; },
+    async fetchStarterMessage() {
+      if (starterThrows) throw new Error('unknown message');
+      return starter ?? null;
+    },
     messages: { fetch: async (opts) => { fetched.push(opts); return { values: () => history }; } },
   };
 }
@@ -150,6 +157,69 @@ test('handleMention in a thread: every speaker reaches the service separately at
     ['user', '2'],
     ['user', '3'],
   ]);
+});
+
+test('handleMention in a thread: replays the starter message that lives in the parent channel', async () => {
+  let seen;
+  const answer = async ({ turns }) => { seen = turns; return { content: 'reply' }; };
+  // The founding question isn't in the thread's own fetch — only the bot's
+  // answer and what came after.
+  const starter = { id: 's1', author: { id: '1', username: 'alexx' }, content: `<@${BOT_ID}> how do I get repo access?` };
+  const history = [
+    { id: 'm1', author: { id: BOT_ID, username: 'misty' }, content: 'Ask Infra.' },
+    { id: 'm2', author: { id: '1', username: 'alexx' }, content: `<@${BOT_ID}> and for staging?` },
+  ];
+  const thread = fakeChannel({ isThread: true, history, starter });
+  const message = fakeMessage({ content: `<@${BOT_ID}> and for staging?`, channel: thread });
+  await handleMention(message, { appContext: ctx({ answer }), botId: BOT_ID });
+
+  assert.deepEqual(seen.map((t) => t.text), [
+    'how do I get repo access?', // would have been lost entirely
+    'Ask Infra.', // and this with it, as a leading assistant turn
+    'and for staging?',
+  ]);
+  assert.equal(seen[0].authorId, '1', 'starter keeps its author attribution');
+});
+
+test('handleMention in a thread: a starter already in the fetch is not duplicated', async () => {
+  let seen;
+  const answer = async ({ turns }) => { seen = turns; return { content: 'reply' }; };
+  // Forum threads return a starter that IS the thread's first message.
+  const starter = { id: 'm1', author: { id: '1', username: 'alexx' }, content: `<@${BOT_ID}> first post` };
+  const history = [
+    starter,
+    { id: 'm2', author: { id: BOT_ID, username: 'misty' }, content: 'an answer' },
+    { id: 'm3', author: { id: '1', username: 'alexx' }, content: `<@${BOT_ID}> follow up` },
+  ];
+  const thread = fakeChannel({ isThread: true, history, starter });
+  const message = fakeMessage({ content: `<@${BOT_ID}> follow up`, channel: thread });
+  await handleMention(message, { appContext: ctx({ answer }), botId: BOT_ID });
+
+  assert.deepEqual(seen.map((t) => t.text), ['first post', 'an answer', 'follow up']);
+});
+
+test('handleMention in a thread: a deleted starter costs context, not the answer', async () => {
+  let seen;
+  const answer = async ({ turns }) => { seen = turns; return { content: 'reply' }; };
+  const history = [{ id: 'm1', author: { id: '1', username: 'alexx' }, content: `<@${BOT_ID}> follow up` }];
+  const thread = fakeChannel({ isThread: true, history, starterThrows: true });
+  const message = fakeMessage({ content: `<@${BOT_ID}> follow up`, channel: thread });
+  await handleMention(message, { appContext: ctx({ answer }), botId: BOT_ID });
+
+  assert.deepEqual(thread.sent, ['reply'], 'still answers');
+  assert.deepEqual(seen.map((t) => t.text), ['follow up']);
+});
+
+test('handleMention in a thread: survives a channel with no fetchStarterMessage', async () => {
+  let seen;
+  const answer = async ({ turns }) => { seen = turns; return { content: 'reply' }; };
+  const history = [{ id: 'm1', author: { id: '1', username: 'alexx' }, content: `<@${BOT_ID}> follow up` }];
+  const thread = fakeChannel({ isThread: true, history });
+  delete thread.fetchStarterMessage;
+  const message = fakeMessage({ content: `<@${BOT_ID}> follow up`, channel: thread });
+  await handleMention(message, { appContext: ctx({ answer }), botId: BOT_ID });
+
+  assert.deepEqual(seen.map((t) => t.text), ['follow up']);
 });
 
 test('handleMention in a channel: the opening turn carries the asker identity', async () => {

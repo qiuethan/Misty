@@ -11,6 +11,7 @@ import pytest
 
 from src.contracts import Minutes
 from src.sessions import (
+    _MAX_SEGMENT_MS,
     _PCM_BYTES_PER_MS,
     SessionAlreadyExistsError,
     SessionRegistry,
@@ -94,6 +95,8 @@ def _make_deps(streams_by_speaker, audio=None, now=None):
         "make_transcription_stream": make_transcription_stream,
         "audio": audio or FakeAudio(),
         "report_builder": _fake_report_builder,
+        # Tests that don't exercise the barrier shouldn't pay its timeout.
+        "audio_drain_timeout_s": 0.05,
         "now": now or (lambda: datetime(2026, 7, 25, 18, 0, tzinfo=timezone.utc)),
     }
 
@@ -746,3 +749,182 @@ def test_stop_finalizes_speakers_concurrently():
         f"stop() took {elapsed:.3f}s for {n_speakers} speakers at {delay}s each "
         "-- finalization is serialized"
     )
+
+
+# --- interleaving ------------------------------------------------------------
+
+
+def test_a_long_turn_is_split_so_others_can_interleave():
+    """Segments are sorted by start time, so a segment that spans minutes gets
+    emitted as one block -- and anyone who spoke DURING it is printed after it,
+    reading as though they replied before the other person spoke.
+
+    Splitting only on a 3s gap never fires during continuous speech, so a
+    monologue was a single segment. Long turns must be broken up on duration
+    too, even with no pause, so overlapping speech interleaves in real order.
+    """
+    alice = [{"text": f"a{i}", "start_ms": i * 1000} for i in range(60)]
+    bob = [{"text": f"b{i}", "start_ms": 30_000 + i * 1000} for i in range(5)]
+
+    segments = words_to_segments("alice", alice) + words_to_segments("bob", bob)
+    segments.sort(key=lambda s: s.start_ms)
+
+    speakers_in_order = [s.speaker for s in segments]
+    assert "bob" in speakers_in_order
+    bob_at = speakers_in_order.index("bob")
+    # Alice must both precede AND follow Bob: he spoke in the middle of her turn.
+    assert "alice" in speakers_in_order[:bob_at], "Bob's interjection sorted before all of Alice"
+    assert "alice" in speakers_in_order[bob_at + 1 :], (
+        "Alice's speech after Bob was emitted before him -- the interleaving is lost"
+    )
+
+
+def test_no_segment_spans_more_than_the_cap():
+    """The cap is what bounds how far out of order an overlapping speaker can
+    be pushed, so it must hold even for unbroken speech."""
+    words = [{"text": f"w{i}", "start_ms": i * 500} for i in range(120)]  # 60s, no pauses
+
+    for segment in words_to_segments("alice", words):
+        span = segment.text.count(" ")  # words-1
+        assert span * 500 <= _MAX_SEGMENT_MS, f"segment spans {span * 500}ms"
+
+
+def test_a_natural_pause_still_starts_a_new_segment():
+    """The gap rule still applies; the duration cap is an addition, not a
+    replacement."""
+    words = [
+        {"text": "hello", "start_ms": 0},
+        {"text": "there", "start_ms": 400},
+        {"text": "later", "start_ms": 9000},
+    ]
+    segments = words_to_segments("alice", words)
+
+    assert [(s.start_ms, s.text) for s in segments] == [(0, "hello there"), (9000, "later")]
+
+
+# --- end-of-audio barrier ----------------------------------------------------
+
+
+def test_stop_waits_for_end_of_audio_before_finalizing():
+    """The WS ingest loop and the POST /stop handler are independent tasks, so
+    /stop can begin while the last frames are still being read off the socket.
+    Those frames were then refused and the transcript lost its tail.
+
+    The bot signals end-of-audio on the WS after it stops recording. Because the
+    socket delivers in order, seeing that signal means every prior audio frame
+    has already been fed -- so stop() must wait for it before snapshotting."""
+    stream = FakeTranscriptionStream([{"text": "last words", "start_ms": 0}])
+    deps = _make_deps([stream])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-barrier", "guild-1")
+
+    async def scenario():
+        stop_task = asyncio.ensure_future(session.stop())
+        await asyncio.sleep(0)  # let stop() start and reach the barrier
+
+        # A tail frame still coming off the socket must still be accepted.
+        session.feed("alice-id", "alice", _pcm(20), ts_ms=0)
+        session.mark_audio_complete()
+        return await stop_task
+
+    result = asyncio.run(scenario())
+
+    assert stream.sent, "the tail frame was refused; stop() did not wait"
+    assert "last words" in result.transcript
+
+
+def test_stop_does_not_hang_when_end_of_audio_never_arrives():
+    """An older bot, a crash, or a dropped socket means the signal never comes.
+    Finalize must proceed on a bounded wait rather than hanging /stop."""
+    deps = _make_deps([])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-nosignal", "guild-1")
+
+    result = asyncio.run(asyncio.wait_for(session.stop(), 5))
+
+    assert result.transcript == ""
+
+
+def test_feed_is_still_refused_after_the_audio_barrier_passes():
+    """Once end-of-audio is signalled and finalize is under way, a late frame
+    has nowhere to go and must not be appended to an already-closed stream."""
+    stream = FakeTranscriptionStream([])
+    deps = _make_deps([stream])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-after", "guild-1")
+    session.mark_audio_complete()
+
+    asyncio.run(session.stop())
+    before = len(stream.sent)
+    session.feed("bob-id", "bob", _pcm(20), ts_ms=0)
+
+    assert len(stream.sent) == before
+
+
+def test_dropped_audio_is_counted_and_reported_at_stop(caplog):
+    """Every path that discards audio was silent. Diagnosing "words went
+    missing" then meant reading code and building repros rather than reading a
+    log -- which is how most of this service's bugs were actually found.
+
+    One line per meeting now names what was lost and why."""
+
+    class DeadDecoder:
+        """Mirrors decoder.decode's best-effort contract: a malformed packet
+        yields b"" rather than raising."""
+
+        def decode(self, opus_frame_bytes):
+            return b""
+
+    class DeadAudio:
+        def make_decoder(self):
+            return DeadDecoder()
+
+    deps = _make_deps([FakeTranscriptionStream([])], audio=DeadAudio())
+    registry = SessionRegistry(deps)
+    session = registry.create("session-drops", "guild-1")
+    session.mark_audio_complete()
+
+    session.feed("alice-id", "alice", b"real-opus-bytes", ts_ms=0)
+    assert session.drop_summary() == {"undecodable_frame": 1}
+
+    with caplog.at_level("WARNING"):
+        asyncio.run(session.stop())
+
+    joined = " ".join(r.message for r in caplog.records)
+    assert "undecodable_frame" in joined, f"the loss was never reported: {joined}"
+
+
+def test_no_drop_report_when_nothing_was_dropped():
+    """A clean meeting must not emit a scary warning."""
+    deps = _make_deps([FakeTranscriptionStream([])])
+    registry = SessionRegistry(deps)
+    session = registry.create("session-clean", "guild-1")
+    session.mark_audio_complete()
+    session.feed("alice-id", "alice", _pcm(20), ts_ms=0)
+
+    assert session.drop_summary() == {}
+
+
+def test_discard_reports_drops_too(caplog):
+    """discard() is the ABRUPT path -- the bot died, the socket dropped, the
+    meeting was lost. That is the case where knowing what was discarded matters
+    most, and it was the one path that never reported."""
+
+    class DeadDecoder:
+        def decode(self, opus_frame_bytes):
+            return b""
+
+    class DeadAudio:
+        def make_decoder(self):
+            return DeadDecoder()
+
+    deps = _make_deps([FakeTranscriptionStream([])], audio=DeadAudio())
+    registry = SessionRegistry(deps)
+    session = registry.create("session-discard-drops", "guild-1")
+    session.feed("alice-id", "alice", b"real-opus-bytes", ts_ms=0)
+
+    with caplog.at_level("WARNING"):
+        session.discard()
+
+    joined = " ".join(r.message for r in caplog.records)
+    assert "undecodable_frame" in joined, f"an abrupt teardown reported nothing: {joined}"

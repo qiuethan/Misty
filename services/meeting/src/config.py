@@ -21,14 +21,17 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_api_key: str = ""
     request_timeout_s: float = Field(default=60.0, gt=0)
+    # Level for this service's own loggers (see logging_setup.configure_logging).
+    # INFO by default: the volume is a startup note plus per-meeting summaries,
+    # not per-request chatter, and the alternative is losing them entirely.
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     # Safety cap (see sessions.py MeetingSession.feed): once a meeting exceeds
     # this many ms, further audio frames are dropped. This is a BACKSTOP, not
     # the normal end condition -- recordings usually end on /record stop or
     # auto-stop-on-empty (the bot ends a recording when everyone leaves the voice
-    # channel). The cap bounds worst-case memory because the current design
-    # buffers all PCM in memory until the incremental-transcription redesign
-    # (Misty #121). Set MAX_MEETING_MS to another value, or None, to change or
-    # disable it.
+    # channel). Audio is streamed out rather than buffered, so this bounds how
+    # long one meeting can hold an AWS stream open rather than memory. Set
+    # MAX_MEETING_MS to another value, or None, to change or disable it.
     max_meeting_ms: int | None = Field(default=14_400_000, gt=0)  # 4 hours
 
 

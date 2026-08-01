@@ -33,15 +33,49 @@ from src.pipeline.transcript import assemble_transcript
 _logger = logging.getLogger("meeting.audit")
 
 
+# A pause longer than this ends an utterance. Conversational pauses between
+# sentences run a few hundred ms, so 1.5s is comfortably past "drawing breath"
+# without splitting mid-thought.
+_SEGMENT_GAP_MS = 1500
+
+# Hard cap on how long one segment may span with no pause at all. Segments are
+# ordered as whole blocks, so this bounds how far an overlapping speaker can be
+# displaced -- at 5s, an interjection can never appear more than ~5s late.
+# Measured: at 10s an interjection inside the first 10s of someone's turn still
+# sorted after their whole block, which is the case this exists to fix.
+_MAX_SEGMENT_MS = 5_000
+
+# How long stop() waits for the bot's end-of-audio signal before finalizing
+# anyway. Covers an older bot that never sends it, a crashed bot, or a dropped
+# socket -- none of which may hang /stop.
+AUDIO_DRAIN_TIMEOUT_S = 5.0
+
+
 class SessionAlreadyExistsError(ValueError):
     """Raised by ``SessionRegistry.create`` when the session_id is already active."""
 
 
-def words_to_segments(speaker: str, words: list[dict], gap_ms: int = 3000) -> list[Segment]:
+def words_to_segments(
+    speaker: str,
+    words: list[dict],
+    gap_ms: int = _SEGMENT_GAP_MS,
+    max_segment_ms: int = _MAX_SEGMENT_MS,
+) -> list[Segment]:
     """Group a flat, chronological word list into segments for one speaker.
 
-    A new segment starts whenever the gap between a word's start_ms and the
-    previous word's start_ms exceeds ``gap_ms``. Same semantics as the MVP.
+    A new segment starts on either of two conditions:
+
+    * **A pause** longer than ``gap_ms`` -- the natural boundary between
+      utterances.
+    * **Duration** -- the segment has run for ``max_segment_ms`` with no pause.
+
+    The duration cap is what makes overlapping speech readable. Segments are
+    sorted by start time to build the transcript, so a segment is emitted as one
+    indivisible block: if someone talks for two minutes straight, a pause-only
+    rule produces a single segment, and everyone who spoke DURING those two
+    minutes is printed after all of it -- reading as though they replied before
+    the other person had spoken. Capping the span bounds how far out of order an
+    overlapping speaker can be pushed.
     """
     segments: list[Segment] = []
     current_words: list[str] = []
@@ -50,7 +84,9 @@ def words_to_segments(speaker: str, words: list[dict], gap_ms: int = 3000) -> li
 
     for word in words:
         start = word["start_ms"]
-        if current_words and last_start is not None and (start - last_start) > gap_ms:
+        too_long = current_start is not None and (start - current_start) > max_segment_ms
+        gapped = current_words and last_start is not None and (start - last_start) > gap_ms
+        if gapped or too_long:
             segments.append(Segment(speaker=speaker, start_ms=current_start, text=" ".join(current_words)))
             current_words = []
             current_start = None
@@ -164,7 +200,16 @@ class _SpeakerBuffer:
     def _to_meeting_ms(buffer_ms: int, anchors: list[tuple[int, int]]) -> int:
         """Map a buffer-relative time onto the meeting timeline via the nearest
         preceding anchor. Anchors are ordered, and there are at most a handful
-        per speaker (one per silence), so a linear scan is fine."""
+        per speaker (one per silence), so a linear scan is fine.
+
+        Known residual: a word AWS reports slightly BEFORE an anchor maps
+        through the previous anchor, moving it back by that silence gap.
+        Snapping words near a boundary forward was tried and reverted -- the
+        distance between anchors in BUFFER time is often only a frame or two
+        (a long wall-clock pause is no audio at all), so any snap window wide
+        enough to absorb AWS's jitter also swallows genuinely earlier speech,
+        which is both more common and more wrong.
+        """
         if not anchors:
             return buffer_ms
         offset, meeting_ts = anchors[0]
@@ -229,6 +274,19 @@ class MeetingSession:
         # a buffer that has already been transcribed -- accepted, then silently
         # dropped from the transcript. Refuse it outright instead.
         self._stopping = False
+        # Set when the bot signals it has sent every audio frame. The WS ingest
+        # loop and the POST /stop handler are independent tasks, so without this
+        # /stop could finalize while the last frames were still being read off
+        # the socket -- and _stopping would then refuse them, cutting the tail
+        # off the transcript. The socket delivers in order, so the signal
+        # arriving means all prior audio has already been fed.
+        self._audio_complete = asyncio.Event()
+        # Every path that discards audio increments one of these. They are
+        # reported as a single line at stop, because "words went missing" with
+        # nothing in the logs is how most of this service's bugs reached
+        # production -- each one had to be found by reading code and building a
+        # repro instead of reading a log.
+        self._drops: dict[str, int] = {}
         self._cap_hit_logged = False
 
     def feed(self, speaker_id: str, display_name: str, opus_frame_bytes: bytes, ts_ms: int) -> None:
@@ -236,6 +294,7 @@ class MeetingSession:
         # never reach the transcript, so drop it rather than buffer it into a
         # snapshot that has already been taken. See ``_stopping`` in __init__.
         if self._stopping:
+            self.note_drop("after_stop_began")
             return
 
         # Bound how long a single meeting can run, so a forgotten one cannot hold
@@ -254,6 +313,7 @@ class MeetingSession:
                         max_meeting_ms,
                         elapsed_ms,
                     )
+                self.note_drop("past_max_meeting_ms")
                 return
 
         # Get-or-create this speaker's buffer (and its OWN stateful Opus
@@ -275,6 +335,10 @@ class MeetingSession:
         # do it OUTSIDE the lock so it doesn't block readers any longer than
         # necessary.
         pcm = buf.decoder.decode(opus_frame_bytes)
+        # Real audio in, nothing out: the decoder swallowed an error (see
+        # decoder.decode's best-effort contract). Silent until now.
+        if opus_frame_bytes and not pcm:
+            self.note_drop("undecodable_frame")
 
         with self._lock:
             buf.append(pcm, ts_ms)
@@ -314,9 +378,54 @@ class MeetingSession:
             "participants": participants,
         }
 
+    def note_drop(self, reason: str, count: int = 1) -> None:
+        """Record that audio or words were discarded. Cheap and lock-free: an
+        approximate count from a racing worker thread is fine, an exact one is
+        not worth a lock on the ingest path."""
+        self._drops[reason] = self._drops.get(reason, 0) + count
+
+    def drop_summary(self) -> dict[str, int]:
+        return dict(self._drops)
+
+    def _report_drops(self) -> None:
+        if not self._drops:
+            return
+        _logger.warning(
+            "session %s finished with discarded audio: %s",
+            self.session_id,
+            ", ".join(f"{reason}={count}" for reason, count in sorted(self._drops.items())),
+        )
+
+    def mark_audio_complete(self) -> None:
+        """Called by the WS ingest loop when the bot signals end-of-audio.
+
+        Safe to call more than once, and before stop() -- the flag is what
+        matters, not the ordering.
+        """
+        self._audio_complete.set()
+
+    async def _await_audio_complete(self) -> None:
+        """Block until the tail of the meeting has been fed, or give up."""
+        if self._audio_complete.is_set():
+            return
+        timeout = self._deps.get("audio_drain_timeout_s", AUDIO_DRAIN_TIMEOUT_S)
+        try:
+            await asyncio.wait_for(self._audio_complete.wait(), timeout)
+        except asyncio.TimeoutError:
+            _logger.warning(
+                "session %s: no end-of-audio signal after %ss; finalizing anyway "
+                "(the end of the transcript may be short)",
+                self.session_id,
+                timeout,
+            )
+
     async def stop(self) -> StopResponse:
-        # Quiesce ingest BEFORE the snapshot below, so no frame can slip into a
-        # buffer between the snapshot and the end of finalization.
+        # Wait for the tail BEFORE quiescing: the last frames may still be in
+        # flight on the WS, and refusing them is exactly how the transcript lost
+        # its ending. Stream them in, THEN cut.
+        await self._await_audio_complete()
+        # Now quiesce, so no frame can slip in between the snapshot and the end
+        # of finalization.
         self._stopping = True
         try:
             segments: list[Segment] = []
@@ -343,6 +452,7 @@ class MeetingSession:
                         display_name,
                         words,
                     )
+                    self.note_drop("speaker_finalize_failed")
                     continue
                 segments.extend(words_to_segments(display_name, words))
             segments.sort(key=lambda s: s.start_ms)
@@ -387,6 +497,11 @@ class MeetingSession:
         if self._finalized:
             return
         self._finalized = True
+        # Report here rather than in stop(): discard() is the ABRUPT path (the
+        # bot died, the socket dropped), which is exactly when knowing what was
+        # discarded matters most -- and it was the one path that never reported.
+        # _cleanup is idempotent, so this fires once on either route.
+        self._report_drops()
         # Covers the discard() path too: once torn down, nothing more is taken.
         self._stopping = True
         # Tear down every speaker's Transcribe stream. stop() has already

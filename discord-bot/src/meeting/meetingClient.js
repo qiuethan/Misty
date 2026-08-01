@@ -22,7 +22,7 @@ export function createMeetingClient({ baseUrl, wsUrl, apiKey, WebSocketImpl = Ws
     return Buffer.concat([head, id, ts, opusBuffer]);
   }
 
-  function openStream(sessionId, { guildId, onError }) {
+  function openStream(sessionId, { guildId, onError, onClose }) {
     // The API key is intentionally NOT put in the URL (query strings leak into
     // access/proxy logs). Instead we rely on the service's first-text-frame
     // auth fallback: connect with no `key` query param, then send exactly one
@@ -43,6 +43,7 @@ export function createMeetingClient({ baseUrl, wsUrl, apiKey, WebSocketImpl = Ws
       for (const data of queue.splice(0)) ws.send(data);
     };
     const onErrorEvent = (e) => {
+      if (dead) return;
       dead = true;
       console.error('meeting stream error:', e?.message ?? e);
       try {
@@ -52,7 +53,16 @@ export function createMeetingClient({ baseUrl, wsUrl, apiKey, WebSocketImpl = Ws
       }
     };
     const onCloseEvent = () => {
+      // A clean close is just as fatal as an error: every frame after this is
+      // dropped by dispatch() below, silently. The surface needs to know so it
+      // can stop the recorder rather than keep capturing into a dead socket.
+      if (dead) return;
       dead = true;
+      try {
+        onClose?.();
+      } catch (cbErr) {
+        console.error('meeting stream onClose callback failed:', cbErr);
+      }
     };
 
     if (typeof ws.addEventListener === 'function') {
@@ -77,6 +87,13 @@ export function createMeetingClient({ baseUrl, wsUrl, apiKey, WebSocketImpl = Ws
       },
       sendFrame(speakerId, tsMs, opusBuffer) {
         dispatch(encodeFrame(speakerId, tsMs, opusBuffer));
+      },
+      // Tell the service every audio frame has been sent. Goes through the same
+      // dispatch path as the audio, so the socket delivers it AFTER all of it —
+      // which is what lets the service use it as a barrier and stop finalizing
+      // the meeting while the tail is still in flight.
+      endAudio() {
+        dispatch(JSON.stringify({ end_of_audio: true }));
       },
       close() {
         ws.close();
