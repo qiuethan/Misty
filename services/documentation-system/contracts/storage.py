@@ -71,6 +71,20 @@ class StorageAdapter(Protocol):
     def list_grants(self, doc_id: UUID) -> list[DocGrant]:
         """Grants for a doc, grantee_label unset (resolved at the API layer)."""
         ...
+    def upsert_doc_content(
+        self, doc_id: UUID, *, content_text: str, content_hash: str, fetched_at
+    ) -> None:
+        """Insert or replace the full extracted text for a doc. `content_hash`
+        is the sha256 hex of `content_text`, stored for cheap change detection."""
+        ...
+    def get_doc_content(
+        self, doc_id: UUID, *, visibility: ActorContext = SEE_ALL
+    ) -> str | None:
+        """Full extracted text for a doc, or None if the doc has no content OR
+        the actor cannot see it. Full content is at least as sensitive as the
+        snapshot, so this enforces the same visibility predicate as get_doc —
+        an invisible doc is indistinguishable from one with no content."""
+        ...
 
     # Sources
     def list_sources(self, *, active_only: bool = False) -> list[Source]: ...

@@ -91,7 +91,7 @@ def test_api_key_lifecycle(store):
     assert store.get_api_key_hash("pfx12345") is None
 
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from contracts.visibility import Actor, DENY, SEE_ALL
 from src.storage.in_memory import InMemoryStorageAdapter
@@ -147,3 +147,51 @@ def test_list_docs_visibility():
     assert owned.id in ids and hidden.id not in ids
     assert a.list_docs(visibility=DENY) == []
     assert len(a.list_docs(visibility=SEE_ALL)) == 2
+
+
+def test_upsert_doc_content_round_trips(store):
+    doc = _mk(store)
+    store.upsert_doc_content(
+        doc.id, content_text="full body text", content_hash="hash1", fetched_at=None
+    )
+    assert store.get_doc_content(doc.id) == "full body text"
+
+
+def test_upsert_doc_content_replaces_existing(store):
+    doc = _mk(store)
+    store.upsert_doc_content(
+        doc.id, content_text="first", content_hash="hash1", fetched_at=None
+    )
+    store.upsert_doc_content(
+        doc.id, content_text="second", content_hash="hash2", fetched_at=None
+    )
+    assert store.get_doc_content(doc.id) == "second"
+
+
+def test_get_doc_content_none_when_no_content(store):
+    doc = _mk(store)
+    assert store.get_doc_content(doc.id) is None
+
+
+def test_get_doc_content_none_for_unknown_doc(store):
+    assert store.get_doc_content(uuid4()) is None
+
+
+def test_get_doc_content_withheld_from_actor_who_cannot_see_doc(store):
+    doc = _mk(store)
+    store.upsert_doc_content(
+        doc.id, content_text="secret", content_hash="h", fetched_at=None
+    )
+    stranger = Actor(person_id=uuid4(), team_ids=frozenset())
+    assert store.get_doc_content(doc.id, visibility=stranger) is None
+
+
+def test_get_doc_content_returned_to_granted_actor(store):
+    doc = _mk(store)
+    person_id = uuid4()
+    store.add_grant(doc.id, grantee_type="person", grantee_id=person_id, actor="test")
+    store.upsert_doc_content(
+        doc.id, content_text="secret", content_hash="h", fetched_at=None
+    )
+    granted = Actor(person_id=person_id, team_ids=frozenset())
+    assert store.get_doc_content(doc.id, visibility=granted) == "secret"
