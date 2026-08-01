@@ -138,7 +138,7 @@ def test_ingest_race_fallback_merges_into_existing(adapter):
     assert len(active) == 1
 
 
-from uuid import UUID
+from uuid import UUID, uuid4
 from contracts.visibility import Actor, DENY, SEE_ALL
 
 _P1 = UUID("11111111-1111-1111-1111-111111111111")
@@ -176,3 +176,57 @@ def test_list_docs_batched_tag_hydration_matches_per_doc(adapter):
         assert listed[doc_id].tags == adapter.get_doc(doc_id).tags
     assert listed[d1.id].tags == ["alpha", "beta", "gamma"]  # tag-sorted
     assert listed[d3.id].tags == []
+
+
+def test_pg_upsert_doc_content_round_trips(adapter):
+    doc = _mk(adapter)
+    adapter.upsert_doc_content(
+        doc.id, content_text="full body", content_hash="hash1", fetched_at=None
+    )
+    assert adapter.get_doc_content(doc.id) == "full body"
+
+
+def test_pg_upsert_doc_content_updates_on_conflict(adapter):
+    doc = _mk(adapter)
+    adapter.upsert_doc_content(
+        doc.id, content_text="first", content_hash="hash1", fetched_at=None
+    )
+    adapter.upsert_doc_content(
+        doc.id, content_text="second", content_hash="hash2", fetched_at=None
+    )
+    assert adapter.get_doc_content(doc.id) == "second"
+
+
+def test_pg_get_doc_content_none_when_absent(adapter):
+    doc = _mk(adapter)
+    assert adapter.get_doc_content(doc.id) is None
+
+
+def test_pg_get_doc_content_withheld_from_stranger(adapter):
+    doc = _mk(adapter)
+    adapter.upsert_doc_content(
+        doc.id, content_text="secret", content_hash="h", fetched_at=None
+    )
+    stranger = Actor(person_id=uuid4(), team_ids=frozenset())
+    assert adapter.get_doc_content(doc.id, visibility=stranger) is None
+
+
+def test_pg_get_doc_content_returned_to_granted_actor(adapter):
+    doc = _mk(adapter)
+    person_id = uuid4()
+    adapter.add_grant(doc.id, grantee_type="person", grantee_id=person_id, actor="test")
+    adapter.upsert_doc_content(
+        doc.id, content_text="secret", content_hash="h", fetched_at=None
+    )
+    granted = Actor(person_id=person_id, team_ids=frozenset())
+    assert adapter.get_doc_content(doc.id, visibility=granted) == "secret"
+
+
+def test_pg_get_doc_content_denied_context_withholds(adapter):
+    from contracts.visibility import DENY
+
+    doc = _mk(adapter)
+    adapter.upsert_doc_content(
+        doc.id, content_text="secret", content_hash="h", fetched_at=None
+    )
+    assert adapter.get_doc_content(doc.id, visibility=DENY) is None
