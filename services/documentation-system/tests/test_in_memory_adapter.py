@@ -209,3 +209,60 @@ def test_get_doc_content_scoped_to_requested_doc(store):
     # The actor can see `visible` but NOT `secret`. A cross join would leak
     # `secret`'s content because *some* doc is visible to this actor.
     assert store.get_doc_content(secret.id, visibility=actor) is None
+
+
+def test_get_doc_content_meta_round_trips_hash_and_fetched_at(store):
+    doc = _mk(store)
+    now = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    store.upsert_doc_content(
+        doc.id, content_text="full body text", content_hash="hash1", fetched_at=now
+    )
+    meta = store.get_doc_content_meta(doc.id)
+    assert meta is not None
+    assert meta.content_hash == "hash1"
+    assert meta.fetched_at == now
+
+
+def test_get_doc_content_meta_none_when_no_content(store):
+    doc = _mk(store)
+    assert store.get_doc_content_meta(doc.id) is None
+
+
+def test_get_doc_content_meta_none_for_unknown_doc(store):
+    assert store.get_doc_content_meta(uuid4()) is None
+
+
+def test_get_doc_content_meta_withheld_from_actor_who_cannot_see_doc(store):
+    doc = _mk(store)
+    store.upsert_doc_content(
+        doc.id, content_text="secret", content_hash="h", fetched_at=None
+    )
+    stranger = Actor(person_id=uuid4(), team_ids=frozenset())
+    assert store.get_doc_content_meta(doc.id, visibility=stranger) is None
+
+
+def test_get_doc_content_meta_returned_to_granted_actor(store):
+    doc = _mk(store)
+    person_id = uuid4()
+    store.add_grant(doc.id, grantee_type="person", grantee_id=person_id, actor="test")
+    store.upsert_doc_content(
+        doc.id, content_text="secret", content_hash="h", fetched_at=None
+    )
+    granted = Actor(person_id=person_id, team_ids=frozenset())
+    meta = store.get_doc_content_meta(doc.id, visibility=granted)
+    assert meta is not None
+    assert meta.content_hash == "h"
+
+
+def test_get_doc_content_meta_scoped_to_requested_doc(store):
+    visible = _mk(store, url="https://visible-meta.com")
+    secret = _mk(store, url="https://secret-meta.com")
+    person_id = uuid4()
+    store.add_grant(visible.id, grantee_type="person", grantee_id=person_id, actor="t")
+    store.upsert_doc_content(
+        secret.id, content_text="secret", content_hash="h", fetched_at=None
+    )
+    actor = Actor(person_id=person_id, team_ids=frozenset())
+    # The actor can see `visible` but NOT `secret`. A cross join would leak
+    # `secret`'s content metadata because *some* doc is visible to this actor.
+    assert store.get_doc_content_meta(secret.id, visibility=actor) is None

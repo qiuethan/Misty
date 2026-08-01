@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from contracts.types import ApiKey, Doc, DocGrant, Source
+from contracts.types import ApiKey, Doc, DocContentMeta, DocGrant, Source
 from contracts.visibility import ActorContext, SEE_ALL
 
 
@@ -90,6 +90,15 @@ class StorageAdapter(Protocol):
         the actor cannot see it. Full content is at least as sensitive as the
         snapshot, so this enforces the same visibility predicate as get_doc —
         an invisible doc is indistinguishable from one with no content."""
+        ...
+    def get_doc_content_meta(
+        self, doc_id: UUID, *, visibility: ActorContext = SEE_ALL
+    ) -> DocContentMeta | None:
+        """Hash + capture time for a doc's stored content, or None if the doc has
+        no content OR the actor cannot see it. Gated by the same visibility
+        predicate as get_doc_content — metadata about content is content.
+        `content_hash` detects CHANGE, not freshness: compare `fetched_at` to know
+        how current the row is."""
         ...
 
     # Sources

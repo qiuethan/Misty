@@ -2,12 +2,12 @@
 concerns — takes injected storage/fetchers/directory and an actor string."""
 
 from datetime import datetime, timezone
-from hashlib import sha256
 
 from contracts.directory import DirectoryClient, DirectoryUnavailable
 from contracts.fetcher import FetchError
 from contracts.storage import DuplicateActiveUrl, StorageAdapter
 from contracts.types import DocIngest, IngestResult
+from src.content import clamp_content, content_hash
 from src.fetch.registry import FetcherRegistry
 from src.url_norm import derive_source, normalize_url
 
@@ -126,10 +126,13 @@ def ingest_doc(
         raise
     _apply_grants(storage, doc.id, payload.grants, actor=actor)
     if content is not None:
+        content, truncated = clamp_content(content)
+        if truncated:
+            warnings.append("content truncated to size cap; stored text is incomplete")
         storage.upsert_doc_content(
             doc.id,
             content_text=content,
-            content_hash=sha256(content.encode()).hexdigest(),
+            content_hash=content_hash(content),
             fetched_at=fetched_at,
         )
     doc = storage.get_doc(doc.id)  # re-hydrate with grants for the response

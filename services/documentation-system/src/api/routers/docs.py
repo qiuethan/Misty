@@ -10,6 +10,7 @@ from contracts.visibility import ActorContext
 from src.api.auth import AuthedKey, get_actor, require_scope
 from src.api.authz import get_visible_doc_or_404, read_context, write_context
 from src.api.deps import get_directory, get_fetchers, get_storage
+from src.content import clamp_content, content_hash
 from src.fetch.registry import FetcherRegistry
 from src.ingest import BadReference, ingest_doc
 
@@ -167,7 +168,6 @@ def refetch(
     _: AuthedKey = Depends(require_scope("docs:write")),
 ) -> Doc:
     from datetime import datetime, timezone
-    from hashlib import sha256
 
     from contracts.fetcher import FetchError
 
@@ -187,10 +187,11 @@ def refetch(
     # lag behind docs.fetched_at; doc_content.fetched_at, not content_hash,
     # is the freshness signal for this row.
     if result.content is not None:
+        text, _truncated = clamp_content(result.content)
         storage.upsert_doc_content(
             doc_id,
-            content_text=result.content,
-            content_hash=sha256(result.content.encode()).hexdigest(),
+            content_text=text,
+            content_hash=content_hash(text),
             fetched_at=now,
         )
     return storage.update_doc(

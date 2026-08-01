@@ -7,7 +7,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 from contracts.storage import DuplicateActiveUrl
-from contracts.types import ApiKey, Doc, DocGrant, Source
+from contracts.types import ApiKey, Doc, DocContentMeta, DocGrant, Source
 from contracts.visibility import Actor, ActorContext, DENY, SEE_ALL
 from src.storage.schema import api_keys, doc_content, doc_grants, doc_tags, docs, sources
 
@@ -329,6 +329,25 @@ class PostgresStorageAdapter:
         with self._engine.connect() as conn:
             row = conn.execute(stmt).one_or_none()
             return row.content_text if row is not None else None
+
+    def get_doc_content_meta(
+        self, doc_id: UUID, *, visibility: ActorContext = SEE_ALL
+    ) -> DocContentMeta | None:
+        # Joined to `docs` because _visibility_clause builds its predicate from
+        # docs columns (owning_*) and a correlated EXISTS over doc_grants.
+        clause = self._visibility_clause(visibility)
+        stmt = (
+            select(doc_content.c.content_hash, doc_content.c.fetched_at)
+            .select_from(doc_content.join(docs, docs.c.id == doc_content.c.doc_id))
+            .where(doc_content.c.doc_id == doc_id)
+        )
+        if clause is not None:
+            stmt = stmt.where(clause)
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).one_or_none()
+            if row is None:
+                return None
+            return DocContentMeta(content_hash=row.content_hash, fetched_at=row.fetched_at)
 
     # --- Sources ---
 

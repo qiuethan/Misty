@@ -176,7 +176,8 @@ def test_refetch_no_content_leaves_prior_content_untouched(client_and_store):
     doc_id = created["doc"]["id"]
 
     client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
-    before = store._content[UUID(doc_id)]
+    before_text = store.get_doc_content(UUID(doc_id))
+    before_meta = store.get_doc_content_meta(UUID(doc_id))
 
     class _NoContentFetchers:
         def fetch_for(self, source_id, url):
@@ -186,9 +187,10 @@ def test_refetch_no_content_leaves_prior_content_untouched(client_and_store):
     resp = client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
     assert resp.status_code == 200
 
-    after = store._content[UUID(doc_id)]
-    assert after[0] == before[0]
-    assert after[1] == before[1]
+    after_text = store.get_doc_content(UUID(doc_id))
+    after_meta = store.get_doc_content_meta(UUID(doc_id))
+    assert after_text == before_text
+    assert after_meta.content_hash == before_meta.content_hash
 
 
 def test_refetch_unchanged_content_leaves_hash_stable(client_and_store):
@@ -197,9 +199,9 @@ def test_refetch_unchanged_content_leaves_hash_stable(client_and_store):
     doc_id = created["doc"]["id"]
 
     client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
-    first_hash = store._content[UUID(doc_id)][1]
+    first_hash = store.get_doc_content_meta(UUID(doc_id)).content_hash
     client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
-    assert store._content[UUID(doc_id)][1] == first_hash
+    assert store.get_doc_content_meta(UUID(doc_id)).content_hash == first_hash
 
 
 def test_refetch_changed_content_updates_text_and_hash(client_and_store):
@@ -208,7 +210,7 @@ def test_refetch_changed_content_updates_text_and_hash(client_and_store):
     doc_id = created["doc"]["id"]
 
     client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
-    before = store._content[UUID(doc_id)]
+    before_meta = store.get_doc_content_meta(UUID(doc_id))
 
     class _ChangedFetchers:
         def fetch_for(self, source_id, url):
@@ -217,6 +219,7 @@ def test_refetch_changed_content_updates_text_and_hash(client_and_store):
     client.app.dependency_overrides[get_fetchers] = lambda: _ChangedFetchers()
     client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
 
-    after = store._content[UUID(doc_id)]
-    assert after[0] == "edited body"
-    assert after[1] != before[1]
+    after_text = store.get_doc_content(UUID(doc_id))
+    after_meta = store.get_doc_content_meta(UUID(doc_id))
+    assert after_text == "edited body"
+    assert after_meta.content_hash != before_meta.content_hash

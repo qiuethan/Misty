@@ -6,6 +6,7 @@ from urllib.parse import SplitResult, urlsplit
 import httpx
 
 from contracts.fetcher import FetchError, FetchResult
+from src.content import MAX_CONTENT_CHARS
 
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -14,7 +15,8 @@ _TIMEOUT = httpx.Timeout(5.0)
 
 # Full extracted text is capped only to guard against pathological pages; the
 # snapshot stays at the historical preview length and is sliced from that text.
-MAX_CONTENT_CHARS = 1_000_000
+# MAX_CONTENT_CHARS lives in src.content (shared with ingest/refetch); kept
+# importable from here because tests and prior callers import it from this module.
 SNAPSHOT_CHARS = 2000
 
 # SSRF egress protection.

@@ -168,9 +168,31 @@ def test_ingest_stores_sha256_of_content(store):
     )
     res = ingest_doc(DocIngest(url="https://github.com/a/c"), storage=store,
                      fetchers=fetchers, directory=FakeDirectory(), actor="bot")
-    # Reaching into the in-memory adapter's backing store is deliberate: the hash
-    # has no public getter, and this is the test double, not production code.
-    assert store._content[res.doc.id][1] == sha256(b"body").hexdigest()
+    meta = store.get_doc_content_meta(res.doc.id)
+    assert meta.content_hash == sha256(b"body").hexdigest()
+
+
+def test_ingest_truncates_content_over_cap_and_warns(store):
+    from src.content import MAX_CONTENT_CHARS
+
+    oversized = "x" * (MAX_CONTENT_CHARS + 100)
+    fetchers = FakeFetchers(
+        result=FetchResult(title="T", content=oversized, content_snapshot="preview")
+    )
+    res = ingest_doc(DocIngest(url="https://github.com/a/e"), storage=store,
+                     fetchers=fetchers, directory=FakeDirectory(), actor="bot")
+    assert len(store.get_doc_content(res.doc.id)) == MAX_CONTENT_CHARS
+    assert any("truncat" in w.lower() for w in res.warnings)
+
+
+def test_ingest_under_cap_content_untouched_and_no_warning(store):
+    fetchers = FakeFetchers(
+        result=FetchResult(title="T", content="short body", content_snapshot="short body")
+    )
+    res = ingest_doc(DocIngest(url="https://github.com/a/f"), storage=store,
+                     fetchers=fetchers, directory=FakeDirectory(), actor="bot")
+    assert store.get_doc_content(res.doc.id) == "short body"
+    assert not any("truncat" in w.lower() for w in res.warnings)
 
 
 def test_ingest_without_content_creates_no_content_row(store):

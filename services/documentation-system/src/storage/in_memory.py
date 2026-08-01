@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from contracts.types import ApiKey, Doc, DocGrant, Source
+from contracts.types import ApiKey, Doc, DocContentMeta, DocGrant, Source
 from contracts.visibility import ActorContext, SEE_ALL, doc_visible
 
 
@@ -169,6 +169,18 @@ class InMemoryStorageAdapter:
             return None
         entry = self._content.get(doc_id)
         return entry[0] if entry is not None else None
+
+    def get_doc_content_meta(
+        self, doc_id: UUID, *, visibility: ActorContext = SEE_ALL
+    ) -> DocContentMeta | None:
+        doc = self._docs.get(doc_id)
+        if doc is None or not self._visible(doc, visibility):
+            return None
+        entry = self._content.get(doc_id)
+        if entry is None:
+            return None
+        _text, content_hash, fetched_at = entry
+        return DocContentMeta(content_hash=content_hash, fetched_at=fetched_at)
 
     # --- Sources ---
 

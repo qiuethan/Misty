@@ -244,3 +244,68 @@ def test_pg_get_doc_content_scoped_to_requested_doc(adapter):
     # The actor can see `visible` but NOT `secret`. A cross join would leak
     # `secret`'s content because *some* doc is visible to this actor.
     assert adapter.get_doc_content(secret.id, visibility=actor) is None
+
+
+def test_pg_get_doc_content_meta_round_trips_hash_and_fetched_at(adapter):
+    from datetime import datetime, timezone
+
+    doc = _mk(adapter)
+    now = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    adapter.upsert_doc_content(
+        doc.id, content_text="full body", content_hash="hash1", fetched_at=now
+    )
+    meta = adapter.get_doc_content_meta(doc.id)
+    assert meta is not None
+    assert meta.content_hash == "hash1"
+    assert meta.fetched_at == now
+
+
+def test_pg_get_doc_content_meta_none_when_absent(adapter):
+    doc = _mk(adapter)
+    assert adapter.get_doc_content_meta(doc.id) is None
+
+
+def test_pg_get_doc_content_meta_withheld_from_stranger(adapter):
+    doc = _mk(adapter)
+    adapter.upsert_doc_content(
+        doc.id, content_text="secret", content_hash="h", fetched_at=None
+    )
+    stranger = Actor(person_id=uuid4(), team_ids=frozenset())
+    assert adapter.get_doc_content_meta(doc.id, visibility=stranger) is None
+
+
+def test_pg_get_doc_content_meta_returned_to_granted_actor(adapter):
+    doc = _mk(adapter)
+    person_id = uuid4()
+    adapter.add_grant(doc.id, grantee_type="person", grantee_id=person_id, actor="test")
+    adapter.upsert_doc_content(
+        doc.id, content_text="secret", content_hash="h", fetched_at=None
+    )
+    granted = Actor(person_id=person_id, team_ids=frozenset())
+    meta = adapter.get_doc_content_meta(doc.id, visibility=granted)
+    assert meta is not None
+    assert meta.content_hash == "h"
+
+
+def test_pg_get_doc_content_meta_denied_context_withholds(adapter):
+    from contracts.visibility import DENY
+
+    doc = _mk(adapter)
+    adapter.upsert_doc_content(
+        doc.id, content_text="secret", content_hash="h", fetched_at=None
+    )
+    assert adapter.get_doc_content_meta(doc.id, visibility=DENY) is None
+
+
+def test_pg_get_doc_content_meta_scoped_to_requested_doc(adapter):
+    visible = _mk(adapter, url="https://visible-meta.com")
+    secret = _mk(adapter, url="https://secret-meta.com")
+    person_id = uuid4()
+    adapter.add_grant(visible.id, grantee_type="person", grantee_id=person_id, actor="t")
+    adapter.upsert_doc_content(
+        secret.id, content_text="secret", content_hash="h", fetched_at=None
+    )
+    actor = Actor(person_id=person_id, team_ids=frozenset())
+    # The actor can see `visible` but NOT `secret`. A cross join would leak
+    # `secret`'s content metadata because *some* doc is visible to this actor.
+    assert adapter.get_doc_content_meta(secret.id, visibility=actor) is None
