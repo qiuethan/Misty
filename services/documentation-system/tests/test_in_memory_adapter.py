@@ -195,3 +195,17 @@ def test_get_doc_content_returned_to_granted_actor(store):
     )
     granted = Actor(person_id=person_id, team_ids=frozenset())
     assert store.get_doc_content(doc.id, visibility=granted) == "secret"
+
+
+def test_get_doc_content_scoped_to_requested_doc(store):
+    visible = _mk(store, url="https://visible.com")
+    secret = _mk(store, url="https://secret.com")
+    person_id = uuid4()
+    store.add_grant(visible.id, grantee_type="person", grantee_id=person_id, actor="t")
+    store.upsert_doc_content(
+        secret.id, content_text="secret", content_hash="h", fetched_at=None
+    )
+    actor = Actor(person_id=person_id, team_ids=frozenset())
+    # The actor can see `visible` but NOT `secret`. A cross join would leak
+    # `secret`'s content because *some* doc is visible to this actor.
+    assert store.get_doc_content(secret.id, visibility=actor) is None

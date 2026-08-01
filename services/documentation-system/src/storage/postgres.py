@@ -292,7 +292,7 @@ class PostgresStorageAdapter:
             return self._grants_for(conn, doc_id)
 
     def upsert_doc_content(
-        self, doc_id: UUID, *, content_text: str, content_hash: str, fetched_at
+        self, doc_id: UUID, *, content_text: str, content_hash: str, fetched_at: datetime | None
     ) -> None:
         now = _now()
         with self._engine.begin() as conn:

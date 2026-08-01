@@ -153,7 +153,7 @@ class InMemoryStorageAdapter:
         ]
 
     def upsert_doc_content(
-        self, doc_id: UUID, *, content_text: str, content_hash: str, fetched_at
+        self, doc_id: UUID, *, content_text: str, content_hash: str, fetched_at: datetime | None
     ) -> None:
         # No doc-existence check: Postgres enforces this with a FK, but this
         # adapter is a test double and callers always upsert a doc they just

@@ -17,5 +17,5 @@ class FetchError(Exception):
 
 class Fetcher(Protocol):
     def fetch(self, url: str) -> FetchResult:
-        """Retrieve title/snapshot for a URL. Raises FetchError on failure."""
+        """Retrieve title, full content, and snapshot for a URL. Raises FetchError on failure."""
         ...

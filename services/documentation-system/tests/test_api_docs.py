@@ -170,6 +170,27 @@ def test_refetch_persists_full_content(client_and_store):
     assert store.get_doc_content(UUID(doc_id)) == "full fetched body"
 
 
+def test_refetch_no_content_leaves_prior_content_untouched(client_and_store):
+    client, store = client_and_store
+    created = client.post("/docs", json={"url": "https://x.com/goes-empty"}, headers=AUTH).json()
+    doc_id = created["doc"]["id"]
+
+    client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
+    before = store._content[UUID(doc_id)]
+
+    class _NoContentFetchers:
+        def fetch_for(self, source_id, url):
+            return FetchResult(title="Fetched", content=None, content_snapshot=None)
+
+    client.app.dependency_overrides[get_fetchers] = lambda: _NoContentFetchers()
+    resp = client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
+    assert resp.status_code == 200
+
+    after = store._content[UUID(doc_id)]
+    assert after[0] == before[0]
+    assert after[1] == before[1]
+
+
 def test_refetch_unchanged_content_leaves_hash_stable(client_and_store):
     client, store = client_and_store
     created = client.post("/docs", json={"url": "https://x.com/stable"}, headers=AUTH).json()

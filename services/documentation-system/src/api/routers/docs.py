@@ -180,6 +180,12 @@ def refetch(
     except FetchError as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
     now = datetime.now(timezone.utc)
+    # A content-less refetch (empty body: page deleted, paywalled, connector
+    # regressed to title-only) deliberately leaves the existing doc_content
+    # row untouched rather than wiping it — stale text beats silently
+    # emptying the RAG substrate. This means content_hash can legitimately
+    # lag behind docs.fetched_at; doc_content.fetched_at, not content_hash,
+    # is the freshness signal for this row.
     if result.content is not None:
         storage.upsert_doc_content(
             doc_id,

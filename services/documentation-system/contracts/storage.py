@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -72,10 +73,15 @@ class StorageAdapter(Protocol):
         """Grants for a doc, grantee_label unset (resolved at the API layer)."""
         ...
     def upsert_doc_content(
-        self, doc_id: UUID, *, content_text: str, content_hash: str, fetched_at
+        self, doc_id: UUID, *, content_text: str, content_hash: str, fetched_at: datetime | None
     ) -> None:
         """Insert or replace the full extracted text for a doc. `content_hash`
-        is the sha256 hex of `content_text`, stored for cheap change detection."""
+        is the sha256 hex of `content_text`, stored for cheap change detection
+        — it detects *content change*, not freshness. A refetch that returns
+        no content is never passed to this method, so the prior row (text,
+        hash, and fetched_at) is left untouched; a consumer deciding whether
+        to re-embed should compare `doc_content.fetched_at`, not content_hash,
+        to know how current the row is."""
         ...
     def get_doc_content(
         self, doc_id: UUID, *, visibility: ActorContext = SEE_ALL
