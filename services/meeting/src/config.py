@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_api_key: str = ""
     request_timeout_s: float = Field(default=60.0, gt=0)
+    # Level for this service's own loggers (see logging_setup.configure_logging).
+    # INFO by default: the volume is a startup note plus per-meeting summaries,
+    # not per-request chatter, and the alternative is losing them entirely.
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     # Safety cap (see sessions.py MeetingSession.feed): once a meeting exceeds
     # this many ms, further audio frames are dropped. This is a BACKSTOP, not
     # the normal end condition -- recordings usually end on /record stop or

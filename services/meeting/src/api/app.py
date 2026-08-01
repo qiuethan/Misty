@@ -3,7 +3,8 @@ from fastapi import FastAPI
 
 from src.api.middleware import AuditLogMiddleware
 from src.api.routers.meetings import router as meetings_router
-from src.config import verify_production_secrets
+from src.config import get_settings, verify_production_secrets
+from src.logging_setup import configure_logging
 
 
 _SINGLE_INSTANCE_NOTE = (
@@ -20,6 +21,11 @@ _SINGLE_INSTANCE_NOTE = (
 
 
 def create_app() -> FastAPI:
+    # FIRST, before anything here logs. uvicorn leaves the root logger without a
+    # handler, so until this runs every INFO record in this service is dropped
+    # on the floor -- which is exactly what happened to the note below.
+    configure_logging(get_settings().log_level)
+
     verify_production_secrets()
 
     from src.api.deps import get_key_store
