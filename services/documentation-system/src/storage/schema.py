@@ -85,6 +85,20 @@ doc_grants = Table(
     ),
 )
 
+doc_content = Table(
+    "doc_content", metadata,
+    Column(
+        "doc_id", UUID(as_uuid=True),
+        ForeignKey("docs.id", ondelete="CASCADE"), primary_key=True,
+    ),
+    Column("content_text", Text, nullable=False),
+    # sha256 hex of content_text — cheap change detection so a future RAG layer
+    # re-embeds only when the text actually changed.
+    Column("content_hash", Text, nullable=False),
+    Column("fetched_at", DateTime(timezone=True), nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=text("now()")),
+)
+
 api_keys = Table(
     "api_keys", metadata,
     Column("id", UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")),
