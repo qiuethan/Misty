@@ -167,6 +167,7 @@ def refetch(
     _: AuthedKey = Depends(require_scope("docs:write")),
 ) -> Doc:
     from datetime import datetime, timezone
+    from hashlib import sha256
 
     from contracts.fetcher import FetchError
 
@@ -178,6 +179,14 @@ def refetch(
         result = fetchers.fetch_for(doc.source_id, doc.url)
     except FetchError as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+    now = datetime.now(timezone.utc)
+    if result.content is not None:
+        storage.upsert_doc_content(
+            doc_id,
+            content_text=result.content,
+            content_hash=sha256(result.content.encode()).hexdigest(),
+            fetched_at=now,
+        )
     return storage.update_doc(
         doc_id,
         {
@@ -187,7 +196,7 @@ def refetch(
                 if result.content_snapshot is not None
                 else doc.content_snapshot
             ),
-            "fetched_at": datetime.now(timezone.utc),
+            "fetched_at": now,
         },
         actor=actor,
     )

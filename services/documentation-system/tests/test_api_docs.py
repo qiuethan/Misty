@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,7 +22,7 @@ def _sources():
 
 class FakeFetchers:
     def fetch_for(self, source_id, url):
-        return FetchResult(title="Fetched", content_snapshot="body")
+        return FetchResult(title="Fetched", content="full fetched body", content_snapshot="body")
 
 
 class FakeDirectory:
@@ -43,6 +44,22 @@ def client(monkeypatch):
     app.dependency_overrides[get_directory] = lambda: FakeDirectory()
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def client_and_store(monkeypatch):
+    """Like `client`, but also yields the backing adapter so tests can assert on
+    storage the API deliberately does not expose (e.g. full doc content)."""
+    monkeypatch.setenv("API_KEY", "test-key")
+    from src.config import get_settings
+    get_settings.cache_clear()
+    adapter = InMemoryStorageAdapter(seed_sources=_sources())
+    app = create_app()
+    app.dependency_overrides[get_storage] = lambda: adapter
+    app.dependency_overrides[get_fetchers] = lambda: FakeFetchers()
+    app.dependency_overrides[get_directory] = lambda: FakeDirectory()
+    with TestClient(app) as c:
+        yield c, adapter
 
 
 def test_ingest_returns_201_with_warnings_envelope(client):
@@ -141,3 +158,44 @@ def test_add_and_remove_tag(client):
     assert "new" in client.get(f"/docs/{doc_id}", headers=AUTH).json()["tags"]
     assert client.request("DELETE", f"/docs/{doc_id}/tags/new", headers=AUTH).status_code == 200
     assert "new" not in client.get(f"/docs/{doc_id}", headers=AUTH).json()["tags"]
+
+
+def test_refetch_persists_full_content(client_and_store):
+    client, store = client_and_store
+    created = client.post("/docs", json={"url": "https://x.com/refetch"}, headers=AUTH).json()
+    doc_id = created["doc"]["id"]
+
+    resp = client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
+    assert resp.status_code == 200
+    assert store.get_doc_content(UUID(doc_id)) == "full fetched body"
+
+
+def test_refetch_unchanged_content_leaves_hash_stable(client_and_store):
+    client, store = client_and_store
+    created = client.post("/docs", json={"url": "https://x.com/stable"}, headers=AUTH).json()
+    doc_id = created["doc"]["id"]
+
+    client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
+    first_hash = store._content[UUID(doc_id)][1]
+    client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
+    assert store._content[UUID(doc_id)][1] == first_hash
+
+
+def test_refetch_changed_content_updates_text_and_hash(client_and_store):
+    client, store = client_and_store
+    created = client.post("/docs", json={"url": "https://x.com/changed"}, headers=AUTH).json()
+    doc_id = created["doc"]["id"]
+
+    client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
+    before = store._content[UUID(doc_id)]
+
+    class _ChangedFetchers:
+        def fetch_for(self, source_id, url):
+            return FetchResult(title="Fetched", content="edited body", content_snapshot="edited")
+
+    client.app.dependency_overrides[get_fetchers] = lambda: _ChangedFetchers()
+    client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
+
+    after = store._content[UUID(doc_id)]
+    assert after[0] == "edited body"
+    assert after[1] != before[1]
