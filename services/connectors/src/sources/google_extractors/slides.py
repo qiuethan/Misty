@@ -57,10 +57,38 @@ def _notes_text(slide: dict) -> str:
     return ""
 
 
+def _title_element(elements: list) -> dict | None:
+    """The page element supplying the slide's title, or None.
+
+    Real decks are often built by dropping text boxes onto a slide rather than
+    using the layout's title field, so `shape.placeholder` may be absent on
+    every slide. Primary path: any TITLE/CENTERED_TITLE placeholder anywhere
+    on the slide, regardless of its position in pageElements. Fallback, only
+    when no placeholder exists: the first non-empty text shape in reading
+    order — never a table. Matched by element identity (not objectId) so the
+    chosen element can be excluded from the body without relying on ids being
+    unique.
+    """
+    for element in elements:
+        shape = element.get("shape")
+        if shape and _placeholder_type(shape) in _TITLE_PLACEHOLDERS and _text_content(shape):
+            return element
+    for element in elements:
+        shape = element.get("shape")
+        if shape and _text_content(shape):
+            return element
+    return None
+
+
 def _slide_lines(slide: dict, number: int) -> list[str]:
-    title = ""
+    elements = slide.get("pageElements") or []
+    title_element = _title_element(elements)
+    title = _text_content(title_element["shape"]) if title_element is not None else ""
+
     body: list[str] = []
-    for element in slide.get("pageElements") or []:
+    for element in elements:
+        if element is title_element:
+            continue
         if "table" in element:
             body.extend(render_markdown_table(_table_rows(element["table"])))
             continue
@@ -69,9 +97,6 @@ def _slide_lines(slide: dict, number: int) -> list[str]:
             continue  # image, video, line, sheetsChart, speakerSpotlight
         text = _text_content(shape)
         if not text:
-            continue
-        if not title and _placeholder_type(shape) in _TITLE_PLACEHOLDERS:
-            title = text
             continue
         body.append(text)
 

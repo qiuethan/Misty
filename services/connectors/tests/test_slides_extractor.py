@@ -51,10 +51,61 @@ def test_centered_title_also_counts_as_the_title():
     assert "## Slide 1: Welcome" in out
 
 
-def test_slide_without_a_title_placeholder_has_no_colon():
-    out = _extract([_slide([_shape("just body text\n")])]).text
+def test_slide_with_no_text_at_all_has_no_colon():
+    # The only remaining case with genuinely no title candidate: a slide with
+    # no text shapes and no table. (A slide with body text but no placeholder
+    # now promotes that text to the title via the fallback below, so it no
+    # longer belongs to "no colon" — see
+    # test_no_placeholder_promotes_first_text_shape_to_title.)
+    out = _extract([_slide([{"objectId": "img1", "image": {"contentUrl": "https://x"}}])]).text
     assert "## Slide 1" in out
     assert "## Slide 1:" not in out
+
+
+def test_slide_with_only_a_table_has_no_colon():
+    table = {
+        "objectId": "t1",
+        "table": {
+            "tableRows": [
+                {"tableCells": [{"text": {"textElements": [{"textRun": {"content": "A\n"}}]}}]}
+            ]
+        },
+    }
+    out = _extract([_slide([table])]).text
+    assert "## Slide 1" in out
+    assert "## Slide 1:" not in out
+
+
+def test_no_placeholder_promotes_first_text_shape_to_title():
+    out = _extract(
+        [
+            _slide(
+                [
+                    _shape("Recruitment Overview\n", object_id="s1"),
+                    _shape("More details here\n", object_id="s2"),
+                ]
+            )
+        ]
+    ).text
+    assert "## Slide 1: Recruitment Overview" in out
+    assert out.count("Recruitment Overview") == 1
+    assert "More details here" in out
+
+
+def test_placeholder_title_wins_over_an_earlier_non_placeholder_shape():
+    out = _extract(
+        [
+            _slide(
+                [
+                    _shape("Not the title\n", object_id="s1"),
+                    _shape("Actual Title\n", placeholder="TITLE", object_id="s2"),
+                ]
+            )
+        ]
+    ).text
+    assert "## Slide 1: Actual Title" in out
+    assert "## Slide 1: Not the title" not in out
+    assert "Not the title" in out  # stays in the body
 
 
 def test_slides_are_numbered_from_one_in_order():
