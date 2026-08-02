@@ -49,6 +49,20 @@ class _FakeService:
         return self._files
 
 
+class _FakeDocsService:
+    def __init__(self, doc):
+        self._doc = doc
+
+    def documents(self):
+        return self
+
+    def get(self, *, documentId):
+        return self
+
+    def execute(self):
+        return self._doc
+
+
 def _source(files, **kwargs):
     return GoogleSource(
         credentials_json_b64="fake",
@@ -58,18 +72,19 @@ def _source(files, **kwargs):
     )
 
 
-def test_google_doc_falls_back_to_plain_text_export_until_task_6():
-    # Task 6 replaces this with the native Docs API; until then Docs uses the
-    # same Drive-export fallback as Slides.
+def test_google_doc_routes_to_the_native_docs_extractor():
     files = _FakeFiles(
-        meta={"name": "Sponsorship Deck", "mimeType": "application/vnd.google-apps.document"},
-        payload=b"the document body",
+        meta={"name": "Sponsorship Deck", "mimeType": "application/vnd.google-apps.document"}
     )
-    result = _source(files).fetch(DOC_URL)
+    docs = _FakeDocsService({"title": "T", "body": {"content": []}})
+    source = GoogleSource(
+        credentials_json_b64="fake",
+        max_content_chars=1000,
+        services={"drive": _FakeService(files), "docs": docs},
+    )
+    result = source.fetch(DOC_URL)
     assert result.title == "Sponsorship Deck"
-    assert result.content == "the document body"
-    assert result.warnings == []
-    assert files.export_mime == "text/plain"
+    assert files.export_mime is None, "Docs must not go through Drive export any more"
 
 
 def test_slides_export_as_plain_text():
@@ -121,8 +136,9 @@ def test_missing_credentials_raise_not_configured():
 
 
 def test_content_is_bounded_by_max_content_chars():
+    # Slides still goes through the Drive-export fallback, unlike Docs.
     files = _FakeFiles(
-        meta={"name": "Huge", "mimeType": "application/vnd.google-apps.document"},
+        meta={"name": "Huge", "mimeType": "application/vnd.google-apps.presentation"},
         payload=b"x" * 5000,
     )
     source = GoogleSource(
@@ -130,7 +146,7 @@ def test_content_is_bounded_by_max_content_chars():
         max_content_chars=100,
         services={"drive": _FakeService(files)},
     )
-    result = source.fetch(DOC_URL)
+    result = source.fetch(SLIDES_URL)
     assert len(result.content) == 100
 
 
@@ -150,10 +166,26 @@ def test_required_scopes_include_drive_readonly():
     assert "https://www.googleapis.com/auth/drive.readonly" in required_scopes()
 
 
-def test_required_services_is_just_drive_with_current_registry():
+def test_required_services_include_docs_with_current_registry():
     from src.sources.google import required_services
 
-    assert required_services() == ("drive",)
+    # GOOGLE_DOC now routes to the native DocsExtractor, which declares the
+    # "docs" client, so the registry's client set is drive + docs.
+    assert required_services() == ("docs", "drive")
+
+
+def test_required_scopes_now_include_docs():
+    from src.sources.google import required_scopes
+
+    assert "https://www.googleapis.com/auth/documents.readonly" in required_scopes()
+
+
+def test_required_services_now_include_docs():
+    from src.sources.google import required_services
+
+    # Registering DocsExtractor is the ONLY change; the docs client now gets
+    # built because the extractor declares it, not because google.py was edited.
+    assert "docs" in required_services()
 
 
 def test_required_services_unions_in_a_new_extractor_declared_service():
