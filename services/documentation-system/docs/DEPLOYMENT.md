@@ -189,10 +189,15 @@ a runtime dependency with **two different failure modes** depending on when it's
 - **At boot, outside `local`:** hard-required. `verify_production_secrets()` refuses to start
   if `CONNECTORS_API_KEY` is still the built-in dev default — see "Environment variables"
   above.
-- **At request time:** soft. If connectors is unreachable or errors, `ConnectorsFetcher`
-  raises `FetchError`, which `ingest_doc` catches the same way it catches a `web`/`github`
-  fetch failure: the doc is still catalogued, just without a content snapshot, and a warning
-  is returned. A connectors outage never fails `POST /docs` or `POST /docs/{id}/refetch`.
+- **At request time:** soft for ingest, hard for refetch — deliberately different, since
+  ingest degrading a whole batch is worse than a single explicit refetch failing loudly.
+  On `POST /docs`, if connectors is unreachable or errors, `ConnectorsFetcher` raises
+  `FetchError`, which `ingest_doc` catches the same way it catches a `web`/`github` fetch
+  failure: the doc is still catalogued, just without a content snapshot, and a warning is
+  returned — a connectors outage never fails `POST /docs`. On `POST /docs/{id}/refetch`,
+  the same `FetchError` is instead surfaced to the caller as an HTTP 502 (see
+  `src/api/routers/docs.py`): refetch is an explicit user-initiated action, so it fails
+  loudly rather than silently leaving stale content in place.
 
 **Deploy order:** connectors first, then set `CONNECTORS_BASE_URL` / `CONNECTORS_API_KEY` on
 documentation-system, then deploy documentation-system — see "Configuring / enabling

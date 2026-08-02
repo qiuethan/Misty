@@ -109,33 +109,68 @@ class GoogleSource:
         self._request_timeout_s = request_timeout_s
         # API name -> client. A dict rather than one client because extractors
         # need different APIs (drive, docs, ...). Tests inject fakes here; in
-        # production this starts None and is memoized by _get_services() on
-        # first use, guarded by _build_lock.
+        # production this starts None and is built fresh per fetch() call by
+        # _build_services(), from the memoized credentials below.
         self._services = services
+        # Memoized service_account.Credentials, shared across threads. Its
+        # cached token may be refreshed concurrently by more than one thread —
+        # service_account.Credentials has no refresh lock, and
+        # google_auth_httplib2.AuthorizedHttp adds none (unlike
+        # google.auth.transport.requests.AuthorizedSession, which does) — but
+        # that race is benign: at worst two threads pay a duplicate token
+        # exchange, last write wins, and both tokens are valid. What must NOT
+        # be shared is the httplib2.Http transport built from these
+        # credentials, because httplib2.Http itself is not thread-safe
+        # (mutable per-host connection pool) — see _build_services().
+        self._credentials = None
         # FastAPI runs sync route handlers in a threadpool, so concurrent
-        # /fetch calls can race the first build. Guards ONLY the build below,
-        # never the rest of fetch().
+        # /fetch calls can race the first credentials build. Guards ONLY the
+        # build below, never the rest of fetch().
         self._build_lock = threading.Lock()
 
-    def _build_services(self) -> dict:
+    def _build_credentials(self):
         # Imported lazily so the Google dependency tree never loads unless a
         # Google URL is actually fetched.
-        import google_auth_httplib2
-        import httplib2
         from google.oauth2 import service_account
-        from googleapiclient.discovery import build
 
         try:
             info = json.loads(base64.b64decode(self._credentials_json_b64))
-            creds = service_account.Credentials.from_service_account_info(
+            return service_account.Credentials.from_service_account_info(
                 info, scopes=list(required_scopes())
             )
         except Exception as e:  # malformed key material is a config failure
             raise SourceNotConfigured(f"invalid google credentials: {type(e).__name__}") from e
 
+    def _get_credentials(self):
+        """Build the credentials object once and memoize it. Credential
+        decode + JWT token exchange happen at most once per process (per
+        instance), not on every /fetch. Double-checked locking: the lock is
+        only held while actually building, not on the fast (already-built)
+        path."""
+        if self._credentials is not None:
+            return self._credentials
+        with self._build_lock:
+            if self._credentials is None:
+                self._credentials = self._build_credentials()
+            return self._credentials
+
+    def _build_services(self, credentials) -> dict:
+        """Build fresh discovery clients over a fresh httplib2.Http.
+
+        Called once per fetch() — never memoized. httplib2.Http is not
+        thread-safe (it keeps a mutable per-host connection pool), and
+        FastAPI can run concurrent /fetch calls on the threadpool, so a
+        shared transport risks one request's response bytes landing on
+        another request's connection. The credentials themselves are cheap
+        to reuse (see _get_credentials); only the transport is rebuilt here.
+        """
+        import google_auth_httplib2
+        import httplib2
+        from googleapiclient.discovery import build
+
         def _client(name: str, version: str):
             authed = google_auth_httplib2.AuthorizedHttp(
-                creds, http=httplib2.Http(timeout=self._request_timeout_s)
+                credentials, http=httplib2.Http(timeout=self._request_timeout_s)
             )
             return build(name, version, http=authed, cache_discovery=False)
 
@@ -147,26 +182,17 @@ class GoogleSource:
             clients[name] = _client(name, version)
         return clients
 
-    def _get_services(self) -> dict:
-        """Build the Google API clients once and memoize them. Credential
-        decode + JWT token exchange happen at most once per process (per
-        instance), not on every /fetch. Double-checked locking: the lock is
-        only held while actually building, not on the fast (already-built)
-        path."""
-        if self._services is not None:
-            return self._services
-        with self._build_lock:
-            if self._services is None:
-                self._services = self._build_services()
-            return self._services
-
     def fetch(self, url: str) -> SourceResult:
         file_id = parse_file_id(url)
         if file_id is None:
             raise SourceNotFound(f"no google file id in url: {url!r}")
-        if self._services is None and not self._credentials_json_b64:
-            raise SourceNotConfigured("google credentials not configured")
-        services = self._get_services()
+        if self._services is not None:
+            services = self._services
+        else:
+            if not self._credentials_json_b64:
+                raise SourceNotConfigured("google credentials not configured")
+            credentials = self._get_credentials()
+            services = self._build_services(credentials)
 
         meta = execute(services["drive"].files().get(fileId=file_id, fields="name,mimeType"))
         name = (meta or {}).get("name")

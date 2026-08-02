@@ -97,3 +97,50 @@ def test_empty_content_normalizes_content_and_snapshot_together():
     result = _fetcher(handler).fetch("https://docs.google.com/document/d/abc/edit")
     assert result.content is None
     assert result.content_snapshot is None
+
+
+def test_wrong_typed_content_int_becomes_a_fetcherror():
+    # A well-formed JSON object with the wrong field type must not escape as
+    # a raw TypeError (len(123)) — it has to become an ordinary FetchError,
+    # same as any other connectors failure mode, so ingest_doc's
+    # `except FetchError` catches it instead of a 500 on POST /docs.
+    def handler(request):
+        return httpx.Response(200, json={"title": "t", "content": 123, "warnings": []})
+
+    with pytest.raises(FetchError):
+        _fetcher(handler).fetch("https://docs.google.com/document/d/abc/edit")
+
+
+def test_wrong_typed_content_list_becomes_a_fetcherror():
+    # A well-formed JSON object with content as a list must not escape as a
+    # raw pydantic ValidationError from FetchResult construction.
+    def handler(request):
+        return httpx.Response(200, json={"title": "t", "content": ["a"], "warnings": []})
+
+    with pytest.raises(FetchError):
+        _fetcher(handler).fetch("https://docs.google.com/document/d/abc/edit")
+
+
+def test_wrong_typed_title_becomes_a_fetcherror():
+    def handler(request):
+        return httpx.Response(200, json={"title": 5, "content": "c", "warnings": []})
+
+    with pytest.raises(FetchError):
+        _fetcher(handler).fetch("https://docs.google.com/document/d/abc/edit")
+
+
+def test_oversized_content_is_not_pre_truncated_by_the_fetcher():
+    # Regression: ConnectorsFetcher used to clamp content to MAX_CONTENT_CHARS
+    # itself, which made clamp_content's len() check always true and its
+    # "content truncated" warning unreachable. src.content.clamp_content must
+    # be the single authority on the size cap — the fetcher passes the full
+    # length through untouched.
+    from src.content import MAX_CONTENT_CHARS
+
+    oversized = "x" * (MAX_CONTENT_CHARS + 1000)
+
+    def handler(request):
+        return httpx.Response(200, json={"title": "Big", "content": oversized, "warnings": []})
+
+    result = _fetcher(handler).fetch("https://docs.google.com/document/d/abc/edit")
+    assert len(result.content) == MAX_CONTENT_CHARS + 1000

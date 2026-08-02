@@ -209,24 +209,37 @@ def test_required_services_unions_in_a_new_extractor_declared_service():
         google.EXTRACTORS.update(original)
 
 
-def test_services_are_built_once_across_two_fetch_calls():
-    # Regression: fetch() used to call _build_services() unmemoized on every
-    # request, re-decoding credentials and re-exchanging a JWT with Google
-    # each time. A counting fake stands in for _build_services here.
+def test_credentials_are_built_once_but_transports_are_rebuilt_per_fetch():
+    # Credentials (decode + JWT exchange) are the expensive, thread-safe part
+    # and are memoized. The httplib2 transport underneath each discovery
+    # client is NOT thread-safe (mutable per-host connection pool) and must
+    # never be shared across concurrent /fetch calls, so it is rebuilt fresh
+    # every time — this is what a counting fake for each half proves here.
     files = _FakeFiles(meta={"name": "Doc", "mimeType": "text/plain"}, payload=b"hi")
     source = GoogleSource(credentials_json_b64="fake", max_content_chars=1000)
-    build_calls = {"n": 0}
 
-    def _fake_build():
-        build_calls["n"] += 1
-        return {"drive": _FakeService(files)}
+    creds_calls = {"n": 0}
 
-    source._build_services = _fake_build
+    def _fake_build_credentials():
+        creds_calls["n"] += 1
+        return object()
+
+    built_service_dicts = []
+
+    def _fake_build_services(credentials):
+        services = {"drive": _FakeService(files)}
+        built_service_dicts.append(services)
+        return services
+
+    source._build_credentials = _fake_build_credentials
+    source._build_services = _fake_build_services
 
     source.fetch(DRIVE_URL)
     source.fetch(DRIVE_URL)
 
-    assert build_calls["n"] == 1
+    assert creds_calls["n"] == 1, "credentials should be built once and memoized"
+    assert len(built_service_dicts) == 2, "a distinct transport must be built per fetch"
+    assert built_service_dicts[0] is not built_service_dicts[1]
 
 
 def test_request_timeout_s_reaches_the_http_transport(monkeypatch):
@@ -263,7 +276,8 @@ def test_request_timeout_s_reaches_the_http_transport(monkeypatch):
         max_content_chars=1000,
         request_timeout_s=7.5,
     )
-    source._build_services()
+    credentials = source._get_credentials()
+    source._build_services(credentials)
 
     assert seen_timeouts, "httplib2.Http was never constructed"
     assert all(t == 7.5 for t in seen_timeouts)

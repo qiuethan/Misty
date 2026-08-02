@@ -25,9 +25,9 @@ def build_registry(settings: Settings) -> dict[str, SourceFetcher]:
 
     All four Google source ids (gdocs/gsheets/gslides/gdrive) share ONE
     GoogleSource instance rather than one each — they have identical config,
-    and a GoogleSource memoizes its built API clients internally, so four
+    and a GoogleSource memoizes its built credentials internally, so four
     separate instances would mean four independent (and four times as
-    expensive) client caches for no benefit.
+    expensive) credential decodes and token exchanges for no benefit.
     """
     built: dict[Callable[[Settings], SourceFetcher], SourceFetcher] = {}
     registry: dict[str, SourceFetcher] = {}
