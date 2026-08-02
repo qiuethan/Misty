@@ -24,6 +24,12 @@ class Extractor(Protocol):
     # than at a single hard-coded constant.
     scopes: tuple[str, ...]
 
+    # Google API client names this extractor needs (e.g. "drive", "docs").
+    # GoogleSource unions these across every registered extractor and builds
+    # exactly that set of clients, so a new extractor declares its needs here
+    # rather than having them hard-coded at the build site.
+    services: tuple[str, ...]
+
     def extract(self, services: dict, file_id: str, mime: str) -> ExtractedText:
         """`services` maps API name ("drive", "docs") to a built client."""
         ...

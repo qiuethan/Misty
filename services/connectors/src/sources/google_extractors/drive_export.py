@@ -10,6 +10,7 @@ DRIVE_READONLY = "https://www.googleapis.com/auth/drive.readonly"
 
 class DriveExportExtractor:
     scopes = (DRIVE_READONLY,)
+    services = ("drive",)
 
     def __init__(self, *, export_mime: str | None, warning: str | None = None) -> None:
         # export_mime=None means the file has real bytes to download

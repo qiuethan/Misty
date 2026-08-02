@@ -5,7 +5,18 @@ dependency never loads unless a Google URL is actually fetched — the same
 pattern as services/verification/src/email/gmail.py.
 """
 
+import base64
+import json
 import re
+
+from src.sources.base import (
+    SourceNotConfigured,
+    SourceNotFound,
+    SourceResult,
+    SourceUnsupported,
+)
+from src.sources.google_extractors.base import Extractor, execute
+from src.sources.google_extractors.drive_export import DRIVE_READONLY, DriveExportExtractor
 
 # Drive file ids are URL-safe base64-ish: letters, digits, hyphen, underscore.
 _ID = r"([a-zA-Z0-9_-]+)"
@@ -28,27 +39,13 @@ def parse_file_id(url: str) -> str | None:
     return None
 
 
-import base64
-import json
-
-from src.sources.base import (
-    SourceNotConfigured,
-    SourceNotFound,
-    SourceResult,
-    SourceUnsupported,
-)
-from src.sources.google_extractors.base import Extractor, execute
-from src.sources.google_extractors.drive_export import DRIVE_READONLY, DriveExportExtractor
-
 GOOGLE_SOURCE_IDS = ("gdocs", "gsheets", "gslides", "gdrive")
 
 GOOGLE_DOC = "application/vnd.google-apps.document"
 GOOGLE_SHEET = "application/vnd.google-apps.spreadsheet"
 GOOGLE_SLIDES = "application/vnd.google-apps.presentation"
 
-SHEET_WARNING = (
-    "spreadsheet export captures the first sheet only; other tabs were not read"
-)
+SHEET_WARNING = "spreadsheet export captures the first sheet only; other tabs were not read"
 
 # MIME type -> extractor. Task 6 replaces the GOOGLE_DOC entry with the native
 # Docs API extractor; the GOOGLE_SLIDES and GOOGLE_SHEET entries are the slots
@@ -70,6 +67,23 @@ def required_scopes() -> tuple[str, ...]:
         scopes.update(extractor.scopes)
     scopes.update(_MEDIA_EXTRACTOR.scopes)
     return tuple(sorted(scopes))
+
+
+# Google API name -> discovery API version, for the clients required_services()
+# can name. Extend this alongside a new extractor that declares a new service.
+_API_VERSIONS = {"drive": "v3", "docs": "v1", "slides": "v1", "sheets": "v4"}
+
+
+def required_services() -> tuple[str, ...]:
+    """Every Google API client name the registered extractors need, plus Drive
+    for metadata. Mirrors required_scopes(): a new extractor declares its own
+    service names rather than having them hard-coded at the build site.
+    """
+    services = {"drive"}
+    for extractor in EXTRACTORS.values():
+        services.update(extractor.services)
+    services.update(_MEDIA_EXTRACTOR.services)
+    return tuple(sorted(services))
 
 
 class GoogleSource:
@@ -109,7 +123,13 @@ class GoogleSource:
             authed = google_auth_httplib2.AuthorizedHttp(creds, http=httplib2.Http(timeout=30))
             return build(name, version, http=authed, cache_discovery=False)
 
-        return {"drive": _client("drive", "v3"), "docs": _client("docs", "v1")}
+        clients = {}
+        for name in required_services():
+            version = _API_VERSIONS.get(name)
+            if version is None:
+                raise SourceNotConfigured(f"no discovery API version mapped for {name!r}")
+            clients[name] = _client(name, version)
+        return clients
 
     def fetch(self, url: str) -> SourceResult:
         file_id = parse_file_id(url)

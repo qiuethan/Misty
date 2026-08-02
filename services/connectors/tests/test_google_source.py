@@ -150,6 +150,31 @@ def test_required_scopes_include_drive_readonly():
     assert "https://www.googleapis.com/auth/drive.readonly" in required_scopes()
 
 
+def test_required_services_is_just_drive_with_current_registry():
+    from src.sources.google import required_services
+
+    assert required_services() == ("drive",)
+
+
+def test_required_services_unions_in_a_new_extractor_declared_service():
+    from src.sources import google
+
+    class _FakeSlidesExtractor:
+        scopes = ()
+        services = ("slides",)
+
+        def extract(self, services, file_id, mime):
+            raise NotImplementedError
+
+    original = dict(google.EXTRACTORS)
+    google.EXTRACTORS["application/vnd.google-apps.presentation"] = _FakeSlidesExtractor()
+    try:
+        assert "slides" in google.required_services()
+    finally:
+        google.EXTRACTORS.clear()
+        google.EXTRACTORS.update(original)
+
+
 def _http_error(status):
     from googleapiclient.errors import HttpError
 

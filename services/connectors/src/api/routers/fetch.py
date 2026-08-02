@@ -39,6 +39,4 @@ def fetch(
     except SourceUnavailable:
         raise HTTPException(status_code=502, detail="source upstream error")
     request.state.audit_extra["warnings"] = len(result.warnings)
-    return FetchResponse(
-        title=result.title, content=result.content, warnings=list(result.warnings)
-    )
+    return FetchResponse(title=result.title, content=result.content, warnings=list(result.warnings))
