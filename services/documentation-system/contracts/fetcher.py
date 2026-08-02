@@ -8,6 +8,9 @@ class FetchResult(BaseModel):
     title: str | None = None
     content: str | None = None  # full extracted text (may be large)
     content_snapshot: str | None = None  # bounded preview, derived from content
+    # Non-fatal information loss reported by the fetcher (e.g. a spreadsheet
+    # whose extra tabs were not read). Folded into the ingest warnings.
+    warnings: list[str] = []
 
 
 class FetchError(Exception):

@@ -204,6 +204,18 @@ def test_ingest_without_content_creates_no_content_row(store):
     assert store.get_doc_content(res.doc.id) is None
 
 
+def test_ingest_surfaces_fetcher_warnings(store):
+    fetchers = FakeFetchers(
+        result=FetchResult(
+            title="Budget", content="a,b", content_snapshot="a,b",
+            warnings=["first sheet only"],
+        )
+    )
+    res = ingest_doc(DocIngest(url="https://github.com/a/warn"), storage=store,
+                     fetchers=fetchers, directory=FakeDirectory(), actor="bot")
+    assert "first sheet only" in res.warnings
+
+
 def test_ingest_dedup_applies_grants_to_existing_doc(store):
     f = FakeFetchers(result=FetchResult(title="X"))
     first = ingest_doc(DocIngest(url="https://x.com/a"), storage=store,
