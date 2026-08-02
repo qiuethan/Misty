@@ -16,6 +16,22 @@ SHEETS_READONLY = "https://www.googleapis.com/auth/spreadsheets.readonly"
 MAX_ROWS_PER_TAB = 2000
 
 
+def _a1_quote(title: str) -> str:
+    """Quote a tab title for use in an A1-notation range.
+
+    Unquoted multi-word titles are NOT the problem — Google normalizes bare
+    spaces fine (confirmed against a live spreadsheet: "Form Responses 1"
+    round-trips identically quoted or not). The real ambiguity is narrower:
+    an apostrophe in the title would terminate a quoted string early (so it
+    must be doubled), and a title that looks like a cell reference (e.g.
+    "Q1", "A1") or contains "!" (the sheet/range separator) is ambiguous
+    unquoted. Google's own guidance is that it is always safe to quote, and
+    quoting is a no-op for titles that already work unquoted, so every title
+    is quoted unconditionally rather than special-casing which ones need it.
+    """
+    return "'" + title.replace("'", "''") + "'"
+
+
 def _csv_lines(rows: list[list]) -> list[str]:
     """Rows as CSV lines.
 
@@ -55,7 +71,10 @@ class SheetsExtractor:
 
         # One request for every tab. valueRenderOption stays at its default
         # FORMATTED_VALUE — what a human sees, not raw floats or formula source.
-        response = execute(spreadsheets.values().batchGet(spreadsheetId=file_id, ranges=titles))
+        # Ranges are quoted (see _a1_quote); the raw, unquoted title is still
+        # what gets used for the "## <title>" heading below.
+        ranges = [_a1_quote(title) for title in titles]
+        response = execute(spreadsheets.values().batchGet(spreadsheetId=file_id, ranges=ranges))
         value_ranges = (response or {}).get("valueRanges") or []
 
         lines: list[str] = []

@@ -68,7 +68,24 @@ def test_tabs_appear_in_workbook_index_order():
 def test_all_tabs_are_fetched_in_a_single_batchget():
     _, recorder = _extract([("A", 0), ("B", 1)], [[["1"]], [["2"]]])
     assert recorder["batchGet_calls"] == 1
-    assert recorder["ranges"] == ["A", "B"]
+    assert recorder["ranges"] == ["'A'", "'B'"]
+
+
+def test_tab_title_with_an_apostrophe_is_quoted_and_doubled_in_the_range():
+    result, recorder = _extract([("Jon's Data", 0)], [[["x"]]])
+    assert recorder["ranges"] == ["'Jon''s Data'"]
+    assert "## Jon's Data" in result.text
+
+
+def test_tab_title_with_a_space_is_quoted_in_the_range_but_heading_stays_raw():
+    result, recorder = _extract([("Form Responses 1", 0)], [[["x"]]])
+    assert recorder["ranges"] == ["'Form Responses 1'"]
+    assert "## Form Responses 1" in result.text
+
+
+def test_tab_title_that_looks_like_a_cell_reference_is_quoted():
+    _, recorder = _extract([("Q1", 0)], [[["x"]]])
+    assert recorder["ranges"] == ["'Q1'"]
 
 
 def test_metadata_call_does_not_request_grid_data():
