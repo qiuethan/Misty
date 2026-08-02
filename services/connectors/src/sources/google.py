@@ -34,6 +34,12 @@ _FILE_ID_PATTERNS = (
     re.compile(rf"docs\.google\.com/presentation/d/{_ID}"),
     re.compile(rf"drive\.google\.com/file/d/{_ID}"),
     re.compile(rf"drive\.google\.com/open\?(?:[^#]*&)?id={_ID}"),
+    # The published/response link is docs.google.com/forms/d/e/{published_id}/
+    # viewform: the segment after "d/e/" is a published id the Forms API
+    # cannot resolve, not the Drive file id. The negative lookahead on "e/"
+    # excludes that shape so it correctly falls through to None rather than
+    # capturing the literal "e" and causing a confusing 404 from Google.
+    re.compile(rf"docs\.google\.com/forms/d/(?!e/){_ID}"),
 )
 
 

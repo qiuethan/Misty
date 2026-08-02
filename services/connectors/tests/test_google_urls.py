@@ -15,6 +15,7 @@ FILE_ID = "1a2B3c-D4e_F5g6H7i8J9k"
         f"https://drive.google.com/file/d/{FILE_ID}/view",
         f"https://drive.google.com/open?id={FILE_ID}",
         f"https://drive.google.com/open?authuser=0&id={FILE_ID}",
+        f"https://docs.google.com/forms/d/{FILE_ID}/edit",
     ],
 )
 def test_recognized_forms_yield_the_file_id(url):
@@ -29,6 +30,8 @@ def test_recognized_forms_yield_the_file_id(url):
         "https://drive.google.com/open?authuser=0",
         "not a url at all",
         "",
+        "https://docs.google.com/forms/d/e/1FAIpQLSfExample/viewform",
+        "https://forms.gle/abc123",
     ],
 )
 def test_unrecognized_forms_yield_none(url):

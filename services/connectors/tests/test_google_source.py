@@ -196,10 +196,15 @@ def test_content_is_bounded_by_max_content_chars_on_the_media_path():
 def test_registry_exposes_an_extractor_per_google_editor_type():
     from src.sources.google import EXTRACTORS
 
-    assert set(EXTRACTORS) >= {
+    # Exact set (not a subset check) so adding or removing an extractor
+    # shows up as a visible diff here instead of silently going untracked.
+    assert set(EXTRACTORS) == {
         "application/vnd.google-apps.document",
         "application/vnd.google-apps.presentation",
         "application/vnd.google-apps.spreadsheet",
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.google-apps.form",
     }
 
 
