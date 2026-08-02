@@ -9,11 +9,11 @@ Railway + Neon dashboards / CLIs.
 | Railway service | Root dir | Database | Pre-deploy | Notes |
 |---|---|---|---|---|
 | `team-tracking` | `/` | Neon (own project) | `alembic upgrade head` | Deploy first — everything references it. |
-| `documentation-system` | `/` | Neon (own project) | `alembic upgrade head` | Consumes team-tracking **and connectors** — deploy connectors first. |
+| `documentation-system` | `/` | Neon (own project) | `alembic upgrade head` | Consumes team-tracking (hard dependency) and connectors (soft — recommended to deploy connectors first, not required). |
 | `verification` | `/` | Neon (own project) | `alembic upgrade head` | Email one-time codes. |
 | `llm` | `/` | **none** | — | Stateless Bedrock proxy; keys from `CONSUMER_KEYS`. |
 | `meeting` | `/` | **none** | — | **Stateful in-memory**; keys from `CONSUMER_KEYS`. See the single-replica warning in step 2. |
-| `connectors` | `/` | **none** | — | Stateless outbound adapter (Google Drive/Docs); keys from `CONSUMER_KEYS`. Deploy before `documentation-system` — see its `CONNECTORS_API_KEY` note in step 3. |
+| `connectors` | `/` | **none** | — | Stateless outbound adapter (Google Drive/Docs); keys from `CONSUMER_KEYS`. Recommended to deploy before `documentation-system` (not required) — see its `CONNECTORS_API_KEY` note in step 3. |
 | `discord-bot` | `discord-bot` | none | — | Node; the only consumer-facing surface. |
 
 All seven are **private** — no public domains. They reach each other over
@@ -102,10 +102,14 @@ Set these per environment (staging vs production) per service.
 | `EMAIL_FROM` | — | — | `UTMIST <noreply@utmist.ca>` |
 | `RESEND_API_KEY` | — | — | from Resend |
 
-> **documentation-system refuses to boot without `CONNECTORS_API_KEY`.**
-> `verify_production_secrets()` treats it like `API_KEY`/`DIRECTORY_API_KEY` —
-> still on the dev default outside `local` fails the deploy at startup, not on
-> first request. See connectors before it in the deploy order below.
+> **documentation-system boots fine without `CONNECTORS_API_KEY`.** Unlike
+> `API_KEY`/`DIRECTORY_API_KEY`, `verify_production_secrets()` only logs a
+> startup warning if it's still on the dev default outside `local` — it does
+> not fail the deploy. Without it, Google-source fetches (`gdocs`, `gsheets`,
+> `gslides`, `gdrive`) fail and are recorded as per-doc ingest warnings; the
+> catalog itself still works. Deploying connectors before documentation-system
+> is still recommended so Google fetches work from the start, but it is not
+> required — see the deploy order below.
 
 **The three DB-free services:**
 
@@ -165,13 +169,16 @@ Twelve of them — one per backend service per environment (plus
 `CODE_HMAC_SECRET` for verification). Paste into Railway's variable dashboard,
 never into a file.
 
-**Deploy order matters.** In each environment:
+**Deploy order matters for the hard dependencies below; connectors is a
+recommended-but-not-required exception.** In each environment:
 
 1. **team-tracking first** — its `preDeployCommand` runs `alembic upgrade head`
    against the environment's Neon branch, which the provisioning script (next)
    depends on.
-2. **connectors** — documentation-system needs it reachable, and needs
-   `CONNECTORS_API_KEY` set before its own boot check passes (see step 4b).
+2. **connectors** — recommended before documentation-system so Google-source
+   fetches work immediately, but not required: documentation-system boots
+   fine without connectors reachable or `CONNECTORS_API_KEY` set (see step 4b
+   and the warning above) — it just can't fetch Google content until then.
 3. **documentation-system + verification** — they migrate the same way as
    team-tracking.
 4. **`llm` before `meeting`** — `meeting` needs `LLM_BASE_URL` pointing at a

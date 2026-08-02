@@ -22,9 +22,10 @@ about the service in a real (staging / production) environment.
   See the directory-dependency section below; the service *runs* without it
   but ownership validation degrades.
 - **A reachable connectors service** — fetches content for the Google
-  sources. See "The connectors dependency" below: a connectors *outage*
-  degrades gracefully at request time, but a missing `CONNECTORS_API_KEY`
-  blocks *boot* outside `local` (see `verify_production_secrets()` below).
+  sources. See "The connectors dependency" below: it is a soft dependency
+  both at request time and at *boot* — a connectors outage or a missing
+  `CONNECTORS_API_KEY` degrades Google-source fetches but never blocks
+  startup (see `verify_production_secrets()` below).
 
 ## Environment variables
 
@@ -38,18 +39,21 @@ All configuration is env-driven (`src/config.py`, loaded from the process enviro
 | `DIRECTORY_BASE_URL` | `directory_base_url` | `http://localhost:8000` | Base URL of the team-tracking directory |
 | `DIRECTORY_API_KEY` | `directory_api_key` | `dev-api-key-change-me` | API key this service uses to call the directory |
 | `CONNECTORS_BASE_URL` | `connectors_base_url` | `http://localhost:8005` | Base URL of the connectors service (fetches Google source content) |
-| `CONNECTORS_API_KEY` | `connectors_api_key` | `dev-api-key-change-me` | API key this service uses to call connectors. **Must be overridden outside `local`** — `verify_production_secrets()` refuses to boot on the dev default (see [`src/config.py`](../src/config.py)). |
+| `CONNECTORS_API_KEY` | `connectors_api_key` | `dev-api-key-change-me` | API key this service uses to call connectors. **Should be overridden outside `local`**, but it's a soft dependency — `verify_production_secrets()` only logs a startup warning on the dev default, it does not refuse to boot (see [`src/config.py`](../src/config.py)). |
 
 Staging + production values live in **Railway** — set per environment via the
 runbook's env-var contract. Keep the defaults ONLY for local dev; anything
 running against a real Neon branch must set a strong `API_KEY` and its own
-scoped `DIRECTORY_API_KEY` and `CONNECTORS_API_KEY` (issued by the
-provisioning script / connectors' `connectors-keys` CLI — see the runbook).
+scoped `DIRECTORY_API_KEY`, and should set its own scoped `CONNECTORS_API_KEY`
+(issued by the provisioning script / connectors' `connectors-keys` CLI — see
+the runbook) to enable Google-source content.
 
-> **A staging or production deploy that has not set `CONNECTORS_API_KEY` will
-> refuse to boot.** `verify_production_secrets()` checks it alongside `API_KEY`
-> and `DIRECTORY_API_KEY` — this is not optional config once `docs_env` is
-> `staging`/`production`.
+> **A staging or production deploy that has not set `API_KEY` or
+> `DIRECTORY_API_KEY` will refuse to boot.** `verify_production_secrets()`
+> treats those two as hard requirements once `docs_env` is `staging`/`production`.
+> `CONNECTORS_API_KEY` is different: a default there only logs a startup
+> warning — the service still boots, it just can't fetch Google-source
+> content (see "The connectors dependency" below).
 
 ## Postgres
 
@@ -154,13 +158,12 @@ the `Fetcher`, register it, and flip `content_fetch_enabled` (see
 [`docs/CONTRIBUTING.md`](CONTRIBUTING.md)).
 
 Fetcher-specific env vars: `CONNECTORS_BASE_URL` / `CONNECTORS_API_KEY` (see above) configure
-the Google sources' fetcher. **Deploy order matters:** deploy connectors first, then set
-these two vars on documentation-system, then deploy documentation-system. Deploying
-documentation-system first either boots it into a `CONNECTORS_API_KEY` still on the dev
-default (refused by `verify_production_secrets()` outside `local`) or, once that's set,
-points it at a connectors instance that isn't up yet — Google-source fetches would then fail
-at request time (degraded, not fatal — see the connectors dependency section below) until
-connectors is reachable.
+the Google sources' fetcher. **Deploy order is recommended, not required:** documentation-system
+boots fine with no connectors configuration at all — `verify_production_secrets()` only warns
+on a default `CONNECTORS_API_KEY`, it never blocks startup. Deploying connectors first and
+setting these two vars on documentation-system before deploying it just avoids a window where
+Google-source fetches fail at request time (degraded, not fatal — see the connectors dependency
+section below) because connectors isn't up yet or isn't yet configured.
 
 ## The team-tracking directory dependency
 
@@ -186,9 +189,10 @@ The documentation-system fetches content for the Google sources (`gdrive`, `gdoc
 `gsheets`, `gslides`) by calling the [connectors](../../connectors/) service over HTTP. It is
 a runtime dependency with **two different failure modes** depending on when it's down:
 
-- **At boot, outside `local`:** hard-required. `verify_production_secrets()` refuses to start
-  if `CONNECTORS_API_KEY` is still the built-in dev default — see "Environment variables"
-  above.
+- **At boot, outside `local`:** soft. `verify_production_secrets()` logs a warning, not a
+  boot refusal, if `CONNECTORS_API_KEY` is still the built-in dev default — the service
+  still starts and catalogues docs, it just can't fetch Google-source content until a real
+  key is set. See "Environment variables" above.
 - **At request time:** soft for ingest, hard for refetch — deliberately different, since
   ingest degrading a whole batch is worse than a single explicit refetch failing loudly.
   On `POST /docs`, if connectors is unreachable or errors, `ConnectorsFetcher` raises
@@ -199,6 +203,8 @@ a runtime dependency with **two different failure modes** depending on when it's
   `src/api/routers/docs.py`): refetch is an explicit user-initiated action, so it fails
   loudly rather than silently leaving stale content in place.
 
-**Deploy order:** connectors first, then set `CONNECTORS_BASE_URL` / `CONNECTORS_API_KEY` on
-documentation-system, then deploy documentation-system — see "Configuring / enabling
-fetchers" above for what goes wrong if the order is reversed.
+**Deploy order:** recommended (not required) is connectors first, then set
+`CONNECTORS_BASE_URL` / `CONNECTORS_API_KEY` on documentation-system, then deploy
+documentation-system. documentation-system deploys independently either way — see
+"Configuring / enabling fetchers" above for what degrades (not breaks) if the order
+is reversed.
