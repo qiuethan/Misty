@@ -1,0 +1,213 @@
+# connectors
+
+Thin, stateless HTTP API that fetches document content from external sources on behalf of UTMIST's internal consumers: one `POST /fetch` endpoint, scoped API-key auth, no database.
+
+## What this service does
+
+Consumers like documentation-system want the text of a Google Doc (or, later, other source types) without holding source credentials themselves. connectors is an **outbound adapter**: it owns the Google service-account key and the source-specific fetch/export logic, and returns plain text.
+
+Two things this service deliberately is **not**:
+
+- **Not a gateway.** It does not sit in front of other UTMIST services or route traffic to them.
+- **Not an authorization boundary.** It authenticates the *caller* (via a scoped API key) but never learns *who the caller is fetching on behalf of* — there is no per-end-user identity in the request. Access control for the underlying document is whatever the source system enforces (for Google, Drive's own sharing settings on the service account's email). A consumer that needs to enforce "can this particular user see this doc" must do that itself before calling `/fetch`.
+
+Like `llm`, it is stateless — no database, no migrations, no persisted key store. API keys are seeded from a config env var at boot.
+
+## Quick start
+
+Prerequisites: Python 3.11+, [uv](https://github.com/astral-sh/uv). No Docker or database needed for local dev; Google credentials are optional (see below).
+
+```bash
+# 0. From the repo root, enter the service directory (all commands below run here)
+cd services/connectors
+
+# 1. Copy environment config
+cp .env.example .env
+
+# 2. Install dependencies (including dev tools)
+uv sync --extra dev
+
+# 3. Start the API server
+uv run uvicorn src.api.app:app --reload --port 8004
+```
+
+> The repo is a single [uv workspace](https://docs.astral.sh/uv/concepts/workspaces/) (root `pyproject.toml` with `[tool.uv.workspace] members = ["services/*", "packages/*"]`, one root `uv.lock`). connectors depends on the shared `platform-auth` package (`[tool.uv.sources] platform-auth = { workspace = true }`) but the commands above are unchanged — `uv sync` and `uv run pytest` work exactly as shown when run from this directory.
+
+The API is now at `http://localhost:8004`. Interactive Swagger UI is at `http://localhost:8004/docs`; the machine-readable schema is at `http://localhost:8004/openapi.json`.
+
+The default dev bootstrap key is `dev-api-key-change-me` (set in `.env`, carries the `admin` wildcard scope). Pass it as `X-API-Key` on every request:
+
+```bash
+curl -sS http://localhost:8004/fetch \
+  -H "X-API-Key: dev-api-key-change-me" \
+  -H "Content-Type: application/json" \
+  -d '{"source_id": "gdocs", "url": "https://docs.google.com/document/d/<file-id>/edit"}' | python3 -m json.tool
+```
+
+**Ports:** this service runs on **8004** (team-tracking/documentation-system use 8000, llm 8002, meeting/verification 8003) — chosen to avoid colliding when running the services locally.
+
+### Environment tiers (`CONNECTORS_ENV`)
+
+`CONNECTORS_ENV` declares which environment this instance represents: `local` (default), `staging`, or `production`. Outside `local`, `create_app()` calls `verify_production_secrets()` and **refuses to start** unless `API_KEY` is overridden from the dev default — a misconfigured deploy dies at boot, not on first request. `CONSUMER_KEYS` is also validated at boot (`get_key_store()` is called eagerly in `create_app()`), so a malformed value fails the container immediately rather than on the first `/fetch` call.
+
+Google credentials are deliberately **not** part of that boot check: `GOOGLE_CREDENTIALS_JSON` may be empty in any tier. A connectors deploy with no Google account yet still starts, serves `/health`, and returns 503 for Google source fetches.
+
+### Configuration
+
+All settings load from the environment (`src/config.py`, `.env` in dev):
+
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `CONNECTORS_ENV` | `local` | Environment tier (`local` / `staging` / `production`). |
+| `API_KEY` | `dev-api-key-change-me` | Env-bootstrap key; carries `admin` scope. Must be overridden outside `local`. |
+| `CONSUMER_KEYS` | `""` | JSON array of per-consumer keys (see auth model). |
+| `GOOGLE_CREDENTIALS_JSON` | `""` | Base64 of the Google service-account JSON key file. Empty is a valid running state — see the runbook below. |
+| `MAX_CONTENT_CHARS` | `1000000` | Transport guard: truncates fetched content above this length. |
+| `REQUEST_TIMEOUT_S` | `30` | Per-request timeout to upstream sources (seconds). |
+
+## Auth model
+
+Auth is scoped API keys via the shared `platform_auth` package, matching `llm`, team-tracking, and documentation-system — but **DB-free**. There is no `api_keys` table.
+
+- Every request needs `X-API-Key`. A key is either the shared bootstrap env key (`API_KEY`, scope: `admin`) or a per-consumer key seeded from the `CONSUMER_KEYS` env var.
+- **`CONSUMER_KEYS` is a JSON array**, each entry `{"name", "prefix", "key_hash", "scopes"}`. At boot, the key store is built from it into an in-memory store that satisfies `platform_auth`'s `ApiKeyStore` protocol. Keys are stored only as Argon2 hashes; a malformed `CONSUMER_KEYS` fails fast at startup.
+- Keys use the **`connectors_` envelope** (`connectors_<prefix>_<secret>`). There is no `X-Actor` header — this is a service-to-service API, so the audit actor is always the authenticated key's own name (attested actor).
+
+### Minting consumer keys
+
+Use the `connectors-keys` CLI. It prints the plaintext key **once** to stdout and the `CONSUMER_KEYS` JSON entry to stderr — it does not (and cannot) write to any store:
+
+```bash
+uv run connectors-keys --name documentation-system --scopes fetch
+# stdout: connectors_<prefix>_<secret>   (the key — give it to the consumer, shown ONCE)
+# stderr: {"name": "documentation-system", "prefix": "...", "key_hash": "$argon2id$...", "scopes": ["fetch"]}
+```
+
+Append the printed JSON object to the service's `CONSUMER_KEYS` array and redeploy. To **revoke** a key, drop its entry from `CONSUMER_KEYS` and redeploy — there is no revoke command because there is no database.
+
+## API at a glance
+
+Every endpoint except `/health` requires `X-API-Key`.
+
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| POST | `/fetch` | `fetch` | Fetch a document's text content from a source. |
+| GET | `/health` | none | Liveness probe → `{"status": "ok"}`. |
+
+`POST /fetch` requires the `fetch` scope (`require_scope("fetch")`); the `admin` wildcard satisfies it, so the bootstrap key and any admin key also work.
+
+**Request body** (`FetchRequest`, `contracts/fetch.py`):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `url` | string | Required, non-empty. The document URL. |
+| `source_id` | string | Required, non-empty. Which source to use (e.g. `gdocs`, `gsheets`, `gslides`, `gdrive`). Supplied by the caller — the caller (e.g. documentation-system) already resolves this during ingest, so it is not re-derived here. |
+
+**Response** (`FetchResponse`): `{ "title", "content", "warnings": [] }`.
+
+### Error → status table
+
+| Condition | Status |
+|-----------|--------|
+| `source_id` not registered | 422 |
+| Source not configured (e.g. `GOOGLE_CREDENTIALS_JSON` empty, or malformed) | 503 |
+| Source denied access to the file (not shared with the service account) | 403 |
+| File not found for the given URL | 404 |
+| File's MIME type has no text form the service can extract | 422 |
+| Upstream source error (Drive/Docs API failure) | 502 |
+| Missing/invalid `X-API-Key` | 401 |
+| Valid key without the `fetch` scope | 403 |
+| Malformed request body | 422 |
+
+## Google service-account setup runbook
+
+connectors reads Google Docs/Sheets/Slides/Drive files as a **service account** — a robot identity, not a user login. The account only sees files explicitly shared with it; there is no folder allowlist inside this service, because Drive's sharing settings *are* the access control.
+
+1. **Create (or reuse) a Google Cloud project** for UTMIST connectors.
+2. **Enable both required APIs** on that project:
+   - **Google Drive API** — always required. Used for file metadata (name, MIME type) on every fetch, and as the export fallback for Slides and Sheets.
+   - **Google Docs API** — required for the native Docs extractor (used for Google Docs files specifically).
+3. **Create a service account** in that project (IAM & Admin → Service Accounts).
+4. **Create a JSON key** for the service account and download it. Treat this file as a secret — do not commit it.
+5. **Share each Drive folder/file connectors needs to read** with the service account's email address (looks like `name@project-id.iam.gserviceaccount.com`), granting **Viewer** access. Nothing is readable until it's explicitly shared.
+6. **Base64-encode the key file** and set it as `GOOGLE_CREDENTIALS_JSON`:
+   ```bash
+   base64 -i service-account.json | tr -d '\n'
+   ```
+   Paste the result into `GOOGLE_CREDENTIALS_JSON` (in `.env` locally, or as a Railway variable in staging/production).
+
+### Scopes
+
+The service account's credentials are built with these OAuth scopes:
+
+- `https://www.googleapis.com/auth/drive.readonly` — always required (file metadata + Slides/Sheets export fallback).
+- `https://www.googleapis.com/auth/documents.readonly` — required for the native Docs extractor.
+
+Adopting the **Slides** or **Sheets** API natively later (instead of the current Drive-export fallback) adds **one scope and one API enablement each** — no other setup step changes.
+
+### Running without Google access
+
+`GOOGLE_CREDENTIALS_JSON` empty is a valid, supported running state: `/fetch` returns **503** for any Google source, and every other part of the service (health check, auth, non-Google sources if added later) works normally. This means connectors can be deployed and wired up to consumers **before** the Google Cloud project and service account exist — flip on Google support later by setting the variable and redeploying, no code change required.
+
+## Repo layout
+
+```
+connectors/
+├── contracts/
+│   └── fetch.py            Pydantic request/response models (FetchRequest, FetchResponse)
+│
+├── src/
+│   ├── api/               FastAPI application
+│   │   ├── app.py         App factory (create_app); mounts /fetch + /health, audit middleware
+│   │   ├── auth.py        Builds require_scope / get_actor from platform_auth (envelope="connectors_")
+│   │   ├── deps.py        get_key_store / get_source_registry — the single wiring point
+│   │   ├── hashing.py     Thin shim over platform_auth: connectors_-envelope key generation
+│   │   └── routers/
+│   │       └── fetch.py    POST /fetch — require_scope("fetch"), maps source errors → HTTP status
+│   │
+│   ├── sources/            Source-agnostic fetch layer (no FastAPI)
+│   │   ├── base.py             SourceFetcher Protocol + normalized error hierarchy
+│   │   ├── registry.py         Config-driven source_id → SourceFetcher wiring
+│   │   ├── google.py           GoogleSource: URL → file id → Drive metadata → extractor
+│   │   └── google_extractors/  Per-MIME-type extraction strategies (native Docs API, Drive export)
+│   │
+│   ├── mint_key.py        connectors-keys CLI — prints a key + its CONSUMER_KEYS entry, no store writes
+│   └── config.py          Settings (CONNECTORS_ENV, API_KEY, CONSUMER_KEYS, GOOGLE_CREDENTIALS_JSON, ...) + boot check
+│
+├── tests/                 53 fast tests — no Docker, no network (fake Google clients)
+├── Dockerfile             Production image (built + import-smoke-tested by CI; used by Railway).
+│                          Build context is the repo root; installs via `uv sync --frozen --no-dev --package connectors`.
+├── docker-compose.yml     Builds/runs the image locally on port 8004 (no DB service).
+└── railway.json           Railway deploy config: Dockerfile builder, /health check, NO preDeployCommand
+                            (stateless — nothing to migrate).
+```
+
+## Testing
+
+The suite is single-mode — no Docker, no database, no network:
+
+```bash
+uv run pytest
+```
+
+Runs **53 tests** with Google API clients injected as fakes via `app.dependency_overrides` / constructor injection, covering the `/fetch` happy path, URL parsing, the Docs extractor, the Drive-export fallback, the auth paths, config/boot checks, and the source-error → HTTP-status mapping.
+
+Lint and format with ruff:
+
+```bash
+uv run ruff check .
+uv run ruff format .
+```
+
+**CI** runs a `connectors-test` job (`.github/workflows/ci.yml`): `uv sync --extra dev`, `uv run pytest`, `ruff check`, and `ruff format --check`. The `docker-build` job builds the Dockerfile and smoke-tests that the app imports at boot (`python -c "import src.api.app"`).
+
+## Status
+
+v0.1: a stateless `POST /fetch` adapter over a Google Drive/Docs service account, config-seeded scoped API keys (`fetch` / `admin`) with an attested-actor audit trail, and a fast 53-test suite with no external dependencies.
+
+**Not implemented (by design):**
+
+- **Persistence** — no database. Consumers that need to cache fetched content own that cache themselves.
+- **Per-end-user authorization** — connectors authenticates the calling service, not the end user on whose behalf a fetch happens; that check belongs in the consumer.
+- **Non-Google sources** — the source registry is designed to grow (`SourceFetcher` protocol), but only Google Drive/Docs/Sheets/Slides is wired up today.
+- **Native Slides/Sheets extraction** — both currently go through the Drive export fallback rather than their native APIs.
