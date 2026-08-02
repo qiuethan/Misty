@@ -124,9 +124,11 @@ Every endpoint except `/health` requires `X-API-Key`.
 connectors reads Google Docs/Sheets/Slides/Drive files as a **service account** — a robot identity, not a user login. The account only sees files explicitly shared with it; there is no folder allowlist inside this service, because Drive's sharing settings *are* the access control.
 
 1. **Create (or reuse) a Google Cloud project** for UTMIST connectors.
-2. **Enable both required APIs** on that project:
-   - **Google Drive API** — always required. Used for file metadata (name, MIME type) on every fetch, and as the export fallback for Slides and Sheets.
-   - **Google Docs API** — required for the native Docs extractor (used for Google Docs files specifically).
+2. **Enable all four required APIs** on that project:
+   - **Google Drive API** — always required. Used for file metadata (name, MIME type) on every fetch, and as the export fallback for uploaded `text/*` files.
+   - **Google Docs API** — required for the native Docs extractor.
+   - **Google Slides API** — required for the native Slides extractor.
+   - **Google Sheets API** — required for the native Sheets extractor.
 3. **Create a service account** in that project (IAM & Admin → Service Accounts).
 4. **Create a JSON key** for the service account and download it. Treat this file as a secret — do not commit it.
 5. **Share each Drive folder/file connectors needs to read** with the service account's email address (looks like `name@project-id.iam.gserviceaccount.com`), granting **Viewer** access. Nothing is readable until it's explicitly shared.
@@ -140,10 +142,16 @@ connectors reads Google Docs/Sheets/Slides/Drive files as a **service account** 
 
 The service account's credentials are built with these OAuth scopes:
 
-- `https://www.googleapis.com/auth/drive.readonly` — always required (file metadata + Slides/Sheets export fallback).
+- `https://www.googleapis.com/auth/drive.readonly` — always required (file metadata on every fetch, plus the Drive-export fallback for uploaded `text/*` files).
 - `https://www.googleapis.com/auth/documents.readonly` — required for the native Docs extractor.
+- `https://www.googleapis.com/auth/presentations.readonly` — required for the native Slides extractor.
+- `https://www.googleapis.com/auth/spreadsheets.readonly` — required for the native Sheets extractor.
 
-Adopting the **Slides** or **Sheets** API natively later (instead of the current Drive-export fallback) adds **one scope and one API enablement each** — no other setup step changes.
+Both `required_scopes()` and `required_services()` (`src/sources/google.py`) union across the registered extractors automatically — a new extractor just declares the scopes/services it needs, and those functions pick it up without being edited.
+
+### Known limitation: large spreadsheet tabs
+
+Every tab of a spreadsheet is read (there is no first-tab-only limitation). The one remaining lossy case is a single tab with more than `MAX_ROWS_PER_TAB` (2000) rows: that tab is truncated to the first 2000 rows and a warning naming the tab and its real row count is added to the response's `warnings` list. Slides and Docs have no equivalent size cap.
 
 ### Running without Google access
 
@@ -169,12 +177,12 @@ connectors/
 │   │   ├── base.py             SourceFetcher Protocol + normalized error hierarchy
 │   │   ├── registry.py         Config-driven source_id → SourceFetcher wiring
 │   │   ├── google.py           GoogleSource: URL → file id → Drive metadata → extractor
-│   │   └── google_extractors/  Per-MIME-type extraction strategies (native Docs API, Drive export)
+│   │   └── google_extractors/  Per-MIME-type extraction strategies (native Docs/Slides/Sheets APIs, Drive export)
 │   │
 │   ├── mint_key.py        connectors-keys CLI — prints a key + its CONSUMER_KEYS entry, no store writes
 │   └── config.py          Settings (CONNECTORS_ENV, API_KEY, CONSUMER_KEYS, GOOGLE_CREDENTIALS_JSON, ...) + boot check
 │
-├── tests/                 57 fast tests — no Docker, no network (fake Google clients)
+├── tests/                 99 fast tests — no Docker, no network (fake Google clients)
 ├── Dockerfile             Production image (built + import-smoke-tested by CI; used by Railway).
 │                          Build context is the repo root; installs via `uv sync --frozen --no-dev --package connectors`.
 ├── docker-compose.yml     Builds/runs the image locally on port 8005 (no DB service).
@@ -190,7 +198,7 @@ The suite is single-mode — no Docker, no database, no network:
 uv run pytest
 ```
 
-Runs **57 tests** with Google API clients injected as fakes via `app.dependency_overrides` / constructor injection, covering the `/fetch` happy path, URL parsing, the Docs extractor, the Drive-export fallback, the auth paths, config/boot checks, and the source-error → HTTP-status mapping.
+Runs **99 tests** with Google API clients injected as fakes via `app.dependency_overrides` / constructor injection, covering the `/fetch` happy path, URL parsing, the Docs/Slides/Sheets extractors, the Drive-export fallback for uploaded `text/*` files, the auth paths, config/boot checks, and the source-error → HTTP-status mapping.
 
 Lint and format with ruff:
 
@@ -203,11 +211,10 @@ uv run ruff format .
 
 ## Status
 
-v0.1: a stateless `POST /fetch` adapter over a Google Drive/Docs service account, config-seeded scoped API keys (`fetch` / `admin`) with an attested-actor audit trail, and a fast 57-test suite with no external dependencies.
+v0.1: a stateless `POST /fetch` adapter over a Google Drive/Docs/Slides/Sheets service account, config-seeded scoped API keys (`fetch` / `admin`) with an attested-actor audit trail, and a fast 99-test suite with no external dependencies.
 
 **Not implemented (by design):**
 
 - **Persistence** — no database. Consumers that need to cache fetched content own that cache themselves.
 - **Per-end-user authorization** — connectors authenticates the calling service, not the end user on whose behalf a fetch happens; that check belongs in the consumer.
 - **Non-Google sources** — the source registry is designed to grow (`SourceFetcher` protocol), but only Google Drive/Docs/Sheets/Slides is wired up today.
-- **Native Slides/Sheets extraction** — both currently go through the Drive export fallback rather than their native APIs.
