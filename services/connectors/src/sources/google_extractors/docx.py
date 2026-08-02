@@ -41,9 +41,27 @@ def _paragraph_line(paragraph) -> str:
     prefix = _HEADING_PREFIX.get(style)
     if prefix:
         return f"{prefix} {text}"
-    if "List" in style:
+    if _is_bullet_style(style):
         return f"- {text}"
     return text
+
+
+def _is_bullet_style(style: str) -> bool:
+    """True only for styles that render as an actual bulleted/numbered item.
+
+    A raw "List" in style substring check false-positives on styles that
+    contain the word but are not bullets: "List Continue"/"List Continue
+    2/3" are prose continuing under a list item, deliberately without its
+    own bullet, and plain "List" is just an indented paragraph. "List
+    Paragraph" is what Word applies when you click the bullet button and is
+    the most common style in practice, so it is matched exactly rather than
+    by prefix.
+    """
+    return (
+        style.startswith("List Bullet")
+        or style.startswith("List Number")
+        or style == "List Paragraph"
+    )
 
 
 def _table_rows(table) -> list[list[str]]:
@@ -58,6 +76,13 @@ def _render(doc) -> list[str]:
     the section it belonged to — scrambled output that still looks plausible.
     Iterating doc.element.body preserves the real order. Tags are namespaced,
     so match on the suffix.
+
+    Two things are deliberately dropped without a trace: content inside a
+    body-level w:sdt (a Word content control) is not a recognized tag here
+    and is skipped, and a table nested inside a table cell is never
+    descended into (_Cell.text joins only its own paragraphs). Both are
+    rare enough, and lossy-by-nature enough, not to be worth the added
+    complexity — but the omission is intentional, not an oversight.
     """
     lines: list[str] = []
     for child in doc.element.body:

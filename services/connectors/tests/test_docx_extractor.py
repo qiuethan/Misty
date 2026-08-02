@@ -60,6 +60,29 @@ def test_list_styled_paragraphs_get_a_dash():
     assert "- an item" in _extract(doc).text
 
 
+def test_list_bullet_2_and_list_number_get_a_dash():
+    doc = Document()
+    doc.add_paragraph("nested item", style="List Bullet 2")
+    doc.add_paragraph("numbered item", style="List Number")
+    out = _extract(doc).text
+    assert "- nested item" in out
+    assert "- numbered item" in out
+
+
+def test_list_continue_and_plain_list_styles_are_not_bulleted():
+    # "List Continue" and plain "List" contain the word "List" but are not
+    # bullets: List Continue is prose continuing under a list item without
+    # its own bullet, and List is just an indented paragraph.
+    doc = Document()
+    doc.add_paragraph("continuation prose", style="List Continue")
+    doc.add_paragraph("indented text", style="List")
+    out = _extract(doc).text
+    assert "- continuation prose" not in out
+    assert "continuation prose" in out
+    assert "- indented text" not in out
+    assert "indented text" in out
+
+
 def test_a_table_renders_as_a_markdown_table():
     doc = Document()
     table = doc.add_table(rows=2, cols=2)
