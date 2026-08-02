@@ -79,6 +79,26 @@ class _FakeSlidesService:
         return self._deck
 
 
+class _FakeSheetsService:
+    def __init__(self, meta):
+        self._meta = meta
+
+    def spreadsheets(self):
+        return self
+
+    def get(self, *, spreadsheetId):
+        return self
+
+    def values(self):
+        return self
+
+    def batchGet(self, *, spreadsheetId, ranges):
+        return self
+
+    def execute(self):
+        return self._meta
+
+
 def _source(files, **kwargs):
     return GoogleSource(
         credentials_json_b64="fake",
@@ -118,18 +138,19 @@ def test_slides_routes_to_the_native_slides_extractor():
     assert files.export_mime is None, "Slides must not go through Drive export any more"
 
 
-def test_spreadsheet_exports_as_csv_and_always_warns():
+def test_sheets_routes_to_the_native_sheets_extractor():
     files = _FakeFiles(
-        meta={"name": "Budget", "mimeType": "application/vnd.google-apps.spreadsheet"},
-        payload=b"a,b\n1,2\n",
+        meta={"name": "Budget", "mimeType": "application/vnd.google-apps.spreadsheet"}
     )
-    result = _source(files).fetch(SHEET_URL)
-    assert result.content == "a,b\n1,2\n"
-    assert files.export_mime == "text/csv"
-    # Unconditional: Drive metadata does not expose tab count, so "has more than
-    # one tab" is undetectable without the Sheets API.
-    assert len(result.warnings) == 1
-    assert "first sheet" in result.warnings[0]
+    sheets = _FakeSheetsService({"sheets": []})
+    source = GoogleSource(
+        credentials_json_b64="fake",
+        max_content_chars=1000,
+        services={"drive": _FakeService(files), "sheets": sheets},
+    )
+    result = source.fetch(SHEET_URL)
+    assert result.title == "Budget"
+    assert files.export_mime is None, "Sheets must not go through Drive export any more"
 
 
 def test_plain_text_upload_downloads_via_media():
@@ -191,16 +212,24 @@ def test_required_scopes_include_drive_readonly():
 def test_required_services_include_docs_with_current_registry():
     from src.sources.google import required_services
 
-    # GOOGLE_DOC and GOOGLE_SLIDES route to native extractors, which declare
-    # the "docs" and "slides" clients, so the registry's client set is
-    # drive + docs + slides.
-    assert required_services() == ("docs", "drive", "slides")
+    # GOOGLE_DOC, GOOGLE_SLIDES, and GOOGLE_SHEET route to native extractors,
+    # which declare the "docs", "slides", and "sheets" clients, so the
+    # registry's client set is drive + docs + sheets + slides.
+    assert required_services() == ("docs", "drive", "sheets", "slides")
 
 
 def test_required_scopes_now_include_docs():
     from src.sources.google import required_scopes
 
     assert "https://www.googleapis.com/auth/documents.readonly" in required_scopes()
+
+
+def test_required_scopes_include_slides_and_sheets():
+    from src.sources.google import required_scopes
+
+    scopes = required_scopes()
+    assert "https://www.googleapis.com/auth/presentations.readonly" in scopes
+    assert "https://www.googleapis.com/auth/spreadsheets.readonly" in scopes
 
 
 def test_required_services_now_include_docs():
