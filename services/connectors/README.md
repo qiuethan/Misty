@@ -103,6 +103,20 @@ Every endpoint except `/health` requires `X-API-Key`.
 | `url` | string | Required, non-empty. The document URL. |
 | `source_id` | string | Required, non-empty. Which source to use (e.g. `gdocs`, `gsheets`, `gslides`, `gdrive`). Supplied by the caller — the caller (e.g. documentation-system) already resolves this during ingest, so it is not re-derived here. |
 
+`gdrive` covers everything that isn't a native Google Doc/Slides/Sheet: uploaded `text/*` files (via Drive export), and — per the extractor registered for the file's MIME type — uploaded PDFs, uploaded `.docx` files, and Google Forms.
+
+| MIME type | Extractor | Output |
+|-----------|-----------|--------|
+| `application/vnd.google-apps.document` (Google Doc) | Docs (native API) | Markdown: headings, list bullets, tables |
+| `application/vnd.google-apps.presentation` (Google Slides) | Slides (native API) | Markdown, one section per slide |
+| `application/vnd.google-apps.spreadsheet` (Google Sheet) | Sheets (native API) | Markdown table per tab |
+| `application/pdf` (uploaded PDF) | PDF (`pypdf`, local parse) | One `## Page N` section per page |
+| `.docx` (uploaded, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`) | Docx (`python-docx`, local parse) | Markdown mirroring the Docs extractor: headings, list bullets, tables |
+| `application/vnd.google-apps.form` (Google Form) | Forms (native API) | Markdown: title, description, section headings, and each question with its multiple-choice options where present. **Responses are never fetched** — they duplicate the linked responses spreadsheet and are applicant personal data. |
+| `text/*` (uploaded) | Drive export fallback | Raw text |
+
+Legacy `.doc` (`application/msword`, the pre-2007 binary Word format) is a different format from `.docx` and stays unsupported — `python-docx` cannot read it.
+
 **Response** (`FetchResponse`): `{ "title", "content", "warnings": [] }`.
 
 ### Error → status table
@@ -121,14 +135,15 @@ Every endpoint except `/health` requires `X-API-Key`.
 
 ## Google service-account setup runbook
 
-connectors reads Google Docs/Sheets/Slides/Drive files as a **service account** — a robot identity, not a user login. The account only sees files explicitly shared with it; there is no folder allowlist inside this service, because Drive's sharing settings *are* the access control.
+connectors reads Google Docs/Sheets/Slides/Forms/Drive files as a **service account** — a robot identity, not a user login. The account only sees files explicitly shared with it; there is no folder allowlist inside this service, because Drive's sharing settings *are* the access control.
 
 1. **Create (or reuse) a Google Cloud project** for UTMIST connectors.
-2. **Enable all four required APIs** on that project:
-   - **Google Drive API** — always required. Used for file metadata (name, MIME type) on every fetch, and as the export fallback for uploaded `text/*` files.
+2. **Enable all five required APIs** on that project:
+   - **Google Drive API** — always required. Used for file metadata (name, MIME type) on every fetch; as the export fallback for uploaded `text/*` files; and as the byte-download path for uploaded PDFs and `.docx` files, which are parsed locally rather than via a native Google API.
    - **Google Docs API** — required for the native Docs extractor.
    - **Google Slides API** — required for the native Slides extractor.
    - **Google Sheets API** — required for the native Sheets extractor.
+   - **Google Forms API** — required for the native Forms extractor.
 3. **Create a service account** in that project (IAM & Admin → Service Accounts).
 4. **Create a JSON key** for the service account and download it. Treat this file as a secret — do not commit it.
 5. **Share each Drive folder/file connectors needs to read** with the service account's email address (looks like `name@project-id.iam.gserviceaccount.com`), granting **Viewer** access. Nothing is readable until it's explicitly shared.
@@ -142,18 +157,24 @@ connectors reads Google Docs/Sheets/Slides/Drive files as a **service account** 
 
 The service account's credentials are built with these OAuth scopes:
 
-- `https://www.googleapis.com/auth/drive.readonly` — always required (file metadata on every fetch, plus the Drive-export fallback for uploaded `text/*` files).
+- `https://www.googleapis.com/auth/drive.readonly` — always required (file metadata on every fetch; the Drive-export fallback for uploaded `text/*` files; and the byte-download path for uploaded PDFs and `.docx` files — see below).
 - `https://www.googleapis.com/auth/documents.readonly` — required for the native Docs extractor.
 - `https://www.googleapis.com/auth/presentations.readonly` — required for the native Slides extractor.
 - `https://www.googleapis.com/auth/spreadsheets.readonly` — required for the native Sheets extractor.
+- `https://www.googleapis.com/auth/forms.body.readonly` — required for the native Forms extractor.
+
+**Uploaded PDFs and `.docx` files need no new scope.** Both download raw bytes through the same Drive media path already used for uploaded `text/*` files (`drive.readonly` covers it) and parse the file locally (`pypdf`, `python-docx`) — there is no separate PDF or Word API. This is the non-obvious part: a new *supported file type* does not automatically imply a new scope, only a new native Google API does.
 
 Both `required_scopes()` and `required_services()` (`src/sources/google.py`) union across the registered extractors automatically — a new extractor just declares the scopes/services it needs, and those functions pick it up without being edited.
 
-Adding a native extractor for an existing Google API (Docs/Slides/Sheets) is one new file plus one registry entry — true today only because `_API_VERSIONS` in `google.py` already maps `"slides"` and `"sheets"` to their API versions. Wiring up a genuinely new Google API (e.g. Forms) additionally needs one line added to `_API_VERSIONS`; `_build_services` raises `SourceNotConfigured` for any service name not in that map, so a missing entry fails loudly rather than silently.
+Adding a native extractor for an existing Google API (Docs/Slides/Sheets/Forms) is one new file plus one registry entry — true today only because `_API_VERSIONS` in `google.py` already maps that API's name to its discovery version. Wiring up a genuinely new Google API additionally needs one line added to `_API_VERSIONS`; `_build_services` raises `SourceNotConfigured` for any service name not in that map, so a missing entry fails loudly rather than silently. Forms was the first extractor to actually hit this: it added `"forms": "v1"` to `_API_VERSIONS` alongside its registry entry, so the caveat above is no longer hypothetical — it's checkable by diffing that one line.
 
-### Known limitation: large spreadsheet tabs
+### Known limitations
 
-Every tab of a spreadsheet is read (there is no first-tab-only limitation). The one remaining lossy case is a single tab with more than `MAX_ROWS_PER_TAB` (2000) rows: that tab is truncated to the first 2000 rows and a warning naming the tab and its real row count is added to the response's `warnings` list. Slides and Docs have no equivalent size cap.
+Two cases are lossy by design:
+
+- **A spreadsheet tab larger than `MAX_ROWS_PER_TAB` (2000 rows).** Every tab of a spreadsheet is read (there is no first-tab-only limitation), but a tab over the cap is truncated to the first 2000 rows and a warning naming the tab and its real row count is added to the response's `warnings` list. Slides and Docs have no equivalent size cap.
+- **A scanned PDF with no text layer.** `pypdf` extracts embedded text; it does not run OCR. If every page of a PDF yields no text (the telltale sign of a scanned-image-only document), the extractor emits the `## Page N` headers but no page content, plus a warning that no text layer was found. OCR is out of scope.
 
 ### Running without Google access
 
@@ -179,12 +200,13 @@ connectors/
 │   │   ├── base.py             SourceFetcher Protocol + normalized error hierarchy
 │   │   ├── registry.py         Config-driven source_id → SourceFetcher wiring
 │   │   ├── google.py           GoogleSource: URL → file id → Drive metadata → extractor
-│   │   └── google_extractors/  Per-MIME-type extraction strategies (native Docs/Slides/Sheets APIs, Drive export)
+│   │   └── google_extractors/  Per-MIME-type extraction strategies (native Docs/Slides/Sheets/Forms APIs,
+│   │                            Drive export, local PDF/.docx parsing)
 │   │
 │   ├── mint_key.py        connectors-keys CLI — prints a key + its CONSUMER_KEYS entry, no store writes
 │   └── config.py          Settings (CONNECTORS_ENV, API_KEY, CONSUMER_KEYS, GOOGLE_CREDENTIALS_JSON, ...) + boot check
 │
-├── tests/                 99 fast tests — no Docker, no network (fake Google clients)
+├── tests/                 132 fast tests — no Docker, no network (fake Google clients)
 ├── Dockerfile             Production image (built + import-smoke-tested by CI; used by Railway).
 │                          Build context is the repo root; installs via `uv sync --frozen --no-dev --package connectors`.
 ├── docker-compose.yml     Builds/runs the image locally on port 8005 (no DB service).
@@ -200,7 +222,7 @@ The suite is single-mode — no Docker, no database, no network:
 uv run pytest
 ```
 
-Runs **99 tests** with Google API clients injected as fakes via `app.dependency_overrides` / constructor injection, covering the `/fetch` happy path, URL parsing, the Docs/Slides/Sheets extractors, the Drive-export fallback for uploaded `text/*` files, the auth paths, config/boot checks, and the source-error → HTTP-status mapping.
+Runs **132 tests** with Google API clients injected as fakes via `app.dependency_overrides` / constructor injection, covering the `/fetch` happy path, URL parsing, the Docs/Slides/Sheets/Forms extractors, the local PDF/`.docx` parsers, the Drive-export fallback for uploaded `text/*` files, the auth paths, config/boot checks, and the source-error → HTTP-status mapping.
 
 Lint and format with ruff:
 
@@ -213,10 +235,12 @@ uv run ruff format .
 
 ## Status
 
-v0.1: a stateless `POST /fetch` adapter over a Google Drive/Docs/Slides/Sheets service account, config-seeded scoped API keys (`fetch` / `admin`) with an attested-actor audit trail, and a fast 99-test suite with no external dependencies.
+v0.1: a stateless `POST /fetch` adapter over a Google Drive/Docs/Slides/Sheets/Forms service account (plus local parsing of uploaded PDF and `.docx` files), config-seeded scoped API keys (`fetch` / `admin`) with an attested-actor audit trail, and a fast 132-test suite with no external dependencies.
 
 **Not implemented (by design):**
 
 - **Persistence** — no database. Consumers that need to cache fetched content own that cache themselves.
 - **Per-end-user authorization** — connectors authenticates the calling service, not the end user on whose behalf a fetch happens; that check belongs in the consumer.
-- **Non-Google sources** — the source registry is designed to grow (`SourceFetcher` protocol), but only Google Drive/Docs/Sheets/Slides is wired up today.
+- **Non-Google sources** — the source registry is designed to grow (`SourceFetcher` protocol), but only Google Drive/Docs/Sheets/Slides/Forms (plus PDF/`.docx` parsed via Drive bytes) is wired up today.
+- **OCR** — a scanned PDF with no embedded text layer captures nothing; see "Known limitations" above.
+- **Forms responses** — only form structure (title, questions, options) is read; responses are deliberately never fetched (see the Supported types table above).
