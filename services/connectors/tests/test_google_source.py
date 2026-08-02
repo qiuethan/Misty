@@ -212,10 +212,11 @@ def test_required_scopes_include_drive_readonly():
 def test_required_services_include_docs_with_current_registry():
     from src.sources.google import required_services
 
-    # GOOGLE_DOC, GOOGLE_SLIDES, and GOOGLE_SHEET route to native extractors,
-    # which declare the "docs", "slides", and "sheets" clients, so the
-    # registry's client set is drive + docs + sheets + slides.
-    assert required_services() == ("docs", "drive", "sheets", "slides")
+    # GOOGLE_DOC, GOOGLE_SLIDES, GOOGLE_SHEET, and FORM_MIME route to native
+    # extractors, which declare the "docs", "slides", "sheets", and "forms"
+    # clients, so the registry's client set is drive + docs + forms + sheets
+    # + slides.
+    assert required_services() == ("docs", "drive", "forms", "sheets", "slides")
 
 
 def test_required_scopes_now_include_docs():
@@ -257,6 +258,20 @@ def test_required_services_unions_in_a_new_extractor_declared_service():
     finally:
         google.EXTRACTORS.clear()
         google.EXTRACTORS.update(original)
+
+
+def test_required_scopes_include_forms():
+    from src.sources.google import required_scopes
+
+    assert "https://www.googleapis.com/auth/forms.body.readonly" in required_scopes()
+
+
+def test_required_services_include_forms():
+    from src.sources.google import required_services
+
+    # Registering FormsExtractor is the ONLY change; the forms client gets
+    # built because the extractor declares it.
+    assert "forms" in required_services()
 
 
 def test_credentials_are_built_once_but_transports_are_rebuilt_per_fetch():
