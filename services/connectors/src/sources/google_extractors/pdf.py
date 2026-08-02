@@ -7,6 +7,8 @@ new API client. pypdf rather than pymupdf: pymupdf is AGPL.
 
 import io
 
+import pypdf
+
 from src.sources.base import SourceUnsupported
 from src.sources.google_extractors.base import ExtractedText, execute
 from src.sources.google_extractors.drive_export import DRIVE_READONLY
@@ -29,8 +31,6 @@ class PdfExtractor:
         # call, so they map to SourceUnsupported (422) rather than
         # SourceUnavailable (502). Kept out of execute(), which exists to
         # normalize Google API failures.
-        import pypdf
-
         try:
             reader = pypdf.PdfReader(io.BytesIO(payload))
             if reader.is_encrypted:
