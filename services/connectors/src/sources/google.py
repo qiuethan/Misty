@@ -19,6 +19,7 @@ from src.sources.base import (
 from src.sources.google_extractors.base import Extractor, execute
 from src.sources.google_extractors.docs import DocsExtractor
 from src.sources.google_extractors.drive_export import DRIVE_READONLY, DriveExportExtractor
+from src.sources.google_extractors.pdf import PDF_MIME, PdfExtractor
 from src.sources.google_extractors.sheets import SheetsExtractor
 from src.sources.google_extractors.slides import SlidesExtractor
 
@@ -55,6 +56,7 @@ EXTRACTORS: dict[str, Extractor] = {
     GOOGLE_DOC: DocsExtractor(),
     GOOGLE_SLIDES: SlidesExtractor(),
     GOOGLE_SHEET: SheetsExtractor(),
+    PDF_MIME: PdfExtractor(),
 }
 
 # Uploaded (non-Google-native) text files have real bytes to download.
