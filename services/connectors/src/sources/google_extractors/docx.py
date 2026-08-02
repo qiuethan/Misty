@@ -30,6 +30,11 @@ _HEADING_PREFIX = {
     "Heading 4": "####",
     "Heading 5": "#####",
     "Heading 6": "######",
+    # Markdown has no heading level past 6; Word's Heading 7-9 styles clamp
+    # to the deepest markdown level rather than falling through to body text.
+    "Heading 7": "######",
+    "Heading 8": "######",
+    "Heading 9": "######",
 }
 
 

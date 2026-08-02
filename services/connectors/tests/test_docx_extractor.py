@@ -46,6 +46,13 @@ def test_heading_styles_become_markdown_levels():
     assert "### Small" in out
 
 
+def test_heading_7_clamps_to_the_deepest_markdown_level():
+    doc = Document()
+    doc.add_paragraph("Deep", style="Heading 7")
+    out = _extract(doc).text
+    assert "###### Deep" in out
+
+
 def test_normal_paragraphs_have_no_prefix():
     doc = Document()
     doc.add_paragraph("just words")
