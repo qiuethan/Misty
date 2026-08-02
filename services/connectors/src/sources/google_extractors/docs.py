@@ -7,6 +7,7 @@ section boundaries and cite a section rather than a character offset.
 """
 
 from src.sources.google_extractors.base import ExtractedText, execute
+from src.sources.google_extractors.markdown import render_markdown_table
 
 DOCS_READONLY = "https://www.googleapis.com/auth/documents.readonly"
 
@@ -58,14 +59,11 @@ def _cell_text(cell: dict) -> str:
 
 
 def _table_lines(table: dict) -> list[str]:
+    """Docs cells hold structural elements, so cell text recurses; rendering is
+    shared with the Slides extractor."""
     rows = table.get("tableRows") or []
-    if not rows:
-        return []
     rendered = [[_cell_text(cell) for cell in row.get("tableCells") or []] for row in rows]
-    header, *body = rendered
-    lines = ["| " + " | ".join(header) + " |", "| " + " | ".join("---" for _ in header) + " |"]
-    lines.extend("| " + " | ".join(cells) + " |" for cells in body)
-    return lines
+    return render_markdown_table(rendered)
 
 
 def _render(elements: list) -> list[str]:
