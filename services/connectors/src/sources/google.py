@@ -19,6 +19,7 @@ from src.sources.base import (
 from src.sources.google_extractors.base import Extractor, execute
 from src.sources.google_extractors.docs import DocsExtractor
 from src.sources.google_extractors.drive_export import DRIVE_READONLY, DriveExportExtractor
+from src.sources.google_extractors.slides import SlidesExtractor
 
 # Drive file ids are URL-safe base64-ish: letters, digits, hyphen, underscore.
 _ID = r"([a-zA-Z0-9_-]+)"
@@ -49,12 +50,11 @@ GOOGLE_SLIDES = "application/vnd.google-apps.presentation"
 
 SHEET_WARNING = "spreadsheet export captures the first sheet only; other tabs were not read"
 
-# MIME type -> extractor. GOOGLE_DOC uses the native Docs API extractor; the
-# GOOGLE_SLIDES and GOOGLE_SHEET entries are the slots a SlidesExtractor /
-# SheetsExtractor would take.
+# MIME type -> extractor. GOOGLE_DOC and GOOGLE_SLIDES use native API
+# extractors; GOOGLE_SHEET is the slot a SheetsExtractor would take.
 EXTRACTORS: dict[str, Extractor] = {
     GOOGLE_DOC: DocsExtractor(),
-    GOOGLE_SLIDES: DriveExportExtractor(export_mime="text/plain"),
+    GOOGLE_SLIDES: SlidesExtractor(),
     GOOGLE_SHEET: DriveExportExtractor(export_mime="text/csv", warning=SHEET_WARNING),
 }
 

@@ -65,6 +65,20 @@ class _FakeDocsService:
         return self._doc
 
 
+class _FakeSlidesService:
+    def __init__(self, deck):
+        self._deck = deck
+
+    def presentations(self):
+        return self
+
+    def get(self, *, presentationId):
+        return self
+
+    def execute(self):
+        return self._deck
+
+
 def _source(files, **kwargs):
     return GoogleSource(
         credentials_json_b64="fake",
@@ -89,14 +103,19 @@ def test_google_doc_routes_to_the_native_docs_extractor():
     assert files.export_mime is None, "Docs must not go through Drive export any more"
 
 
-def test_slides_export_as_plain_text():
+def test_slides_routes_to_the_native_slides_extractor():
     files = _FakeFiles(
-        meta={"name": "Kickoff", "mimeType": "application/vnd.google-apps.presentation"},
-        payload=b"slide one",
+        meta={"name": "Kickoff", "mimeType": "application/vnd.google-apps.presentation"}
     )
-    result = _source(files).fetch(SLIDES_URL)
-    assert result.content == "slide one"
-    assert files.export_mime == "text/plain"
+    slides = _FakeSlidesService({"slides": []})
+    source = GoogleSource(
+        credentials_json_b64="fake",
+        max_content_chars=1000,
+        services={"drive": _FakeService(files), "slides": slides},
+    )
+    result = source.fetch(SLIDES_URL)
+    assert result.title == "Kickoff"
+    assert files.export_mime is None, "Slides must not go through Drive export any more"
 
 
 def test_spreadsheet_exports_as_csv_and_always_warns():
@@ -137,10 +156,11 @@ def test_missing_credentials_raise_not_configured():
         source.fetch(DOC_URL)
 
 
-def test_content_is_bounded_by_max_content_chars():
-    # Slides still goes through the Drive-export fallback, unlike Docs.
+def test_content_is_bounded_by_max_content_chars_on_the_media_path():
+    # text/* uploads stay on the Drive-export fallback (_MEDIA_EXTRACTOR)
+    # permanently, so that's the stable home for a generic truncation test.
     files = _FakeFiles(
-        meta={"name": "Huge", "mimeType": "application/vnd.google-apps.presentation"},
+        meta={"name": "Huge", "mimeType": "text/plain"},
         payload=b"x" * 5000,
     )
     source = GoogleSource(
@@ -148,7 +168,7 @@ def test_content_is_bounded_by_max_content_chars():
         max_content_chars=100,
         services={"drive": _FakeService(files)},
     )
-    result = source.fetch(SLIDES_URL)
+    result = source.fetch(DRIVE_URL)
     assert len(result.content) == 100
 
 
@@ -171,9 +191,10 @@ def test_required_scopes_include_drive_readonly():
 def test_required_services_include_docs_with_current_registry():
     from src.sources.google import required_services
 
-    # GOOGLE_DOC now routes to the native DocsExtractor, which declares the
-    # "docs" client, so the registry's client set is drive + docs.
-    assert required_services() == ("docs", "drive")
+    # GOOGLE_DOC and GOOGLE_SLIDES route to native extractors, which declare
+    # the "docs" and "slides" clients, so the registry's client set is
+    # drive + docs + slides.
+    assert required_services() == ("docs", "drive", "slides")
 
 
 def test_required_scopes_now_include_docs():
