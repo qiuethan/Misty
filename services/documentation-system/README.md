@@ -28,7 +28,7 @@ See `docs/ARCHITECTURE.md` for the full data flow.
 
 ## Dependency on connectors
 
-The Google sources (`gdocs`, `gsheets`, `gslides`, `gdrive`) fetch their content by calling the [connectors](../connectors/) service over HTTP (`POST /fetch`) rather than holding Google credentials themselves — see `src/fetch/connectors.py` and `src/fetch/registry.py`. Configure it with `CONNECTORS_BASE_URL` (default `http://localhost:8004`) and `CONNECTORS_API_KEY`.
+The Google sources (`gdocs`, `gsheets`, `gslides`, `gdrive`) fetch their content by calling the [connectors](../connectors/) service over HTTP (`POST /fetch`) rather than holding Google credentials themselves — see `src/fetch/connectors.py` and `src/fetch/registry.py`. Configure it with `CONNECTORS_BASE_URL` (default `http://localhost:8005`) and `CONNECTORS_API_KEY`.
 
 Connectors reachability at request time is soft for ingest but hard for refetch: a connectors outage during `POST /docs` is caught and turned into a per-doc warning (the doc is still catalogued, just without a content snapshot) — see the `FetchError` handling in `src/ingest.py`. During `POST /docs/{id}/refetch`, the same `FetchError` is instead surfaced as an HTTP 502 — see `src/api/routers/docs.py` — because refetch is an explicit user-initiated action rather than a batch ingest. It is also a hard dependency at *boot* in staging/production: `verify_production_secrets()` (`src/config.py`) refuses to start if `CONNECTORS_API_KEY` is still the built-in dev default. See `docs/DEPLOYMENT.md` for the required deploy order (connectors before documentation-system).
 

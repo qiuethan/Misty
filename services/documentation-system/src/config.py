@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     api_key: str = DEFAULT_DEV_API_KEY
     directory_base_url: str = "http://localhost:8000"
     directory_api_key: str = DEFAULT_DEV_API_KEY
-    connectors_base_url: str = "http://localhost:8004"
+    connectors_base_url: str = "http://localhost:8005"
     connectors_api_key: str = DEFAULT_DEV_API_KEY
     docs_env: Literal["local", "staging", "production"] = "local"
 

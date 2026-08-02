@@ -37,7 +37,7 @@ All configuration is env-driven (`src/config.py`, loaded from the process enviro
 | `API_KEY` | `api_key` | `dev-api-key-change-me` | Bootstrap admin key. **Change or unset in prod.** |
 | `DIRECTORY_BASE_URL` | `directory_base_url` | `http://localhost:8000` | Base URL of the team-tracking directory |
 | `DIRECTORY_API_KEY` | `directory_api_key` | `dev-api-key-change-me` | API key this service uses to call the directory |
-| `CONNECTORS_BASE_URL` | `connectors_base_url` | `http://localhost:8004` | Base URL of the connectors service (fetches Google source content) |
+| `CONNECTORS_BASE_URL` | `connectors_base_url` | `http://localhost:8005` | Base URL of the connectors service (fetches Google source content) |
 | `CONNECTORS_API_KEY` | `connectors_api_key` | `dev-api-key-change-me` | API key this service uses to call connectors. **Must be overridden outside `local`** — `verify_production_secrets()` refuses to boot on the dev default (see [`src/config.py`](../src/config.py)). |
 
 Staging + production values live in **Railway** — set per environment via the

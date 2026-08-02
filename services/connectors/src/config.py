@@ -46,9 +46,12 @@ def verify_production_secrets(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
     if settings.connectors_env == "local":
         return
+    insecure: list[str] = []
     if settings.api_key == DEFAULT_DEV_API_KEY:
+        insecure.append("API_KEY")
+    if insecure:
         raise RuntimeError(
             f"Refusing to start in connectors_env={settings.connectors_env!r}: "
-            "API_KEY still set to the built-in dev default. "
+            f"{', '.join(insecure)} still set to the built-in dev default. "
             "Set a strong, unique value via environment variables."
         )

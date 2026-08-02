@@ -28,23 +28,23 @@ cp .env.example .env
 uv sync --extra dev
 
 # 3. Start the API server
-uv run uvicorn src.api.app:app --reload --port 8004
+uv run uvicorn src.api.app:app --reload --port 8005
 ```
 
 > The repo is a single [uv workspace](https://docs.astral.sh/uv/concepts/workspaces/) (root `pyproject.toml` with `[tool.uv.workspace] members = ["services/*", "packages/*"]`, one root `uv.lock`). connectors depends on the shared `platform-auth` package (`[tool.uv.sources] platform-auth = { workspace = true }`) but the commands above are unchanged — `uv sync` and `uv run pytest` work exactly as shown when run from this directory.
 
-The API is now at `http://localhost:8004`. Interactive Swagger UI is at `http://localhost:8004/docs`; the machine-readable schema is at `http://localhost:8004/openapi.json`.
+The API is now at `http://localhost:8005`. Interactive Swagger UI is at `http://localhost:8005/docs`; the machine-readable schema is at `http://localhost:8005/openapi.json`.
 
 The default dev bootstrap key is `dev-api-key-change-me` (set in `.env`, carries the `admin` wildcard scope). Pass it as `X-API-Key` on every request:
 
 ```bash
-curl -sS http://localhost:8004/fetch \
+curl -sS http://localhost:8005/fetch \
   -H "X-API-Key: dev-api-key-change-me" \
   -H "Content-Type: application/json" \
   -d '{"source_id": "gdocs", "url": "https://docs.google.com/document/d/<file-id>/edit"}' | python3 -m json.tool
 ```
 
-**Ports:** this service runs on **8004** (team-tracking/documentation-system use 8000, llm 8002, meeting/verification 8003) — chosen to avoid colliding when running the services locally.
+**Ports:** this service runs on **8005** (team-tracking 8000, documentation-system 8001, llm 8002, verification 8003, meeting 8004) — chosen to avoid colliding when running the services locally.
 
 ### Environment tiers (`CONNECTORS_ENV`)
 
@@ -177,7 +177,7 @@ connectors/
 ├── tests/                 57 fast tests — no Docker, no network (fake Google clients)
 ├── Dockerfile             Production image (built + import-smoke-tested by CI; used by Railway).
 │                          Build context is the repo root; installs via `uv sync --frozen --no-dev --package connectors`.
-├── docker-compose.yml     Builds/runs the image locally on port 8004 (no DB service).
+├── docker-compose.yml     Builds/runs the image locally on port 8005 (no DB service).
 └── railway.json           Railway deploy config: Dockerfile builder, /health check, NO preDeployCommand
                             (stateless — nothing to migrate).
 ```

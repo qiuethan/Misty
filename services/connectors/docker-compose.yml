@@ -4,6 +4,6 @@ services:
       context: ..
       dockerfile: services/connectors/Dockerfile
     ports:
-      - "8004:8004"
+      - "8005:8005"
     env_file:
       - .env
