@@ -11,6 +11,7 @@ def _build_google(settings: Settings) -> SourceFetcher:
     return GoogleSource(
         credentials_json_b64=settings.google_credentials_json,
         max_content_chars=settings.max_content_chars,
+        request_timeout_s=settings.request_timeout_s,
     )
 
 
@@ -20,5 +21,18 @@ SOURCE_BUILDERS: dict[str, Callable[[Settings], SourceFetcher]] = {
 
 
 def build_registry(settings: Settings) -> dict[str, SourceFetcher]:
-    """Instantiate every configured source once, at startup."""
-    return {source_id: build(settings) for source_id, build in SOURCE_BUILDERS.items()}
+    """Instantiate every configured source once, at startup.
+
+    All four Google source ids (gdocs/gsheets/gslides/gdrive) share ONE
+    GoogleSource instance rather than one each — they have identical config,
+    and a GoogleSource memoizes its built API clients internally, so four
+    separate instances would mean four independent (and four times as
+    expensive) client caches for no benefit.
+    """
+    built: dict[Callable[[Settings], SourceFetcher], SourceFetcher] = {}
+    registry: dict[str, SourceFetcher] = {}
+    for source_id, build in SOURCE_BUILDERS.items():
+        if build not in built:
+            built[build] = build(settings)
+        registry[source_id] = built[build]
+    return registry

@@ -26,6 +26,12 @@ Two things follow from this:
 
 See `docs/ARCHITECTURE.md` for the full data flow.
 
+## Dependency on connectors
+
+The Google sources (`gdocs`, `gsheets`, `gslides`, `gdrive`) fetch their content by calling the [connectors](../connectors/) service over HTTP (`POST /fetch`) rather than holding Google credentials themselves — see `src/fetch/connectors.py` and `src/fetch/registry.py`. Configure it with `CONNECTORS_BASE_URL` (default `http://localhost:8004`) and `CONNECTORS_API_KEY`.
+
+Unlike the team-tracking directory, connectors reachability is **not** a soft dependency at request time: a connectors outage during ingest is caught and turned into a per-doc warning (the doc is still catalogued, just without a content snapshot) — see the `FetchError` handling in `src/ingest.py`. It **is**, however, a hard dependency at *boot* in staging/production: `verify_production_secrets()` (`src/config.py`) refuses to start if `CONNECTORS_API_KEY` is still the built-in dev default. See `docs/DEPLOYMENT.md` for the required deploy order (connectors before documentation-system).
+
 ## Quick start
 
 Prerequisites: Docker, Python 3.11+, [uv](https://github.com/astral-sh/uv).

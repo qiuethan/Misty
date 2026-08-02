@@ -8,6 +8,7 @@ pattern as services/verification/src/email/gmail.py.
 import base64
 import json
 import re
+import threading
 
 from src.sources.base import (
     SourceNotConfigured,
@@ -96,13 +97,25 @@ class GoogleSource:
     """
 
     def __init__(
-        self, *, credentials_json_b64: str, max_content_chars: int, services: dict | None = None
+        self,
+        *,
+        credentials_json_b64: str,
+        max_content_chars: int,
+        services: dict | None = None,
+        request_timeout_s: float = 30.0,
     ) -> None:
         self._credentials_json_b64 = credentials_json_b64
         self._max_content_chars = max_content_chars
+        self._request_timeout_s = request_timeout_s
         # API name -> client. A dict rather than one client because extractors
-        # need different APIs (drive, docs, ...). Tests inject fakes here.
+        # need different APIs (drive, docs, ...). Tests inject fakes here; in
+        # production this starts None and is memoized by _get_services() on
+        # first use, guarded by _build_lock.
         self._services = services
+        # FastAPI runs sync route handlers in a threadpool, so concurrent
+        # /fetch calls can race the first build. Guards ONLY the build below,
+        # never the rest of fetch().
+        self._build_lock = threading.Lock()
 
     def _build_services(self) -> dict:
         # Imported lazily so the Google dependency tree never loads unless a
@@ -121,7 +134,9 @@ class GoogleSource:
             raise SourceNotConfigured(f"invalid google credentials: {type(e).__name__}") from e
 
         def _client(name: str, version: str):
-            authed = google_auth_httplib2.AuthorizedHttp(creds, http=httplib2.Http(timeout=30))
+            authed = google_auth_httplib2.AuthorizedHttp(
+                creds, http=httplib2.Http(timeout=self._request_timeout_s)
+            )
             return build(name, version, http=authed, cache_discovery=False)
 
         clients = {}
@@ -132,13 +147,26 @@ class GoogleSource:
             clients[name] = _client(name, version)
         return clients
 
+    def _get_services(self) -> dict:
+        """Build the Google API clients once and memoize them. Credential
+        decode + JWT token exchange happen at most once per process (per
+        instance), not on every /fetch. Double-checked locking: the lock is
+        only held while actually building, not on the fast (already-built)
+        path."""
+        if self._services is not None:
+            return self._services
+        with self._build_lock:
+            if self._services is None:
+                self._services = self._build_services()
+            return self._services
+
     def fetch(self, url: str) -> SourceResult:
         file_id = parse_file_id(url)
         if file_id is None:
             raise SourceNotFound(f"no google file id in url: {url!r}")
         if self._services is None and not self._credentials_json_b64:
             raise SourceNotConfigured("google credentials not configured")
-        services = self._services if self._services is not None else self._build_services()
+        services = self._get_services()
 
         meta = execute(services["drive"].files().get(fileId=file_id, fields="name,mimeType"))
         name = (meta or {}).get("name")

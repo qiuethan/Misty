@@ -62,7 +62,7 @@ All settings load from the environment (`src/config.py`, `.env` in dev):
 | `API_KEY` | `dev-api-key-change-me` | Env-bootstrap key; carries `admin` scope. Must be overridden outside `local`. |
 | `CONSUMER_KEYS` | `""` | JSON array of per-consumer keys (see auth model). |
 | `GOOGLE_CREDENTIALS_JSON` | `""` | Base64 of the Google service-account JSON key file. Empty is a valid running state — see the runbook below. |
-| `MAX_CONTENT_CHARS` | `1000000` | Transport guard: truncates fetched content above this length. |
+| `MAX_CONTENT_CHARS` | `1200000` | Transport guard: truncates fetched content above this length. Deliberately set above documentation-system's own `MAX_CONTENT_CHARS` (1,000,000) so that clamp — not this one — is the one that actually trips and reports a truncation warning. |
 | `REQUEST_TIMEOUT_S` | `30` | Per-request timeout to upstream sources (seconds). |
 
 ## Auth model
@@ -174,7 +174,7 @@ connectors/
 │   ├── mint_key.py        connectors-keys CLI — prints a key + its CONSUMER_KEYS entry, no store writes
 │   └── config.py          Settings (CONNECTORS_ENV, API_KEY, CONSUMER_KEYS, GOOGLE_CREDENTIALS_JSON, ...) + boot check
 │
-├── tests/                 53 fast tests — no Docker, no network (fake Google clients)
+├── tests/                 57 fast tests — no Docker, no network (fake Google clients)
 ├── Dockerfile             Production image (built + import-smoke-tested by CI; used by Railway).
 │                          Build context is the repo root; installs via `uv sync --frozen --no-dev --package connectors`.
 ├── docker-compose.yml     Builds/runs the image locally on port 8004 (no DB service).
@@ -190,7 +190,7 @@ The suite is single-mode — no Docker, no database, no network:
 uv run pytest
 ```
 
-Runs **53 tests** with Google API clients injected as fakes via `app.dependency_overrides` / constructor injection, covering the `/fetch` happy path, URL parsing, the Docs extractor, the Drive-export fallback, the auth paths, config/boot checks, and the source-error → HTTP-status mapping.
+Runs **57 tests** with Google API clients injected as fakes via `app.dependency_overrides` / constructor injection, covering the `/fetch` happy path, URL parsing, the Docs extractor, the Drive-export fallback, the auth paths, config/boot checks, and the source-error → HTTP-status mapping.
 
 Lint and format with ruff:
 
@@ -203,7 +203,7 @@ uv run ruff format .
 
 ## Status
 
-v0.1: a stateless `POST /fetch` adapter over a Google Drive/Docs service account, config-seeded scoped API keys (`fetch` / `admin`) with an attested-actor audit trail, and a fast 53-test suite with no external dependencies.
+v0.1: a stateless `POST /fetch` adapter over a Google Drive/Docs service account, config-seeded scoped API keys (`fetch` / `admin`) with an attested-actor audit trail, and a fast 57-test suite with no external dependencies.
 
 **Not implemented (by design):**
 

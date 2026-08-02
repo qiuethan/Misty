@@ -64,3 +64,36 @@ def test_transport_failure_becomes_a_fetcherror():
 
     with pytest.raises(FetchError):
         _fetcher(handler).fetch("https://docs.google.com/document/d/abc/edit")
+
+
+def test_200_with_non_json_body_becomes_a_fetcherror():
+    # A proxy/edge returning a 200 HTML error page must never escape as a raw
+    # json.JSONDecodeError — it has to become an ordinary per-doc FetchError,
+    # same as any other connectors failure mode.
+    def handler(request):
+        return httpx.Response(200, content=b"<html>not json</html>")
+
+    with pytest.raises(FetchError):
+        _fetcher(handler).fetch("https://docs.google.com/document/d/abc/edit")
+
+
+def test_200_with_json_list_body_becomes_a_fetcherror():
+    # A 200 whose decoded body is a JSON list (not an object) must not reach
+    # body.get(...) and raise a raw AttributeError.
+    def handler(request):
+        return httpx.Response(200, json=["not", "an", "object"])
+
+    with pytest.raises(FetchError):
+        _fetcher(handler).fetch("https://docs.google.com/document/d/abc/edit")
+
+
+def test_empty_content_normalizes_content_and_snapshot_together():
+    # Matches WebFetcher's convention: "" is treated as no content, so
+    # content and content_snapshot are both None rather than "" paired with
+    # None (which would write a doc_content row holding sha256("")).
+    def handler(request):
+        return httpx.Response(200, json={"title": "Empty", "content": "", "warnings": []})
+
+    result = _fetcher(handler).fetch("https://docs.google.com/document/d/abc/edit")
+    assert result.content is None
+    assert result.content_snapshot is None

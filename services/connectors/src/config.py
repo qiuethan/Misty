@@ -23,8 +23,11 @@ class Settings(BaseSettings):
     google_credentials_json: str = ""
     # Transport guard only. documentation-system's own clamp decides what is
     # actually stored; this just stops a pathological file becoming a huge
-    # HTTP response.
-    max_content_chars: int = Field(default=1_000_000, gt=0)
+    # HTTP response. Deliberately set ABOVE documentation-system's
+    # MAX_CONTENT_CHARS (1,000,000) so this guard never trips first — the
+    # catalog's clamp must remain the authoritative one, or its "content
+    # truncated" warning can never fire.
+    max_content_chars: int = Field(default=1_200_000, gt=0)
     request_timeout_s: float = Field(default=30.0, gt=0)
 
 

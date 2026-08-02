@@ -40,13 +40,27 @@ class ConnectorsFetcher:
                 detail = _safe_detail(resp)
                 raise FetchError(f"connectors returned {resp.status_code}: {detail}")
             body = resp.json()
+            if not isinstance(body, dict):
+                raise FetchError(
+                    f"connectors returned a non-object JSON body: {type(body).__name__}"
+                )
         except httpx.HTTPError as e:
             raise FetchError(f"connectors unreachable: {e}") from e
+        except ValueError as e:
+            # resp.json() raises json.JSONDecodeError (a ValueError subclass)
+            # for a 200 with a non-JSON body — e.g. a proxy/edge error page.
+            # Must map to FetchError like every other failure mode here, so
+            # ingest_doc's `except FetchError` catches it and it becomes a
+            # per-doc warning, never a 500 on POST /docs.
+            raise FetchError(f"connectors returned an unparseable body: {e}") from e
         finally:
             if self._client is None:
                 client.close()
 
-        content = body.get("content")
+        # Normalize "" to None, matching WebFetcher's convention (see the
+        # comment in src/fetch/web.py): empty content and no snapshot travel
+        # together rather than leaving content="" paired with no snapshot.
+        content = body.get("content") or None
         if content is not None and len(content) > MAX_CONTENT_CHARS:
             content = content[:MAX_CONTENT_CHARS]
         return FetchResult(

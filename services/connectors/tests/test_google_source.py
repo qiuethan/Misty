@@ -1,3 +1,5 @@
+import base64
+
 import pytest
 
 from src.sources.base import (
@@ -205,6 +207,66 @@ def test_required_services_unions_in_a_new_extractor_declared_service():
     finally:
         google.EXTRACTORS.clear()
         google.EXTRACTORS.update(original)
+
+
+def test_services_are_built_once_across_two_fetch_calls():
+    # Regression: fetch() used to call _build_services() unmemoized on every
+    # request, re-decoding credentials and re-exchanging a JWT with Google
+    # each time. A counting fake stands in for _build_services here.
+    files = _FakeFiles(meta={"name": "Doc", "mimeType": "text/plain"}, payload=b"hi")
+    source = GoogleSource(credentials_json_b64="fake", max_content_chars=1000)
+    build_calls = {"n": 0}
+
+    def _fake_build():
+        build_calls["n"] += 1
+        return {"drive": _FakeService(files)}
+
+    source._build_services = _fake_build
+
+    source.fetch(DRIVE_URL)
+    source.fetch(DRIVE_URL)
+
+    assert build_calls["n"] == 1
+
+
+def test_request_timeout_s_reaches_the_http_transport(monkeypatch):
+    # Inject a fake httplib2.Http that records the timeout it was constructed
+    # with, rather than making a real network/credentials call.
+    seen_timeouts = []
+
+    class _FakeHttp:
+        def __init__(self, timeout=None):
+            seen_timeouts.append(timeout)
+
+    class _FakeAuthorizedHttp:
+        def __init__(self, creds, http=None):
+            pass
+
+    class _FakeCreds:
+        @classmethod
+        def from_service_account_info(cls, info, scopes):
+            return cls()
+
+    import httplib2
+    import google_auth_httplib2
+    from google.oauth2 import service_account
+    from googleapiclient import discovery
+
+    monkeypatch.setattr(httplib2, "Http", _FakeHttp)
+    monkeypatch.setattr(google_auth_httplib2, "AuthorizedHttp", _FakeAuthorizedHttp)
+    monkeypatch.setattr(service_account, "Credentials", _FakeCreds)
+    monkeypatch.setattr(discovery, "build", lambda *a, **k: object())
+
+    fake_creds_b64 = base64.b64encode(b'{"type": "service_account"}').decode()
+    source = GoogleSource(
+        credentials_json_b64=fake_creds_b64,
+        max_content_chars=1000,
+        request_timeout_s=7.5,
+    )
+    source._build_services()
+
+    assert seen_timeouts, "httplib2.Http was never constructed"
+    assert all(t == 7.5 for t in seen_timeouts)
 
 
 def _http_error(status):
