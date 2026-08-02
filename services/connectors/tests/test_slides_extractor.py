@@ -122,9 +122,15 @@ def test_slides_are_numbered_from_one_in_order():
 def test_bulleted_shape_keeps_one_line_per_bullet():
     # A single Slides shape holds every bullet, with newlines INSIDE textRun
     # content. Stripping them the way the Docs extractor does would collapse
-    # this into one run-on line.
-    out = _extract([_slide([_shape("alpha\nbeta\ngamma\n")])]).text
-    assert "alpha\nbeta\ngamma" in out
+    # this into one run-on line. A preceding title placeholder keeps the
+    # bulleted shape out of the title fallback, so this actually exercises
+    # the body path rather than passing through the title path.
+    out = _extract(
+        [_slide([_shape("Title\n", placeholder="TITLE"), _shape("alpha\nbeta\ngamma\n")])]
+    ).text
+    assert "## Slide 1: Title" in out
+    heading_index = out.index("## Slide 1: Title")
+    assert "alpha\nbeta\ngamma" in out[heading_index:]
 
 
 def test_speaker_notes_are_extracted_via_the_notes_object_id():
@@ -166,7 +172,12 @@ def test_non_text_elements_are_skipped():
 
 
 def test_whitespace_only_shape_is_dropped():
-    out = _extract([_slide([_shape("   \n"), _shape("kept\n")])]).text
+    # A preceding title placeholder keeps "kept" out of the title fallback,
+    # so this test verifies whitespace-only shapes are dropped from the body.
+    out = _extract(
+        [_slide([_shape("Title\n", placeholder="TITLE"), _shape("   \n"), _shape("kept\n")])]
+    ).text
+    assert "## Slide 1: Title" in out
     assert "kept" in out
     assert "\n\n" not in out
 
@@ -195,6 +206,54 @@ def test_table_renders_as_a_markdown_table():
     assert "| Tier | Amount |" in out
     assert "| --- | --- |" in out
     assert "| Gold | $5,000 |" in out
+
+
+def test_multiline_table_cell_produces_a_single_well_formed_row():
+    table = {
+        "objectId": "t1",
+        "table": {
+            "tableRows": [
+                {
+                    "tableCells": [
+                        {"text": {"textElements": [{"textRun": {"content": "Tier\n"}}]}},
+                        {"text": {"textElements": [{"textRun": {"content": "Perks\n"}}]}},
+                    ]
+                },
+                {
+                    "tableCells": [
+                        {"text": {"textElements": [{"textRun": {"content": "Gold\n"}}]}},
+                        {
+                            "text": {
+                                "textElements": [
+                                    {"textRun": {"content": "Logo on banner\nBooth space\n"}}
+                                ]
+                            }
+                        },
+                    ]
+                },
+            ]
+        },
+    }
+    out = _extract([_slide([table])]).text
+    lines = out.splitlines()
+    assert "| Gold | Logo on banner<br>Booth space |" in lines
+    # Slide heading + header row + separator + one body row: the newline
+    # inside the cell must not have split that body row into extra lines.
+    assert len(lines) == 4
+
+
+def test_non_title_placeholders_are_not_promoted_to_the_title():
+    out = _extract(
+        [
+            _slide(
+                [_shape("3", placeholder="SLIDE_NUMBER"), _shape("Acme Inc", placeholder="FOOTER")]
+            )
+        ]
+    ).text
+    assert "## Slide 1" in out
+    assert "## Slide 1:" not in out
+    assert "3" in out
+    assert "Acme Inc" in out
 
 
 def test_empty_deck_yields_empty_text():

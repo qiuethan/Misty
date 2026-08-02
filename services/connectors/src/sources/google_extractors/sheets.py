@@ -79,6 +79,11 @@ class SheetsExtractor:
 
         lines: list[str] = []
         warnings: list[str] = []
+        if len(value_ranges) != len(titles):
+            warnings.append(
+                f"batchGet returned {len(value_ranges)} valueRanges for {len(titles)} tabs; "
+                "some tabs may be missing from the output"
+            )
         for title, value_range in zip(titles, value_ranges):
             rows = (value_range or {}).get("values") or []
             if not rows:

@@ -149,6 +149,8 @@ The service account's credentials are built with these OAuth scopes:
 
 Both `required_scopes()` and `required_services()` (`src/sources/google.py`) union across the registered extractors automatically — a new extractor just declares the scopes/services it needs, and those functions pick it up without being edited.
 
+Adding a native extractor for an existing Google API (Docs/Slides/Sheets) is one new file plus one registry entry — true today only because `_API_VERSIONS` in `google.py` already maps `"slides"` and `"sheets"` to their API versions. Wiring up a genuinely new Google API (e.g. Forms) additionally needs one line added to `_API_VERSIONS`; `_build_services` raises `SourceNotConfigured` for any service name not in that map, so a missing entry fails loudly rather than silently.
+
 ### Known limitation: large spreadsheet tabs
 
 Every tab of a spreadsheet is read (there is no first-tab-only limitation). The one remaining lossy case is a single tab with more than `MAX_ROWS_PER_TAB` (2000) rows: that tab is truncated to the first 2000 rows and a warning naming the tab and its real row count is added to the response's `warnings` list. Slides and Docs have no equivalent size cap.

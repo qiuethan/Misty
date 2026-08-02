@@ -8,8 +8,16 @@ so a fix here fixes both.
 
 
 def _escape_cell(text: str) -> str:
-    """A literal `|` in a cell is read as a column separator and splits the row."""
-    return (text or "").replace("|", r"\|")
+    """A literal `|` in a cell is read as a column separator and splits the row.
+
+    A literal newline is worse: it doesn't just split a column, it splits the
+    row itself, destroying the table. Docs cells can never contain one (see
+    docs.py's `_cell_text`, which joins paragraphs with " "), but a Slides
+    shape's `_text_content` deliberately preserves interior newlines, so a
+    multi-line Slides table cell reaches here. Replace with `<br>`, which
+    renders in markdown and degrades to readable plain text otherwise.
+    """
+    return (text or "").replace("|", r"\|").replace("\n", "<br>")
 
 
 def render_markdown_table(rows: list[list[str]]) -> list[str]:

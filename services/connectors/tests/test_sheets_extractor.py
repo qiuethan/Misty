@@ -126,6 +126,37 @@ def test_ragged_rows_survive():
     assert "\n1" in result.text
 
 
+def test_short_value_ranges_warns_with_both_counts():
+    recorder = {"batchGet_calls": 0}
+    meta = {
+        "sheets": [
+            {"properties": {"title": "A", "index": 0}},
+            {"properties": {"title": "B", "index": 1}},
+        ]
+    }
+    # Only one valueRange for two tabs: batchGet returned short.
+    response = {"valueRanges": [{"values": [["x"]]}]}
+    services = {"sheets": _FakeSheetsService(meta, response, recorder)}
+    result = SheetsExtractor().extract(
+        services, "file123", "application/vnd.google-apps.spreadsheet"
+    )
+    assert len(result.warnings) == 1
+    assert "1" in result.warnings[0]
+    assert "2" in result.warnings[0]
+
+
+def test_empty_value_ranges_warns_and_yields_empty_text():
+    recorder = {"batchGet_calls": 0}
+    meta = {"sheets": [{"properties": {"title": "A", "index": 0}}]}
+    response = {"valueRanges": []}
+    services = {"sheets": _FakeSheetsService(meta, response, recorder)}
+    result = SheetsExtractor().extract(
+        services, "file123", "application/vnd.google-apps.spreadsheet"
+    )
+    assert result.text == ""
+    assert len(result.warnings) == 1
+
+
 def test_spreadsheet_with_no_tabs_yields_empty_text():
     result, _ = _extract([], [])
     assert result.text == ""

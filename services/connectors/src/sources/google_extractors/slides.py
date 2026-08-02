@@ -14,6 +14,12 @@ SLIDES_READONLY = "https://www.googleapis.com/auth/presentations.readonly"
 
 _TITLE_PLACEHOLDERS = frozenset({"TITLE", "CENTERED_TITLE"})
 
+# Placeholder types that are obviously not a slide title. Excluded only from
+# the fallback pass — a slide whose only text shapes are e.g. a slide number
+# and a footer has no title candidate at all, and should fall through to a
+# bare "## Slide N" rather than promoting one of these.
+_NON_TITLE_PLACEHOLDERS = frozenset({"SLIDE_NUMBER", "FOOTER", "SLIDE_IMAGE"})
+
 
 def _text_content(holder: dict) -> str:
     """All text in a shape or table cell, edges trimmed.
@@ -64,10 +70,17 @@ def _title_element(elements: list) -> dict | None:
     using the layout's title field, so `shape.placeholder` may be absent on
     every slide. Primary path: any TITLE/CENTERED_TITLE placeholder anywhere
     on the slide, regardless of its position in pageElements. Fallback, only
-    when no placeholder exists: the first non-empty text shape in reading
-    order — never a table. Matched by element identity (not objectId) so the
-    chosen element can be excluded from the body without relying on ids being
-    unique.
+    when no placeholder exists: the first non-empty, single-line text shape in
+    `pageElements` order — never a table, and never a shape whose placeholder
+    type is in `_NON_TITLE_PLACEHOLDERS`. `pageElements` order is creation/
+    z-order, not guaranteed reading order, but it's the best ordering signal
+    the API gives.
+
+    A multi-line shape is never promoted, even if it's the only candidate: a
+    five-bullet body box becoming "## Slide N: <first bullet>" would make the
+    heading a lie and scatter the remaining bullets as unattributed body
+    lines. Matched by element identity (not objectId) so the chosen element
+    can be excluded from the body without relying on ids being unique.
     """
     for element in elements:
         shape = element.get("shape")
@@ -75,7 +88,10 @@ def _title_element(elements: list) -> dict | None:
             return element
     for element in elements:
         shape = element.get("shape")
-        if shape and _text_content(shape):
+        if not shape or _placeholder_type(shape) in _NON_TITLE_PLACEHOLDERS:
+            continue
+        text = _text_content(shape)
+        if text and "\n" not in text:
             return element
     return None
 

@@ -39,3 +39,11 @@ def test_no_rows_renders_nothing():
 
 def test_rows_of_empty_lists_render_nothing():
     assert render_markdown_table([[], []]) == []
+
+
+def test_newlines_in_cells_are_replaced_with_br_so_the_row_survives():
+    out = render_markdown_table([["Tier", "Perks"], ["Gold", "Logo on banner\nBooth space"]])
+    # An unescaped newline would split the row across two physical lines and
+    # destroy the table; <br> keeps it on one line and still renders.
+    assert out[-1] == "| Gold | Logo on banner<br>Booth space |"
+    assert len(out) == 3
