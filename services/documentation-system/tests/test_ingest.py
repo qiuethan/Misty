@@ -185,6 +185,15 @@ def test_ingest_truncates_content_over_cap_and_warns(store):
     assert any("truncat" in w.lower() for w in res.warnings)
 
 
+def test_ingest_empty_string_content_writes_no_doc_content_row(store):
+    # FetchResult's contract says an empty extraction is None; a connector that
+    # returns "" anyway must not create a doc_content row holding nothing.
+    fetchers = FakeFetchers(result=FetchResult(title="T", content="", content_snapshot=""))
+    res = ingest_doc(DocIngest(url="https://github.com/a/g"), storage=store,
+                     fetchers=fetchers, directory=FakeDirectory(), actor="bot")
+    assert store.get_doc_content(res.doc.id) is None
+
+
 def test_ingest_under_cap_content_untouched_and_no_warning(store):
     fetchers = FakeFetchers(
         result=FetchResult(title="T", content="short body", content_snapshot="short body")

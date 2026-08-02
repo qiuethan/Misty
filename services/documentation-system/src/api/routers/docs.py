@@ -182,11 +182,14 @@ def refetch(
     now = datetime.now(timezone.utc)
     # A content-less refetch (empty body: page deleted, paywalled, connector
     # regressed to title-only) deliberately leaves the existing doc_content
-    # row untouched rather than wiping it — stale text beats silently
-    # emptying the RAG substrate. This means content_hash can legitimately
-    # lag behind docs.fetched_at; doc_content.fetched_at, not content_hash,
-    # is the freshness signal for this row.
-    if result.content is not None:
+    # row AND the existing snapshot untouched rather than wiping them — stale
+    # text beats silently emptying the RAG substrate. This means content_hash
+    # can legitimately lag behind docs.fetched_at; doc_content.fetched_at, not
+    # content_hash, is the freshness signal for this row.
+    # Both guards test truthiness, not `is not None`: FetchResult's contract
+    # says an empty extraction is None, but a connector that returns "" anyway
+    # must not be able to blank stored content through this path.
+    if result.content:
         text, _truncated = clamp_content(result.content)
         storage.upsert_doc_content(
             doc_id,
@@ -198,11 +201,7 @@ def refetch(
         doc_id,
         {
             "title": result.title or doc.title,
-            "content_snapshot": (
-                result.content_snapshot
-                if result.content_snapshot is not None
-                else doc.content_snapshot
-            ),
+            "content_snapshot": result.content_snapshot or doc.content_snapshot,
             "fetched_at": now,
         },
         actor=actor,

@@ -125,7 +125,10 @@ def ingest_doc(
             return _merge_into_existing(storage, existing, payload, actor=actor)
         raise
     _apply_grants(storage, doc.id, payload.grants, actor=actor)
-    if content is not None:
+    # Truthiness, not `is not None`: an empty extraction is None per
+    # FetchResult's contract, but a connector returning "" must not create a
+    # doc_content row holding nothing.
+    if content:
         content, truncated = clamp_content(content)
         if truncated:
             warnings.append("content truncated to size cap; stored text is incomplete")
