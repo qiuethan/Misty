@@ -127,7 +127,8 @@ def _authenticate_ws(key: str | None, store: InMemoryKeyStore, scope: str) -> bo
             return False
         return scope in row.scopes or ADMIN_SCOPE in row.scopes
 
-    env_key = get_settings().api_key
+    # Unwrap: compare_digest below needs a real str (SecretStr has no .encode).
+    env_key = get_settings().api_key.get_secret_value()
     if env_key and secrets.compare_digest(key.encode(), env_key.encode()):
         return True  # env-bootstrap key carries admin scope
     return False
