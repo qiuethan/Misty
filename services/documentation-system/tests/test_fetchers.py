@@ -4,7 +4,8 @@ import pytest
 from contracts.fetcher import FetchError
 from src.fetch.github import GithubFetcher, parse_github_title
 from src.fetch.registry import FetchUnsupported, FetcherRegistry
-from src.fetch.web import WebFetcher, extract_text, parse_title, MAX_CONTENT_CHARS, SNAPSHOT_CHARS
+from src.content import MAX_CONTENT_CHARS
+from src.fetch.web import FETCH_HARD_CAP, SNAPSHOT_CHARS, WebFetcher, extract_text, parse_title
 
 
 def test_parse_title_from_html():
@@ -64,6 +65,26 @@ def test_web_fetcher_returns_full_content_and_bounded_snapshot():
     assert result.content.startswith(result.content_snapshot)
 
 
-def test_extract_text_caps_at_max_content_chars():
+def test_extract_text_does_not_cap_at_storage_limit():
+    # The fetch layer must hand oversized text through intact so clamp_content()
+    # at ingest still sees len > MAX_CONTENT_CHARS and emits its truncation
+    # warning. Capping here would make that warning permanently unreachable.
     huge = "<p>" + ("x" * (MAX_CONTENT_CHARS + 5000)) + "</p>"
-    assert len(extract_text(huge)) == MAX_CONTENT_CHARS
+    assert len(extract_text(huge)) == MAX_CONTENT_CHARS + 5000
+
+
+def test_extract_text_caps_at_fetch_hard_cap():
+    huge = "<p>" + ("x" * (FETCH_HARD_CAP + 5000)) + "</p>"
+    assert len(extract_text(huge)) == FETCH_HARD_CAP
+
+
+def test_web_fetcher_empty_page_returns_none_not_empty_string():
+    # FetchResult's invariant: nothing extracted → None on BOTH content fields,
+    # so refetch preserves the stored text and snapshot instead of blanking them.
+    def handler(request):
+        return httpx.Response(200, html="<html><body>   </body></html>")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    result = WebFetcher(client=client).fetch("https://93.184.216.34")
+    assert result.content is None
+    assert result.content_snapshot is None
