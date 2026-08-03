@@ -150,6 +150,69 @@ def test_ingest_applies_grants(store):
     assert grants[0].created_by == "t"
 
 
+def test_ingest_persists_full_content(store):
+    fetchers = FakeFetchers(
+        result=FetchResult(title="T", content="the full body", content_snapshot="the full")
+    )
+    res = ingest_doc(DocIngest(url="https://github.com/a/b"), storage=store,
+                     fetchers=fetchers, directory=FakeDirectory(), actor="bot")
+    assert store.get_doc_content(res.doc.id) == "the full body"
+    assert res.doc.content_snapshot == "the full"
+
+
+def test_ingest_stores_sha256_of_content(store):
+    from hashlib import sha256
+
+    fetchers = FakeFetchers(
+        result=FetchResult(title="T", content="body", content_snapshot="body")
+    )
+    res = ingest_doc(DocIngest(url="https://github.com/a/c"), storage=store,
+                     fetchers=fetchers, directory=FakeDirectory(), actor="bot")
+    meta = store.get_doc_content_meta(res.doc.id)
+    assert meta.content_hash == sha256(b"body").hexdigest()
+
+
+def test_ingest_truncates_content_over_cap_and_warns(store):
+    from src.content import MAX_CONTENT_CHARS
+
+    oversized = "x" * (MAX_CONTENT_CHARS + 100)
+    fetchers = FakeFetchers(
+        result=FetchResult(title="T", content=oversized, content_snapshot="preview")
+    )
+    res = ingest_doc(DocIngest(url="https://github.com/a/e"), storage=store,
+                     fetchers=fetchers, directory=FakeDirectory(), actor="bot")
+    assert len(store.get_doc_content(res.doc.id)) == MAX_CONTENT_CHARS
+    assert any("truncat" in w.lower() for w in res.warnings)
+
+
+def test_ingest_empty_string_content_writes_no_doc_content_row(store):
+    # FetchResult's contract says an empty extraction is None; a connector that
+    # returns "" anyway must not create a doc_content row holding nothing.
+    fetchers = FakeFetchers(result=FetchResult(title="T", content="", content_snapshot=""))
+    res = ingest_doc(DocIngest(url="https://github.com/a/g"), storage=store,
+                     fetchers=fetchers, directory=FakeDirectory(), actor="bot")
+    assert store.get_doc_content(res.doc.id) is None
+
+
+def test_ingest_under_cap_content_untouched_and_no_warning(store):
+    fetchers = FakeFetchers(
+        result=FetchResult(title="T", content="short body", content_snapshot="short body")
+    )
+    res = ingest_doc(DocIngest(url="https://github.com/a/f"), storage=store,
+                     fetchers=fetchers, directory=FakeDirectory(), actor="bot")
+    assert store.get_doc_content(res.doc.id) == "short body"
+    assert not any("truncat" in w.lower() for w in res.warnings)
+
+
+def test_ingest_without_content_creates_no_content_row(store):
+    fetchers = FakeFetchers(
+        result=FetchResult(title="T", content=None, content_snapshot=None)
+    )
+    res = ingest_doc(DocIngest(url="https://github.com/a/d"), storage=store,
+                     fetchers=fetchers, directory=FakeDirectory(), actor="bot")
+    assert store.get_doc_content(res.doc.id) is None
+
+
 def test_ingest_dedup_applies_grants_to_existing_doc(store):
     f = FakeFetchers(result=FetchResult(title="X"))
     first = ingest_doc(DocIngest(url="https://x.com/a"), storage=store,

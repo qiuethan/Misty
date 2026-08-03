@@ -1,7 +1,8 @@
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from contracts.types import ApiKey, Doc, DocGrant, Source
+from contracts.types import ApiKey, Doc, DocContentMeta, DocGrant, Source
 from contracts.visibility import ActorContext, SEE_ALL
 
 
@@ -70,6 +71,34 @@ class StorageAdapter(Protocol):
         ...
     def list_grants(self, doc_id: UUID) -> list[DocGrant]:
         """Grants for a doc, grantee_label unset (resolved at the API layer)."""
+        ...
+    def upsert_doc_content(
+        self, doc_id: UUID, *, content_text: str, content_hash: str, fetched_at: datetime | None
+    ) -> None:
+        """Insert or replace the full extracted text for a doc. `content_hash`
+        is the sha256 hex of `content_text`, stored for cheap change detection
+        — it detects *content change*, not freshness. A refetch that returns
+        no content is never passed to this method, so the prior row (text,
+        hash, and fetched_at) is left untouched; a consumer deciding whether
+        to re-embed should compare `doc_content.fetched_at`, not content_hash,
+        to know how current the row is."""
+        ...
+    def get_doc_content(
+        self, doc_id: UUID, *, visibility: ActorContext = SEE_ALL
+    ) -> str | None:
+        """Full extracted text for a doc, or None if the doc has no content OR
+        the actor cannot see it. Full content is at least as sensitive as the
+        snapshot, so this enforces the same visibility predicate as get_doc —
+        an invisible doc is indistinguishable from one with no content."""
+        ...
+    def get_doc_content_meta(
+        self, doc_id: UUID, *, visibility: ActorContext = SEE_ALL
+    ) -> DocContentMeta | None:
+        """Hash + capture time for a doc's stored content, or None if the doc has
+        no content OR the actor cannot see it. Gated by the same visibility
+        predicate as get_doc_content — metadata about content is content.
+        `content_hash` detects CHANGE, not freshness: compare `fetched_at` to know
+        how current the row is."""
         ...
 
     # Sources

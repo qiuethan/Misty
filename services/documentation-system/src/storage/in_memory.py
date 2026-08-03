@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from contracts.types import ApiKey, Doc, DocGrant, Source
+from contracts.types import ApiKey, Doc, DocContentMeta, DocGrant, Source
 from contracts.visibility import ActorContext, SEE_ALL, doc_visible
 
 
@@ -20,6 +20,8 @@ class InMemoryStorageAdapter:
         self._api_keys: dict[UUID, ApiKey] = {}
         self._api_key_hashes: dict[UUID, str] = {}
         self._grants: dict[UUID, list[tuple[str, UUID | None, datetime, str]]] = {}
+        # doc_id -> (content_text, content_hash, fetched_at)
+        self._content: dict[UUID, tuple[str, str, datetime | None]] = {}
 
     def _hydrate(self, doc: Doc) -> Doc:
         data = doc.model_dump()
@@ -149,6 +151,36 @@ class InMemoryStorageAdapter:
             DocGrant(grantee_type=gt, grantee_id=gid, grantee_label=None, created_at=at, created_by=by)
             for (gt, gid, at, by) in self._grants.get(doc_id, [])
         ]
+
+    def upsert_doc_content(
+        self, doc_id: UUID, *, content_text: str, content_hash: str, fetched_at: datetime | None
+    ) -> None:
+        # No doc-existence check: Postgres enforces this with a FK, but this
+        # adapter is a test double and callers always upsert a doc they just
+        # created. Content for an unknown doc is simply unreachable via
+        # get_doc_content, which returns None when the doc is missing.
+        self._content[doc_id] = (content_text, content_hash, fetched_at)
+
+    def get_doc_content(
+        self, doc_id: UUID, *, visibility: ActorContext = SEE_ALL
+    ) -> str | None:
+        doc = self._docs.get(doc_id)
+        if doc is None or not self._visible(doc, visibility):
+            return None
+        entry = self._content.get(doc_id)
+        return entry[0] if entry is not None else None
+
+    def get_doc_content_meta(
+        self, doc_id: UUID, *, visibility: ActorContext = SEE_ALL
+    ) -> DocContentMeta | None:
+        doc = self._docs.get(doc_id)
+        if doc is None or not self._visible(doc, visibility):
+            return None
+        entry = self._content.get(doc_id)
+        if entry is None:
+            return None
+        _text, content_hash, fetched_at = entry
+        return DocContentMeta(content_hash=content_hash, fetched_at=fetched_at)
 
     # --- Sources ---
 

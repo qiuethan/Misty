@@ -10,6 +10,7 @@ from contracts.visibility import ActorContext
 from src.api.auth import AuthedKey, get_actor, require_scope
 from src.api.authz import get_visible_doc_or_404, read_context, write_context
 from src.api.deps import get_directory, get_fetchers, get_storage
+from src.content import clamp_content, content_hash
 from src.fetch.registry import FetcherRegistry
 from src.ingest import BadReference, ingest_doc
 
@@ -178,16 +179,30 @@ def refetch(
         result = fetchers.fetch_for(doc.source_id, doc.url)
     except FetchError as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+    now = datetime.now(timezone.utc)
+    # A content-less refetch (empty body: page deleted, paywalled, connector
+    # regressed to title-only) deliberately leaves the existing doc_content
+    # row AND the existing snapshot untouched rather than wiping them — stale
+    # text beats silently emptying the RAG substrate. This means content_hash
+    # can legitimately lag behind docs.fetched_at; doc_content.fetched_at, not
+    # content_hash, is the freshness signal for this row.
+    # Both guards test truthiness, not `is not None`: FetchResult's contract
+    # says an empty extraction is None, but a connector that returns "" anyway
+    # must not be able to blank stored content through this path.
+    if result.content:
+        text, _truncated = clamp_content(result.content)
+        storage.upsert_doc_content(
+            doc_id,
+            content_text=text,
+            content_hash=content_hash(text),
+            fetched_at=now,
+        )
     return storage.update_doc(
         doc_id,
         {
             "title": result.title or doc.title,
-            "content_snapshot": (
-                result.content_snapshot
-                if result.content_snapshot is not None
-                else doc.content_snapshot
-            ),
-            "fetched_at": datetime.now(timezone.utc),
+            "content_snapshot": result.content_snapshot or doc.content_snapshot,
+            "fetched_at": now,
         },
         actor=actor,
     )
