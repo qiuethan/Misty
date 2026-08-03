@@ -33,6 +33,8 @@ def default_registry() -> FetcherRegistry:
         mapping[source_id] = ConnectorsFetcher(
             source_id=source_id,
             base_url=settings.connectors_base_url,
-            api_key=settings.connectors_api_key,
+            # SecretStr boundary: ConnectorsFetcher sends the key as a plain
+            # header value, so unwrap here rather than pushing SecretStr down.
+            api_key=settings.connectors_api_key.get_secret_value(),
         )
     return FetcherRegistry(mapping)

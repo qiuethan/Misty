@@ -2,6 +2,7 @@ import logging
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -12,6 +13,11 @@ logger = logging.getLogger(__name__)
 # verify_production_secrets). Shipping the default `api_key` to
 # staging/production would accept a publicly-known admin key via the
 # env-bootstrap auth path.
+#
+# Deliberately a plain str, not a SecretStr: it is a committed, publicly-known
+# constant with nothing to hide, and the comparisons in
+# verify_production_secrets read cleanest against a str. It is wrapped in
+# SecretStr at each field default below.
 DEFAULT_DEV_API_KEY = "dev-api-key-change-me"
 
 
@@ -21,11 +27,22 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+psycopg://docs:dev_password@localhost:5434/docs"
     )
-    api_key: str = DEFAULT_DEV_API_KEY
+    # The three credentials below are SecretStr, not str: a plain str field
+    # prints in full on any repr/diff/traceback. That is not hypothetical —
+    # an identically-shaped plain-str credential in services/connectors leaked
+    # a real Google service-account private key into a terminal and a session
+    # transcript via a failing pytest assertion diff. SecretStr makes that
+    # structurally impossible (repr/str always render "**********"), so don't
+    # "simplify" these back to str. Only the boundaries that hand the raw
+    # value to something that needs a str should call .get_secret_value():
+    # src/api/auth.py (env-bootstrap key comparison), src/api/deps.py (the
+    # directory HTTP client), src/fetch/registry.py (the connectors fetchers),
+    # and verify_production_secrets below.
+    api_key: SecretStr = SecretStr(DEFAULT_DEV_API_KEY)
     directory_base_url: str = "http://localhost:8000"
-    directory_api_key: str = DEFAULT_DEV_API_KEY
+    directory_api_key: SecretStr = SecretStr(DEFAULT_DEV_API_KEY)
     connectors_base_url: str = "http://localhost:8005"
-    connectors_api_key: str = DEFAULT_DEV_API_KEY
+    connectors_api_key: SecretStr = SecretStr(DEFAULT_DEV_API_KEY)
     docs_env: Literal["local", "staging", "production"] = "local"
 
 
@@ -59,14 +76,19 @@ def verify_production_secrets(settings: Settings | None = None) -> None:
 
     Called from create_app(), so a misconfigured deploy dies at startup, not
     on first request.
+
+    All three checks below MUST go through .get_secret_value(). A SecretStr
+    never compares equal to a str, so `settings.api_key == DEFAULT_DEV_API_KEY`
+    would silently evaluate False forever — the service would boot happily to
+    staging/production with the committed dev secret and nothing would say so.
     """
     settings = settings or get_settings()
     if settings.docs_env == "local":
         return
     insecure: list[str] = []
-    if settings.api_key == DEFAULT_DEV_API_KEY:
+    if settings.api_key.get_secret_value() == DEFAULT_DEV_API_KEY:
         insecure.append("API_KEY")
-    if settings.directory_api_key == DEFAULT_DEV_API_KEY:
+    if settings.directory_api_key.get_secret_value() == DEFAULT_DEV_API_KEY:
         insecure.append("DIRECTORY_API_KEY")
     if insecure:
         raise RuntimeError(
@@ -74,7 +96,7 @@ def verify_production_secrets(settings: Settings | None = None) -> None:
             f"{', '.join(insecure)} still set to the built-in dev default. "
             "Set a strong, unique value via environment variables."
         )
-    if settings.connectors_api_key == DEFAULT_DEV_API_KEY:
+    if settings.connectors_api_key.get_secret_value() == DEFAULT_DEV_API_KEY:
         logger.warning(
             "CONNECTORS_API_KEY is still set to the built-in dev default in "
             "docs_env=%r. This service will still start, but Google-source "
