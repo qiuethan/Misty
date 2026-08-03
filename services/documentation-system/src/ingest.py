@@ -83,6 +83,7 @@ def ingest_doc(
             snapshot = result.content_snapshot
             content = result.content
             fetched_at = _now()
+            warnings.extend(result.warnings)
         except FetchError as e:
             warnings.append(f"content fetch failed ({e}); title fell back to url")
     elif source is not None and source.requires_auth:

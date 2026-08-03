@@ -78,7 +78,7 @@ Usage bills as **standard Amazon Bedrock** (AWS credits apply) — deliberately 
 Auth is scoped API keys via the shared `platform_auth` package, matching team-tracking and documentation-system — but **DB-free**. There is no `api_keys` table.
 
 - Every request needs `X-API-Key`. A key is either the shared bootstrap env key (`API_KEY`, scope: `admin`) or a per-consumer key seeded from the `CONSUMER_KEYS` env var.
-- **`CONSUMER_KEYS` is a JSON array**, each entry `{"name", "prefix", "key_hash", "scopes"}`. At boot, `key_store_from_config()` (`src/key_store.py`) parses it into an in-memory store that satisfies `platform_auth`'s `ApiKeyStore` protocol — the stateless equivalent of team-tracking's Postgres key table, swappable for a persistent store later. Keys are stored only as Argon2 hashes; a malformed `CONSUMER_KEYS` fails fast at startup.
+- **`CONSUMER_KEYS` is a JSON array**, each entry `{"name", "prefix", "key_hash", "scopes"}`. At boot, `key_store_from_config()` (`packages/auth/platform_auth/memory_store.py`) parses it into an in-memory store that satisfies `platform_auth`'s `ApiKeyStore` protocol — the stateless equivalent of team-tracking's Postgres key table, swappable for a persistent store later. Keys are stored only as Argon2 hashes; a malformed `CONSUMER_KEYS` fails fast at startup.
 - Keys use the **`llm_` envelope** (`llm_<prefix>_<secret>`). There is **no `X-Actor` header** and no `dev:spoof` scope — this is a service-to-service API, so the audit actor is always the authenticated key's own name (attested actor).
 
 ### Minting consumer keys
@@ -140,7 +140,6 @@ llm/
 │   │   ├── bedrock.py           Alt: Claude via AnthropicBedrockMantle (Messages endpoint)
 │   │   └── registry.py          Config-driven provider selection (LLM_PROVIDER → builder)
 │   │
-│   ├── key_store.py       InMemoryKeyStore seeded from CONSUMER_KEYS JSON (DB-free ApiKeyStore)
 │   ├── mint_key.py        llm-keys CLI — prints a key + its CONSUMER_KEYS entry, no store writes
 │   └── config.py          Settings (LLM_ENV, API_KEY, CONSUMER_KEYS, LLM_*, AWS_REGION) + boot check
 │

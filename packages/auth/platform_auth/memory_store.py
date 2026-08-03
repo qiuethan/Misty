@@ -1,6 +1,10 @@
-"""In-memory API-key store seeded from config — the DB-free equivalent of
-team-tracking's Postgres key table. Satisfies platform_auth's ApiKeyStore
-protocol structurally, so it is swappable for a persistent store later (#44)."""
+"""In-memory API-key store seeded from config — the DB-free implementation of
+this package's ApiKeyStore protocol.
+
+Services with a database back ApiKeyStore with a table; services without one
+(llm, connectors) seed this from a CONSUMER_KEYS JSON env var. Swappable for a
+persistent store later (#44).
+"""
 
 import json
 from dataclasses import dataclass

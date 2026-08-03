@@ -63,6 +63,30 @@ def test_verify_secrets_raises_in_production_with_default_directory_api_key(monk
     assert "DIRECTORY_API_KEY" in str(exc.value)
 
 
+def test_verify_secrets_warns_in_production_with_default_connectors_api_key(
+    monkeypatch, caplog
+):
+    from src.config import DEFAULT_DEV_API_KEY, verify_production_secrets
+
+    monkeypatch.setenv("DOCS_ENV", "production")
+    monkeypatch.setenv("API_KEY", "a-strong-api-secret")
+    monkeypatch.setenv("DIRECTORY_API_KEY", "a-strong-directory-secret")
+    monkeypatch.setenv("CONNECTORS_API_KEY", DEFAULT_DEV_API_KEY)
+    with caplog.at_level("WARNING"):
+        verify_production_secrets()  # must not raise
+    assert any("CONNECTORS_API_KEY" in record.message for record in caplog.records)
+
+
+def test_verify_secrets_no_connectors_warning_in_local(monkeypatch, caplog):
+    from src.config import DEFAULT_DEV_API_KEY, verify_production_secrets
+
+    monkeypatch.setenv("DOCS_ENV", "local")
+    monkeypatch.setenv("CONNECTORS_API_KEY", DEFAULT_DEV_API_KEY)
+    with caplog.at_level("WARNING"):
+        verify_production_secrets()  # must not raise
+    assert not any("CONNECTORS_API_KEY" in record.message for record in caplog.records)
+
+
 def test_verify_secrets_raises_in_staging_with_default_api_key(monkeypatch):
     from src.config import DEFAULT_DEV_API_KEY, verify_production_secrets
 
@@ -87,6 +111,7 @@ def test_verify_secrets_passes_in_production_with_real_secrets(monkeypatch):
     monkeypatch.setenv("DOCS_ENV", "production")
     monkeypatch.setenv("API_KEY", "a-strong-api-secret")
     monkeypatch.setenv("DIRECTORY_API_KEY", "a-strong-directory-secret")
+    monkeypatch.setenv("CONNECTORS_API_KEY", "a-strong-connectors-secret")
     verify_production_secrets()  # must not raise
 
 

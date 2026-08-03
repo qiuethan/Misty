@@ -1,7 +1,8 @@
 from functools import lru_cache
 
+from platform_auth import InMemoryKeyStore, key_store_from_config
+
 from src.config import get_settings
-from src.key_store import InMemoryKeyStore, key_store_from_config
 from src.providers.base import LLMProvider
 from src.providers.registry import get_provider
 

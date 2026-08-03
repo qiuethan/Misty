@@ -185,6 +185,33 @@ def test_ingest_truncates_content_over_cap_and_warns(store):
     assert any("truncat" in w.lower() for w in res.warnings)
 
 
+def test_ingest_oversized_connectors_response_warns_via_truncation(store):
+    # End-to-end regression for the pre-truncation bug: a real ConnectorsFetcher
+    # (over an httpx mock transport, no pre-clamp of its own) feeding ingest_doc
+    # must still surface the truncation warning — clamp_content is the only
+    # place the size cap is enforced.
+    import httpx
+
+    from src.content import MAX_CONTENT_CHARS
+    from src.fetch.connectors import ConnectorsFetcher
+    from src.fetch.registry import FetcherRegistry
+
+    oversized = "y" * (MAX_CONTENT_CHARS + 1000)
+
+    def handler(request):
+        return httpx.Response(200, json={"title": "Big", "content": oversized, "warnings": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    connectors_fetcher = ConnectorsFetcher(
+        source_id="github", base_url="http://connectors", api_key="k", client=client
+    )
+    fetchers = FetcherRegistry({"github": connectors_fetcher})
+
+    res = ingest_doc(DocIngest(url="https://github.com/a/big"), storage=store,
+                     fetchers=fetchers, directory=FakeDirectory(), actor="bot")
+    assert len(store.get_doc_content(res.doc.id)) == MAX_CONTENT_CHARS
+    assert any("truncat" in w.lower() for w in res.warnings)
+
 def test_ingest_empty_string_content_writes_no_doc_content_row(store):
     # FetchResult's contract says an empty extraction is None; a connector that
     # returns "" anyway must not create a doc_content row holding nothing.
@@ -211,6 +238,18 @@ def test_ingest_without_content_creates_no_content_row(store):
     res = ingest_doc(DocIngest(url="https://github.com/a/d"), storage=store,
                      fetchers=fetchers, directory=FakeDirectory(), actor="bot")
     assert store.get_doc_content(res.doc.id) is None
+
+
+def test_ingest_surfaces_fetcher_warnings(store):
+    fetchers = FakeFetchers(
+        result=FetchResult(
+            title="Budget", content="a,b", content_snapshot="a,b",
+            warnings=["first sheet only"],
+        )
+    )
+    res = ingest_doc(DocIngest(url="https://github.com/a/warn"), storage=store,
+                     fetchers=fetchers, directory=FakeDirectory(), actor="bot")
+    assert "first sheet only" in res.warnings
 
 
 def test_ingest_dedup_applies_grants_to_existing_doc(store):

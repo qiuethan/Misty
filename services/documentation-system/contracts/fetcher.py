@@ -19,6 +19,9 @@ class FetchResult(BaseModel):
     # src.content.MAX_CONTENT_CHARS, which is the single truncation point.
     content: str | None = None
     content_snapshot: str | None = None  # bounded preview, derived from content
+    # Non-fatal information loss reported by the fetcher (e.g. a spreadsheet
+    # whose extra tabs were not read). Folded into the ingest warnings.
+    warnings: list[str] = []
 
 
 class FetchError(Exception):

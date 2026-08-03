@@ -1,0 +1,9 @@
+services:
+  connectors:
+    build:
+      context: ..
+      dockerfile: services/connectors/Dockerfile
+    ports:
+      - "8005:8005"
+    env_file:
+      - .env
