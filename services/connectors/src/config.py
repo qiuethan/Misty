@@ -14,9 +14,18 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     connectors_env: Literal["local", "staging", "production"] = "local"
-    api_key: str = DEFAULT_DEV_API_KEY
-    # JSON array of consumer keys: [{"name","prefix","key_hash","scopes"?}]
-    consumer_keys: str = ""
+    # Env-bootstrap key granting admin scope. SecretStr for the same reason as
+    # google_credentials_json below: a plain str prints in full on any
+    # repr/diff/traceback. Only the auth factory boundary (src/api/auth.py)
+    # should call .get_secret_value() on it — plus verify_production_secrets,
+    # which must compare the unwrapped value (a SecretStr never compares equal
+    # to a str, so comparing the wrapper would silently disable that guard).
+    api_key: SecretStr = SecretStr(DEFAULT_DEV_API_KEY)
+    # JSON array of consumer keys: [{"name","prefix","key_hash","scopes"?}].
+    # Holds argon2 hashes rather than plaintext keys, but it is still
+    # credential material, so it is SecretStr too. Only the key-store boundary
+    # (src/api/deps.py) should call .get_secret_value() on it.
+    consumer_keys: SecretStr = SecretStr("")
     # base64-encoded Google service-account JSON — a private key. Empty is a
     # valid running state: Google fetches then fail as SourceNotConfigured
     # (503) while the rest of the service keeps serving. This is SecretStr,
@@ -53,7 +62,7 @@ def verify_production_secrets(settings: Settings | None = None) -> None:
     if settings.connectors_env == "local":
         return
     insecure: list[str] = []
-    if settings.api_key == DEFAULT_DEV_API_KEY:
+    if settings.api_key.get_secret_value() == DEFAULT_DEV_API_KEY:
         insecure.append("API_KEY")
     if insecure:
         raise RuntimeError(
