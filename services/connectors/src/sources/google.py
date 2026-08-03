@@ -18,7 +18,10 @@ from src.sources.base import (
 )
 from src.sources.google_extractors.base import Extractor, execute
 from src.sources.google_extractors.docs import DocsExtractor
+from src.sources.google_extractors.docx import DOCX_MIME, DocxExtractor
 from src.sources.google_extractors.drive_export import DRIVE_READONLY, DriveExportExtractor
+from src.sources.google_extractors.forms import FORM_MIME, FormsExtractor
+from src.sources.google_extractors.pdf import PDF_MIME, PdfExtractor
 from src.sources.google_extractors.sheets import SheetsExtractor
 from src.sources.google_extractors.slides import SlidesExtractor
 
@@ -31,6 +34,12 @@ _FILE_ID_PATTERNS = (
     re.compile(rf"docs\.google\.com/presentation/d/{_ID}"),
     re.compile(rf"drive\.google\.com/file/d/{_ID}"),
     re.compile(rf"drive\.google\.com/open\?(?:[^#]*&)?id={_ID}"),
+    # The published/response link is docs.google.com/forms/d/e/{published_id}/
+    # viewform: the segment after "d/e/" is a published id the Forms API
+    # cannot resolve, not the Drive file id. The negative lookahead on "e/"
+    # excludes that shape so it correctly falls through to None rather than
+    # capturing the literal "e" and causing a confusing 404 from Google.
+    re.compile(rf"docs\.google\.com/forms/d/(?!e/){_ID}"),
 )
 
 
@@ -55,6 +64,9 @@ EXTRACTORS: dict[str, Extractor] = {
     GOOGLE_DOC: DocsExtractor(),
     GOOGLE_SLIDES: SlidesExtractor(),
     GOOGLE_SHEET: SheetsExtractor(),
+    PDF_MIME: PdfExtractor(),
+    DOCX_MIME: DocxExtractor(),
+    FORM_MIME: FormsExtractor(),
 }
 
 # Uploaded (non-Google-native) text files have real bytes to download.
@@ -72,7 +84,7 @@ def required_scopes() -> tuple[str, ...]:
 
 # Google API name -> discovery API version, for the clients required_services()
 # can name. Extend this alongside a new extractor that declares a new service.
-_API_VERSIONS = {"drive": "v3", "docs": "v1", "slides": "v1", "sheets": "v4"}
+_API_VERSIONS = {"drive": "v3", "docs": "v1", "slides": "v1", "sheets": "v4", "forms": "v1"}
 
 
 def required_services() -> tuple[str, ...]:
