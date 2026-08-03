@@ -9,7 +9,7 @@ from src.sources.google import GOOGLE_SOURCE_IDS, GoogleSource
 
 def _build_google(settings: Settings) -> SourceFetcher:
     return GoogleSource(
-        credentials_json_b64=settings.google_credentials_json,
+        credentials_json_b64=settings.google_credentials_json.get_secret_value(),
         max_content_chars=settings.max_content_chars,
         request_timeout_s=settings.request_timeout_s,
     )

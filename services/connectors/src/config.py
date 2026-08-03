@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Built-in dev secret. Only acceptable when connectors_env == "local"; any other
@@ -17,10 +17,16 @@ class Settings(BaseSettings):
     api_key: str = DEFAULT_DEV_API_KEY
     # JSON array of consumer keys: [{"name","prefix","key_hash","scopes"?}]
     consumer_keys: str = ""
-    # base64-encoded Google service-account JSON. Empty is a valid running
-    # state: Google fetches then fail as SourceNotConfigured (503) while the
-    # rest of the service keeps serving.
-    google_credentials_json: str = ""
+    # base64-encoded Google service-account JSON — a private key. Empty is a
+    # valid running state: Google fetches then fail as SourceNotConfigured
+    # (503) while the rest of the service keeps serving. This is SecretStr,
+    # not str: a plain str field prints in full on any repr/diff/traceback
+    # (a failing assertion once dumped a real key to a CI log). SecretStr
+    # makes that structurally impossible — repr/str always render
+    # "**********" — so don't revert this to str. Only the registry (the
+    # boundary that hands the raw value to GoogleSource) should ever call
+    # .get_secret_value() on it.
+    google_credentials_json: SecretStr = SecretStr("")
     # Transport guard only. documentation-system's own clamp decides what is
     # actually stored; this just stops a pathological file becoming a huge
     # HTTP response. Deliberately set ABOVE documentation-system's
