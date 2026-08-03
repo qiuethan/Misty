@@ -22,6 +22,35 @@ Shared API-key auth (keys, scopes, audit) for UTMIST platform services. A pure l
 | `InMemoryKeyStore` | `memory_store.py` | DB-free `ApiKeyStore` implementation. Used by services with no `api_keys` table (`llm`, `meeting`, `connectors`) — keys are seeded from config at boot rather than persisted. |
 | `key_store_from_config` | `memory_store.py` | Parses a `CONSUMER_KEYS` JSON array (`[{"name","prefix","key_hash","scopes"}]`) into a populated `InMemoryKeyStore`. Raises `RuntimeError` on a malformed value so a bad env var fails a service's boot, not its first request. |
 
+## Credential config convention
+
+**Every credential field in a service's `Settings` is `pydantic.SecretStr`, never `str`.** This is not a style preference — a plain `str` credential prints in full from anything that stringifies the settings object: a failing test's assertion diff, a debug `print`, an exception repr, a log line. That is not hypothetical; a routine assertion in `services/connectors` once dumped a real Google service-account private key into a terminal and a session transcript, and the key had to be rotated. `SecretStr` renders as `**********` everywhere, so no future test or traceback can print it regardless of who writes it.
+
+```python
+from pydantic import SecretStr
+
+class Settings(BaseSettings):
+    api_key: SecretStr = SecretStr(DEFAULT_DEV_API_KEY)
+```
+
+Keep the `SecretStr` boundary at the *edge*. `platform_auth` takes plain `str` on purpose — unwrap at the call site so nothing behind the boundary has to care:
+
+```python
+deps = build_auth(..., get_env_key=lambda: get_settings().api_key.get_secret_value())
+store = key_store_from_config(get_settings().consumer_keys.get_secret_value())
+```
+
+Two ways of forgetting to unwrap fail *silently*, which is what makes this worth enforcing rather than remembering:
+
+- **Equality never matches.** `settings.api_key == DEFAULT_DEV_API_KEY` is always `False` against a `SecretStr`, so a `verify_production_secrets` guard written that way stops firing and the service will happily boot to production on the committed dev secret.
+- **Emptiness never matches.** `SecretStr` defines no `__bool__`, so `if not settings.resend_api_key:` is always `False` — even for `SecretStr("")`. A "credential is missing" check written that way stops guarding.
+
+Neither raises. Each service's `tests/test_config.py` therefore carries a regression test asserting the value stays out of `repr()`/`str()` *and* that the production guards still raise — the first pins the type, the second pins the unwrap.
+
+At the two call sites inside this package, `secret_guard.reject_secret_wrapper` turns a missed unwrap into a `TypeError` naming the parameter and the fix, instead of an obscure "no attribute `.encode()`". It is duck-typed on `get_secret_value` so this package keeps its fastapi/starlette/argon2-only dependency set.
+
+New service? Write the credentials as `SecretStr` from the start, and give the test suite an autouse fixture neutralizing `env_file` (`services/connectors/tests/conftest.py` is the model) so no test ever reads a developer's real `.env`.
+
 ## Two key-store shapes
 
 - **DB-backed** (`team-tracking`, `documentation-system`, `verification`): the service's own `StorageAdapter` already satisfies `ApiKeyStore` structurally — no adapter class from this package needed.

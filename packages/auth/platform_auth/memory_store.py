@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
 
+from platform_auth.secret_guard import reject_secret_wrapper
+
 
 @dataclass(frozen=True)
 class ConsumerKeyRow:
@@ -44,6 +46,10 @@ class InMemoryKeyStore:
 
 
 def key_store_from_config(consumer_keys_json: str) -> InMemoryKeyStore:
+    # Services hold consumer_keys as SecretStr; callers must unwrap. Guarded
+    # before the .strip() below, whose AttributeError would otherwise escape
+    # uncaught (it runs outside the try) with no hint about the real mistake.
+    reject_secret_wrapper(consumer_keys_json, param="key_store_from_config(consumer_keys_json)")
     store = InMemoryKeyStore()
     raw = (consumer_keys_json or "").strip()
     if not raw:

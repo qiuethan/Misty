@@ -23,6 +23,7 @@ from platform_auth.models import (
     ApiKeyStore,
     AuthedKey,
 )
+from platform_auth.secret_guard import reject_secret_wrapper
 
 _BOOTSTRAP_KEY_NAME = "env-bootstrap"
 
@@ -99,6 +100,10 @@ def build_auth(
             raise _unauthorized()
 
         env_key = get_env_key()
+        # Services hold api_key as SecretStr; the lambda passed here must unwrap
+        # it. Unguarded, a SecretStr is always truthy and then blows up on the
+        # missing .encode() — a 500 that reads like a library bug.
+        reject_secret_wrapper(env_key, param="get_env_key()")
         if env_key and secrets.compare_digest(x_api_key.encode(), env_key.encode()):
             authed = AuthedKey(
                 name=_BOOTSTRAP_KEY_NAME, scopes=frozenset({ADMIN_SCOPE}), is_bootstrap=True
