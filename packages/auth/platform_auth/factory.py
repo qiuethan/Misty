@@ -101,8 +101,8 @@ def build_auth(
 
         env_key = get_env_key()
         # Services hold api_key as SecretStr; the lambda passed here must unwrap
-        # it. Unguarded, a SecretStr is always truthy and then blows up on the
-        # missing .encode() — a 500 that reads like a library bug.
+        # it. Unguarded, a non-empty SecretStr blows up on the missing .encode()
+        # below — a 500 that reads like a library bug rather than bad wiring.
         reject_secret_wrapper(env_key, param="get_env_key()")
         if env_key and secrets.compare_digest(x_api_key.encode(), env_key.encode()):
             authed = AuthedKey(

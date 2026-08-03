@@ -40,14 +40,15 @@ deps = build_auth(..., get_env_key=lambda: get_settings().api_key.get_secret_val
 store = key_store_from_config(get_settings().consumer_keys.get_secret_value())
 ```
 
-Two ways of forgetting to unwrap fail *silently*, which is what makes this worth enforcing rather than remembering:
+Forgetting to unwrap usually fails *loudly* — `AttributeError: 'SecretStr' object has no attribute 'encode'` or `'strip'`. There is one exception, and it is the dangerous one:
 
-- **Equality never matches.** `settings.api_key == DEFAULT_DEV_API_KEY` is always `False` against a `SecretStr`, so a `verify_production_secrets` guard written that way stops firing and the service will happily boot to production on the committed dev secret.
-- **Emptiness never matches.** `SecretStr` defines no `__bool__`, so `if not settings.resend_api_key:` is always `False` — even for `SecretStr("")`. A "credential is missing" check written that way stops guarding.
+- **Equality never matches.** `SecretStr("x") == "x"` is `False`. So `settings.api_key == DEFAULT_DEV_API_KEY` in `verify_production_secrets` silently stops firing, and the service happily boots to production on the committed dev secret. Nothing raises, and a test that only asserts the *happy* path will not notice.
 
-Neither raises. Each service's `tests/test_config.py` therefore carries a regression test asserting the value stays out of `repr()`/`str()` *and* that the production guards still raise — the first pins the type, the second pins the unwrap.
+A related claim is worth writing down because it is easy to assume and is **false**: `SecretStr` does not define `__bool__`, but it *does* define `__len__`, which Python falls back on. So `bool(SecretStr(""))` is `False` and `if not settings.resend_api_key:` keeps working. Unwrap those anyway — `__len__` is an implementation detail, not a documented guarantee — but do not "fix" them believing they were broken.
 
-At the two call sites inside this package, `secret_guard.reject_secret_wrapper` turns a missed unwrap into a `TypeError` naming the parameter and the fix, instead of an obscure "no attribute `.encode()`". It is duck-typed on `get_secret_value` so this package keeps its fastapi/starlette/argon2-only dependency set.
+Each service's `tests/test_config.py` therefore carries a regression test asserting the value stays out of `repr()`/`str()` *and* that the production guards still raise — the first pins the type, the second pins the unwrap that the equality trap would otherwise eat.
+
+At the two call sites inside this package, `secret_guard.reject_secret_wrapper` turns a missed unwrap into a `TypeError` naming the parameter and the fix, instead of an `AttributeError` that reads like a bug in this library rather than in the service's wiring. It is duck-typed on `get_secret_value` so this package keeps its fastapi/starlette/argon2-only dependency set.
 
 New service? Write the credentials as `SecretStr` from the start, and give the test suite an autouse fixture neutralizing `env_file` (`services/connectors/tests/conftest.py` is the model) so no test ever reads a developer's real `.env`.
 

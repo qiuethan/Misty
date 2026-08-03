@@ -3,12 +3,17 @@
 Every service stores its credentials as `pydantic.SecretStr` (see this
 package's README, "Credential config convention"). `SecretStr` deliberately
 does not coerce to `str`, so the caller must unwrap at the boundary with
-`.get_secret_value()`. Forgetting to is easy and the resulting failure is
-obscure — `secrets.compare_digest` reports a missing `.encode()`, and a
-`SecretStr` instance is *always* truthy, so an `if not value:` emptiness check
-silently stops guarding.
+`.get_secret_value()`. Forgetting to is easy, and the resulting failure is
+obscure rather than absent: `secrets.compare_digest` reports a missing
+`.encode()` and `key_store_from_config` a missing `.strip()`, both of which
+read like a bug in this library rather than in the service's wiring.
 
 This module turns that into one sentence naming the parameter and the fix.
+
+(The genuinely silent failure mode lives in the services, not here: `SecretStr`
+never compares equal to a `str`, so a `verify_production_secrets` check written
+as `settings.api_key == DEFAULT_DEV_API_KEY` stops firing without raising. Each
+service's own test suite pins that one.)
 
 Duck-typed on purpose: `platform_auth` is a leaf that depends only on
 fastapi/starlette/argon2, and importing pydantic here just to `isinstance`
