@@ -175,7 +175,7 @@ def test_refetch_no_content_leaves_prior_content_untouched(client_and_store):
     created = client.post("/docs", json={"url": "https://x.com/goes-empty"}, headers=AUTH).json()
     doc_id = created["doc"]["id"]
 
-    client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
+    before = client.post(f"/docs/{doc_id}/refetch", headers=AUTH).json()
     before_text = store.get_doc_content(UUID(doc_id))
     before_meta = store.get_doc_content_meta(UUID(doc_id))
 
@@ -191,6 +191,31 @@ def test_refetch_no_content_leaves_prior_content_untouched(client_and_store):
     after_meta = store.get_doc_content_meta(UUID(doc_id))
     assert after_text == before_text
     assert after_meta.content_hash == before_meta.content_hash
+    # The snapshot is half of the same preserved pair — blanking it while the
+    # full text survives leaves the doc self-inconsistent.
+    assert resp.json()["content_snapshot"] == before["content_snapshot"]
+
+
+def test_refetch_empty_string_content_does_not_wipe_stored_content(client_and_store):
+    # A connector that violates FetchResult's None-not-"" invariant must still
+    # not be able to blank stored text or the snapshot through refetch.
+    client, store = client_and_store
+    created = client.post("/docs", json={"url": "https://x.com/blanks"}, headers=AUTH).json()
+    doc_id = created["doc"]["id"]
+
+    before = client.post(f"/docs/{doc_id}/refetch", headers=AUTH).json()
+    before_text = store.get_doc_content(UUID(doc_id))
+
+    class _BlankFetchers:
+        def fetch_for(self, source_id, url):
+            return FetchResult(title="Fetched", content="", content_snapshot="")
+
+    client.app.dependency_overrides[get_fetchers] = lambda: _BlankFetchers()
+    resp = client.post(f"/docs/{doc_id}/refetch", headers=AUTH)
+    assert resp.status_code == 200
+
+    assert store.get_doc_content(UUID(doc_id)) == before_text
+    assert resp.json()["content_snapshot"] == before["content_snapshot"]
 
 
 def test_refetch_unchanged_content_leaves_hash_stable(client_and_store):
