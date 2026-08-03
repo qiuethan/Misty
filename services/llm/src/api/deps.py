@@ -10,8 +10,8 @@ from src.providers.registry import get_provider
 @lru_cache(maxsize=1)
 def _key_store() -> InMemoryKeyStore:
     # Unwrap at the boundary: key_store_from_config takes a plain str and does
-    # `(consumer_keys_json or "").strip()` — a SecretStr has no __bool__ and no
-    # .strip(), so the SecretStr stops here rather than leaking into the store.
+    # `(consumer_keys_json or "").strip()` — a SecretStr has no .strip(), so the
+    # SecretStr stops here rather than leaking into the store.
     return key_store_from_config(get_settings().consumer_keys.get_secret_value())
 
 

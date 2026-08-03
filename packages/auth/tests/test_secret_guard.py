@@ -1,11 +1,10 @@
 """The unwrap-at-the-boundary convention, enforced.
 
 Services hold credentials as `pydantic.SecretStr` and must call
-`.get_secret_value()` before handing them to this package. Both failure modes
-of forgetting are bad in a specific way: a `SecretStr` is always truthy, so
-emptiness checks silently stop guarding, and the eventual crash names a
-missing `.encode()`/`.strip()` rather than the actual mistake. These tests pin
-the loud, specific error instead.
+`.get_secret_value()` before handing them to this package. Forgetting does
+raise — but on a missing `.encode()`/`.strip()`, which points at this library
+rather than at the service's wiring. These tests pin the specific, actionable
+error that replaces it.
 """
 
 import pytest
