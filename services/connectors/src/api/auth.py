@@ -12,7 +12,7 @@ from src.config import get_settings
 _deps = build_auth(
     get_key_store,
     envelope="connectors_",
-    get_env_key=lambda: get_settings().api_key,
+    get_env_key=lambda: get_settings().api_key.get_secret_value(),
     is_prod=lambda: get_settings().connectors_env == "production",
     enable_dev_spoof=False,
     audit_logger_name="connectors.audit",

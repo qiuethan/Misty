@@ -40,8 +40,12 @@ class AudioAdapter:
 
 def _build_report_builder():
     settings = get_settings()
+    # LlmClient puts the key straight into an X-API-Key header, so unwrap here:
+    # the SecretStr boundary stops at this edge, not inside the client.
     llm_client = LlmClient(
-        settings.llm_base_url, settings.llm_api_key, settings.request_timeout_s
+        settings.llm_base_url,
+        settings.llm_api_key.get_secret_value(),
+        settings.request_timeout_s,
     )
 
     def report_builder(segments, meta):

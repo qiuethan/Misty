@@ -9,7 +9,7 @@ from src.sources.registry import build_registry
 
 @lru_cache(maxsize=1)
 def _key_store() -> InMemoryKeyStore:
-    return key_store_from_config(get_settings().consumer_keys)
+    return key_store_from_config(get_settings().consumer_keys.get_secret_value())
 
 
 def get_key_store() -> InMemoryKeyStore:
