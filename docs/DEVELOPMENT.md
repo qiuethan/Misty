@@ -139,7 +139,7 @@ Stuck, or new to this stack? Keep reading.
 
 ## Prerequisites (new to this stack?)
 
-Install these once per machine. All five services are Python; the bot is Node.
+Install these once per machine. All six services are Python; the bot is Node.
 Docker is needed by the three DB-backed services **and by the bot's playground**.
 
 - **git** — you have it if `git --version` works.
@@ -157,7 +157,7 @@ Docker is needed by the three DB-backed services **and by the bot's playground**
   (`uv run ...`). You do not `pip install` or activate a venv by hand. Install
   `uv`, and it manages Python for you. The repo is a single **uv workspace**:
   one root `pyproject.toml` (`services/*`, `packages/*`) and one root `uv.lock`
-  cover all five services and the shared `packages/auth` (`platform_auth`)
+  cover all six services and the shared `packages/auth` (`platform_auth`)
   library — `uv sync` resolves the whole workspace even when run from a service
   subdirectory.
   No `ffmpeg` binary is needed anywhere, including for `meeting` — Opus decode
