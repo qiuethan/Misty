@@ -99,7 +99,6 @@ documentation-system/
 │   │   ├── auth.py          Thin shim over the shared `platform_auth` package: require_api_key / require_scope / get_actor
 │   │   ├── deps.py          get_storage / get_fetchers / get_directory
 │   │   ├── hashing.py       Thin shim over `platform_auth`: Argon2 API key hashing + prefix parsing
-│   │   ├── middleware.py    Thin shim over `platform_auth`: AuditLogMiddleware
 │   │   └── routers/         docs.py, sources.py
 │   │
 │   ├── storage/              Concrete StorageAdapter implementations
@@ -169,7 +168,7 @@ Auth is **Level 2** (scoped API keys), matching team-tracking:
 - Every request needs `X-API-Key`. Keys are either the shared bootstrap env key (`API_KEY`, scope: `admin`) or a per-consumer key issued via the `doc-keys` CLI, stored as an Argon2 hash with a `docs:{read,write}` or `admin` scope set.
 - There is **no `X-Actor` header** — the actor stamped on `created_by`/`updated_by`/audit log entries is always the authenticated key's own name (`AuthedKey.name`). A caller cannot claim to be someone else; this is the "attested actor" model.
 - `require_scope("docs:read")` / `require_scope("docs:write")` gate each route; `admin` is a wildcard scope that satisfies any check.
-- `AuditLogMiddleware` (`src/api/middleware.py`) logs every request with the resolved actor.
+- `AuditLogMiddleware` (imported from `platform_auth` directly, wired in `src/api/app.py`) logs every request with the resolved actor.
 - Manage keys with the CLI:
   ```bash
   uv run doc-keys issue --name my-consumer --scopes docs:read docs:write
