@@ -116,7 +116,6 @@ team-tracking/
 │   │   ├── app.py          App factory; mounts all 6 routers + audit middleware
 │   │   ├── auth.py         Thin shim over the shared `platform_auth` package: require_scope, get_actor (attested actor)
 │   │   ├── hashing.py      Thin shim over `platform_auth`: argon2 key hashing + tt_<prefix>_<secret> generation
-│   │   ├── middleware.py   Thin shim over `platform_auth`: AuditLogMiddleware — one JSON log line per request
 │   │   ├── deps.py         get_storage() dependency (injects the Postgres adapter)
 │   │   └── routers/        One file per resource:
 │   │                       people, teams, role_kinds, memberships, providers, identifiers
