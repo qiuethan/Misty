@@ -8,6 +8,7 @@ Revision ID: 005
 Revises: 004
 Create Date: 2026-08-01
 """
+
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
@@ -22,15 +23,19 @@ def upgrade() -> None:
     op.create_table(
         "doc_content",
         sa.Column(
-            "doc_id", postgresql.UUID(as_uuid=True),
-            sa.ForeignKey("docs.id", ondelete="CASCADE"), primary_key=True,
+            "doc_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("docs.id", ondelete="CASCADE"),
+            primary_key=True,
         ),
         sa.Column("content_text", sa.Text(), nullable=False),
         sa.Column("content_hash", sa.Text(), nullable=False),
         sa.Column("fetched_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
-            "updated_at", sa.DateTime(timezone=True),
-            nullable=False, server_default=sa.text("now()"),
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
         ),
     )
 

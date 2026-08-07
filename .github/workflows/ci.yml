@@ -209,12 +209,10 @@ jobs:
         run: uv run alembic upgrade head
       - name: Run tests
         run: uv run pytest
-      # NOTE: `ruff check`/`ruff format --check` are intentionally NOT gated here
-      # yet — documentation-system currently has pre-existing lint findings and
-      # ~26 files the formatter would rewrite. Enforcing them now would fail on
-      # unrelated code and collide with in-flight PRs. Tracked as a follow-up
-      # cleanup (fix lint + format, then add the two ruff steps to mirror the
-      # other services). See docs/SECURITY-REVIEW-2026-07-13.md.
+      - name: Ruff check
+        run: uv run ruff check .
+      - name: Ruff format check
+        run: uv run ruff format --check .
 
   node-test:
     runs-on: ubuntu-latest

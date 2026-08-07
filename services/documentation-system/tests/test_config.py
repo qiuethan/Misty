@@ -68,9 +68,7 @@ def test_verify_secrets_raises_in_production_with_default_directory_api_key(monk
     assert "DIRECTORY_API_KEY" in str(exc.value)
 
 
-def test_verify_secrets_warns_in_production_with_default_connectors_api_key(
-    monkeypatch, caplog
-):
+def test_verify_secrets_warns_in_production_with_default_connectors_api_key(monkeypatch, caplog):
     from src.config import DEFAULT_DEV_API_KEY, verify_production_secrets
 
     monkeypatch.setenv("DOCS_ENV", "production")
@@ -153,9 +151,7 @@ def test_create_app_raises_in_production_with_default_api_key(monkeypatch):
 #      nothing logs. The guard tests below are the only thing that notices.
 
 
-@pytest.mark.parametrize(
-    "field", ["api_key", "directory_api_key", "connectors_api_key"]
-)
+@pytest.mark.parametrize("field", ["api_key", "directory_api_key", "connectors_api_key"])
 def test_credentials_never_leak_via_string_conversion(field):
     secret = f"super-secret-{field}-value"
     s = Settings(**{field: secret})
