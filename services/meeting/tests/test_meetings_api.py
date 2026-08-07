@@ -124,9 +124,7 @@ def test_get_transcript_unknown_session_404(client, consumer_key):
 
 
 def test_get_transcript_invalid_session_id_400(client, consumer_key):
-    resp = client.get(
-        "/meetings/bad!id/transcript", headers={"X-API-Key": consumer_key}
-    )
+    resp = client.get("/meetings/bad!id/transcript", headers={"X-API-Key": consumer_key})
     assert resp.status_code == 400
 
 
@@ -205,9 +203,7 @@ def test_ws_stream_fallback_auth_binary_first_frame_closes_cleanly(client, regis
 
 def test_ws_stream_invalid_session_id_closes(client, registry, consumer_key):
     with pytest.raises(Exception):
-        with client.websocket_connect(
-            f"/meetings/bad!id/stream?key={consumer_key}&guild_id=g1"
-        ):
+        with client.websocket_connect(f"/meetings/bad!id/stream?key={consumer_key}&guild_id=g1"):
             pass
     assert "bad!id" not in registry.sessions
 
@@ -257,9 +253,7 @@ def test_ws_end_of_audio_control_frame_marks_the_session(client, registry, consu
     this frame arriving proves every audio frame before it has been fed -- so it
     must be routed to the session, and must not be mistaken for a speaker
     registration."""
-    with client.websocket_connect(
-        f"/meetings/ws-eoa/stream?key={consumer_key}&guild_id=g1"
-    ) as ws:
+    with client.websocket_connect(f"/meetings/ws-eoa/stream?key={consumer_key}&guild_id=g1") as ws:
         ws.send_text('{"speaker_id": "alice-id", "display_name": "Alice"}')
         ws.send_bytes(_frame("alice-id", 0, b"opus-frame-1"))
         ws.send_text('{"end_of_audio": true}')
