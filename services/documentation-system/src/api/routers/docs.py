@@ -53,9 +53,12 @@ def list_docs(
     ctx: ActorContext = Depends(read_context),
 ) -> list[Doc]:
     return storage.list_docs(
-        owning_team_id=owning_team_id, owning_person_id=owning_person_id,
-        source_id=source_id, tag=tag.strip().lower() if tag is not None else None,
-        active_only=active_only, visibility=ctx,
+        owning_team_id=owning_team_id,
+        owning_person_id=owning_person_id,
+        source_id=source_id,
+        tag=tag.strip().lower() if tag is not None else None,
+        active_only=active_only,
+        visibility=ctx,
     )
 
 
@@ -141,7 +144,9 @@ def add_grant(
     _: AuthedKey = Depends(require_scope("docs:write")),
 ) -> Doc:
     get_visible_doc_or_404(doc_id, wctx, storage)  # 404 if actor can't see it
-    storage.add_grant(doc_id, grantee_type=body.grantee_type, grantee_id=body.grantee_id, actor=actor)
+    storage.add_grant(
+        doc_id, grantee_type=body.grantee_type, grantee_id=body.grantee_id, actor=actor
+    )
     return storage.get_doc(doc_id)
 
 

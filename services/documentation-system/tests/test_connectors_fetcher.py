@@ -14,9 +14,7 @@ def _fetcher(handler):
 
 def test_successful_fetch_returns_content_and_derived_snapshot():
     def handler(request):
-        return httpx.Response(
-            200, json={"title": "Deck", "content": "x" * 5000, "warnings": []}
-        )
+        return httpx.Response(200, json={"title": "Deck", "content": "x" * 5000, "warnings": []})
 
     result = _fetcher(handler).fetch("https://docs.google.com/document/d/abc/edit")
     assert result.title == "Deck"

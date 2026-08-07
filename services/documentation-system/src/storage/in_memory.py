@@ -42,18 +42,42 @@ class InMemoryStorageAdapter:
     # --- Docs ---
 
     def create_doc(
-        self, *, url, url_normalized, source_id, title, description,
-        owning_team_id, owning_team_label, owning_person_id, owning_person_label,
-        content_snapshot, fetched_at, tags, actor,
+        self,
+        *,
+        url,
+        url_normalized,
+        source_id,
+        title,
+        description,
+        owning_team_id,
+        owning_team_label,
+        owning_person_id,
+        owning_person_label,
+        content_snapshot,
+        fetched_at,
+        tags,
+        actor,
     ) -> Doc:
         now = _now()
         doc = Doc(
-            id=uuid4(), url=url, url_normalized=url_normalized, source_id=source_id,
-            title=title, description=description,
-            owning_team_id=owning_team_id, owning_team_label=owning_team_label,
-            owning_person_id=owning_person_id, owning_person_label=owning_person_label,
-            content_snapshot=content_snapshot, fetched_at=fetched_at, active=True,
-            tags=[], created_at=now, updated_at=now, created_by=actor, updated_by=actor,
+            id=uuid4(),
+            url=url,
+            url_normalized=url_normalized,
+            source_id=source_id,
+            title=title,
+            description=description,
+            owning_team_id=owning_team_id,
+            owning_team_label=owning_team_label,
+            owning_person_id=owning_person_id,
+            owning_person_label=owning_person_label,
+            content_snapshot=content_snapshot,
+            fetched_at=fetched_at,
+            active=True,
+            tags=[],
+            created_at=now,
+            updated_at=now,
+            created_by=actor,
+            updated_by=actor,
         )
         self._docs[doc.id] = doc
         self._tags[doc.id] = set(tags)
@@ -81,8 +105,14 @@ class InMemoryStorageAdapter:
         return self._hydrate(winner)
 
     def list_docs(
-        self, *, owning_team_id=None, owning_person_id=None,
-        source_id=None, tag=None, active_only=True, visibility: ActorContext = SEE_ALL,
+        self,
+        *,
+        owning_team_id=None,
+        owning_person_id=None,
+        source_id=None,
+        tag=None,
+        active_only=True,
+        visibility: ActorContext = SEE_ALL,
     ) -> list[Doc]:
         out = []
         for doc in self._docs.values():
@@ -148,7 +178,9 @@ class InMemoryStorageAdapter:
 
     def list_grants(self, doc_id) -> list[DocGrant]:
         return [
-            DocGrant(grantee_type=gt, grantee_id=gid, grantee_label=None, created_at=at, created_by=by)
+            DocGrant(
+                grantee_type=gt, grantee_id=gid, grantee_label=None, created_at=at, created_by=by
+            )
             for (gt, gid, at, by) in self._grants.get(doc_id, [])
         ]
 
@@ -161,9 +193,7 @@ class InMemoryStorageAdapter:
         # get_doc_content, which returns None when the doc is missing.
         self._content[doc_id] = (content_text, content_hash, fetched_at)
 
-    def get_doc_content(
-        self, doc_id: UUID, *, visibility: ActorContext = SEE_ALL
-    ) -> str | None:
+    def get_doc_content(self, doc_id: UUID, *, visibility: ActorContext = SEE_ALL) -> str | None:
         doc = self._docs.get(doc_id)
         if doc is None or not self._visible(doc, visibility):
             return None
@@ -202,9 +232,17 @@ class InMemoryStorageAdapter:
             raise ValueError(f"prefix already exists: {prefix}")
         now = _now()
         key = ApiKey(
-            id=uuid4(), name=name, prefix=prefix, scopes=scopes, active=True,
-            revoked_at=None, last_used_at=None,
-            created_at=now, updated_at=now, created_by=actor, updated_by=actor,
+            id=uuid4(),
+            name=name,
+            prefix=prefix,
+            scopes=scopes,
+            active=True,
+            revoked_at=None,
+            last_used_at=None,
+            created_at=now,
+            updated_at=now,
+            created_by=actor,
+            updated_by=actor,
         )
         self._api_keys[key.id] = key
         self._api_key_hashes[key.id] = key_hash

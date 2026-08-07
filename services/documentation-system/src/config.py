@@ -24,9 +24,7 @@ DEFAULT_DEV_API_KEY = "dev-api-key-change-me"
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = (
-        "postgresql+psycopg://docs:dev_password@localhost:5434/docs"
-    )
+    database_url: str = "postgresql+psycopg://docs:dev_password@localhost:5434/docs"
     # The three credentials below are SecretStr, not str: a plain str field
     # prints in full on any repr/diff/traceback. That is not hypothetical —
     # an identically-shaped plain-str credential in services/connectors leaked
