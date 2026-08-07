@@ -70,6 +70,8 @@ jobs:
         run: uv run pytest
       - name: Ruff check
         run: uv run ruff check .
+      - name: Ruff format check
+        run: uv run ruff format --check .
 
   verification-test:
     runs-on: ubuntu-latest
