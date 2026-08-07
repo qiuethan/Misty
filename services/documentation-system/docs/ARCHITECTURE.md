@@ -22,7 +22,7 @@ ingest logic or the HTTP layer. Each of those three concerns sits behind a **Pro
 on the Protocol; concrete implementations are wired in at one place (`src/api/deps.py`).
 
 Why bother, in a student org? Because it lets the whole service run its test suite in
-memory with no Docker, no network, and no Postgres — 59 fast tests in under a second — and
+memory with no Docker, no network, and no Postgres — the fast suite runs in about a second — and
 it means swapping the in-memory store for Postgres required zero changes to the ingest code
 or routers. New contributors can be productive without standing up infrastructure.
 

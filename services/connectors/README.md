@@ -206,7 +206,7 @@ connectors/
 │   ├── mint_key.py        connectors-keys CLI — prints a key + its CONSUMER_KEYS entry, no store writes
 │   └── config.py          Settings (CONNECTORS_ENV, API_KEY, CONSUMER_KEYS, GOOGLE_CREDENTIALS_JSON, ...) + boot check
 │
-├── tests/                 132 fast tests — no Docker, no network (fake Google clients)
+├── tests/                 Fast tests — no Docker, no network (fake Google clients)
 ├── Dockerfile             Production image (built + import-smoke-tested by CI; used by Railway).
 │                          Build context is the repo root; installs via `uv sync --frozen --no-dev --package connectors`.
 ├── docker-compose.yml     Builds/runs the image locally on port 8005 (no DB service).
@@ -222,7 +222,7 @@ The suite is single-mode — no Docker, no database, no network:
 uv run pytest
 ```
 
-Runs **132 tests** with Google API clients injected as fakes via `app.dependency_overrides` / constructor injection, covering the `/fetch` happy path, URL parsing, the Docs/Slides/Sheets/Forms extractors, the local PDF/`.docx` parsers, the Drive-export fallback for uploaded `text/*` files, the auth paths, config/boot checks, and the source-error → HTTP-status mapping.
+Runs with Google API clients injected as fakes via `app.dependency_overrides` / constructor injection, covering the `/fetch` happy path, URL parsing, the Docs/Slides/Sheets/Forms extractors, the local PDF/`.docx` parsers, the Drive-export fallback for uploaded `text/*` files, the auth paths, config/boot checks, and the source-error → HTTP-status mapping.
 
 Lint and format with ruff:
 
@@ -244,3 +244,10 @@ v0.1: a stateless `POST /fetch` adapter over a Google Drive/Docs/Slides/Sheets/F
 - **Non-Google sources** — the source registry is designed to grow (`SourceFetcher` protocol), but only Google Drive/Docs/Sheets/Slides/Forms (plus PDF/`.docx` parsed via Drive bytes) is wired up today.
 - **OCR** — a scanned PDF with no embedded text layer captures nothing; see "Known limitations" above.
 - **Forms responses** — only form structure (title, questions, options) is read; responses are deliberately never fetched (see the Supported types table above).
+
+## Documentation
+
+- [docs/API.md](docs/API.md) — consumer-facing endpoint reference: request/response shapes, errors, curl examples
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — contributor orientation: why the service is shaped this way, boundaries, trade-offs
+- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — task walkthroughs and the pre-push checklist
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — deploy shape, variables, key provisioning, troubleshooting

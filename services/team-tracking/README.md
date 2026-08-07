@@ -211,7 +211,7 @@ The suite runs in two modes.
 uv run pytest --ignore=tests/test_postgres_adapter.py
 ```
 
-Runs **176 tests** against `InMemoryStorageAdapter`, injected into FastAPI via `app.dependency_overrides`. Covers every endpoint (including `/api-keys/self`), auth path (including the `dev:spoof` × `TT_ENV=production` guard), error case, the CLI, hashing, and the audit log. Completes in a few seconds — no database needed.
+Runs against `InMemoryStorageAdapter`, injected into FastAPI via `app.dependency_overrides`. Covers every endpoint (including `/api-keys/self`), auth path (including the `dev:spoof` × `TT_ENV=production` guard), error case, the CLI, hashing, and the audit log. Completes in a few seconds — no database needed.
 
 **Full (adds Postgres integration):**
 
@@ -220,7 +220,7 @@ docker compose up -d postgres
 uv run pytest
 ```
 
-Runs **191 tests** — the 176 above plus the 15 in `tests/test_postgres_adapter.py`, which replay the adapter's behavioral assertions against a live Postgres instance. Requires `DATABASE_URL` (in `.env`) pointing at the running container.
+Runs the fast suite above plus `tests/test_postgres_adapter.py`, which replays the adapter's behavioral assertions against a live Postgres instance. Requires `DATABASE_URL` (in `.env`) pointing at the running container.
 
 Lint and format with ruff:
 
@@ -250,5 +250,3 @@ Seven tables (`people`, `teams`, `role_kinds`, `team_memberships`, `api_keys`, `
 - **Permission enforcement** — the API exposes primitives (memberships, admin flag) from which downstream systems derive access rules. No policy engine lives here.
 - **Admin UI** — officer edits go through whatever admin surface is chosen (NocoDB, Directus, direct SQL, or a custom app).
 - **Pagination** — list endpoints return all matching rows. Adequate for UTMIST's roster size; add limit/offset when needed.
-</content>
-</invoke>

@@ -93,8 +93,9 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the cross-service data fl
 ## Repo layout
 
 ```
-UTMIST-Prototypes/
+Misty/
 ├── README.md                          You are here
+├── AGENTS.md                          Instructions for AI coding agents (CLAUDE.md points here)
 ├── pyproject.toml                     Root uv workspace (members: services/*, packages/*)
 ├── uv.lock                            Single lockfile for the whole workspace
 ├── docs/
@@ -121,27 +122,34 @@ UTMIST-Prototypes/
 │   ├── meeting/                       Live meeting transcription — 8004, NO database,
 │   │                                   stateful (in-memory sessions)
 │   └── connectors/                    Google source fetch adapter — 8005, NO database
+│                                       (every service above has the same docs/ set:
+│                                        API.md, ARCHITECTURE.md, CONTRIBUTING.md, DEPLOYMENT.md)
 │
 ├── packages/
 │   └── auth/                          platform_auth — shared API-key auth lib (argon2 hashing,
 │                                       scopes, FastAPI deps, audit middleware); a pure leaf
-│                                       consumed by both services below via thin shims
+│                                       consumed by all six services via thin shims
 │
 ├── discord-bot/                       Discord frontend + web playground
 │   ├── src/                           Node.js + discord.js
 │   ├── scripts/dev-web.js             Local playground orchestrator (ephemeral scratch DB)
+│   ├── docs/CONTRIBUTING.md           Adding commands, clients, and auth policies
 │   ├── Dockerfile, railway.json       Production image + Railway config
 │   └── test/                          node --test
 │
 ├── scripts/
 │   └── provision-directory-key.sh     Mint + wire scoped API keys per environment
 │
-└── .github/workflows/
-    ├── ci.yml                         Tests + lint + Docker builds on every PR (9 jobs)
-    ├── main-source-guard.yml          Enforces "PRs to main come from staging"
-    ├── pr-zone-check.yml              Warns on PRs spanning multiple CODEOWNERS zones
-    ├── discord-pr-notify.yml          Posts to Discord when a PR needs review
-    └── blocked-ready-automation.yml   Syncs blocked/ready issue labels
+└── .github/
+    ├── CODEOWNERS                     Per-area reviewers; zones mirror pr-zone-check
+    ├── PULL_REQUEST_TEMPLATE.md       Zone, verification steps, deployment notes
+    ├── ISSUE_TEMPLATE/                Bug / feature / epic templates (prompt the `Blocked by:` line)
+    └── workflows/
+        ├── ci.yml                     Tests + lint + Docker builds on every PR (10 jobs)
+        ├── main-source-guard.yml      Enforces "PRs to main come from staging"
+        ├── pr-zone-check.yml          Warns on PRs spanning multiple CODEOWNERS zones
+        ├── discord-pr-notify.yml      Posts to Discord when a PR needs review
+        └── blocked-ready-automation.yml   Syncs blocked/ready issue labels
 ```
 
 Each service is self-contained: its own tests, its own docs, and its own database *if it needs one* — `llm`, `meeting`, and `connectors` deliberately have none. Dependencies are managed as one uv workspace rooted at this repo's `pyproject.toml`/`uv.lock`, and all six services share one leaf, `packages/auth` (`platform_auth`), for API-key auth — a shared *library* dependency, not a dependency between services, which remain independent of each other. Add a new service by dropping it in `services/` following the same shape (and adding its CI job in the same PR).
@@ -205,6 +213,9 @@ Depending on what you're here to do:
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — onboarding: clone → running locally → first PR.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the cross-service picture.
 - Then whichever service you're touching: [`services/team-tracking/`](services/team-tracking/README.md), [`services/documentation-system/`](services/documentation-system/README.md), or [`discord-bot/`](discord-bot/README.md).
-- Each service has a `docs/CONTRIBUTING.md` with task walkthroughs.
+- Every service, plus `discord-bot` and `packages/auth`, has a `docs/CONTRIBUTING.md` with task walkthroughs and a pre-push checklist.
+
+**Working with an AI coding agent**
+- [`AGENTS.md`](AGENTS.md) — the compressed set of invariants, workflow rules, and repo-specific gotchas an agent needs. `CLAUDE.md` is a pointer to it, so there is one source of truth.
 
 **New to the platform?** Start here, read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), then dive into whichever service you're most likely to touch.
