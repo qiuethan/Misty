@@ -69,8 +69,18 @@ _SEED = [
 def build_seed_sources() -> list[Source]:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     return [
-        Source(id=s[0], label=s[1], url_patterns=s[2], requires_auth=s[3], has_api=s[4],
-               content_fetch_enabled=s[5], active=True,
-               created_at=now, updated_at=now, created_by="system", updated_by="system")
+        Source(
+            id=s[0],
+            label=s[1],
+            url_patterns=s[2],
+            requires_auth=s[3],
+            has_api=s[4],
+            content_fetch_enabled=s[5],
+            active=True,
+            created_at=now,
+            updated_at=now,
+            created_by="system",
+            updated_by="system",
+        )
         for s in _SEED
     ]

@@ -4,6 +4,7 @@ Verifies the table is created with the expected shape, that deleting a doc
 cascades away its content row, and that the migration is reversible. Always
 restores the DB to head.
 """
+
 import os
 import uuid
 

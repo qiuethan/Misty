@@ -63,9 +63,7 @@ def get_session_registry() -> SessionRegistry:
     Opus/AWS/LLM adapters. Tests override via
     ``app.dependency_overrides[get_session_registry] = lambda: fake_registry``."""
     deps = {
-        "make_transcription_stream": lambda: create_transcription_stream(
-            get_settings().aws_region
-        ),
+        "make_transcription_stream": lambda: create_transcription_stream(get_settings().aws_region),
         "audio": AudioAdapter(),
         "report_builder": _build_report_builder(),
         "now": lambda: datetime.now(timezone.utc),

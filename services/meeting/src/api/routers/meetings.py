@@ -273,7 +273,9 @@ async def stream_meeting(
                 # still propagate up and break the loop (handled below).
                 await asyncio.to_thread(session.feed, speaker_id, display_name, opus_payload, ts_ms)
             except Exception as e:  # noqa: BLE001 - see comment above
-                _logger.warning("frame feed failed for %s speaker %s: %s", session_id, speaker_id, e)
+                _logger.warning(
+                    "frame feed failed for %s speaker %s: %s", session_id, speaker_id, e
+                )
                 session.note_drop("feed_raised")
                 continue
     except WebSocketDisconnect:

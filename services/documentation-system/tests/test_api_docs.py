@@ -15,9 +15,20 @@ AUTH = {"X-API-Key": "test-key"}
 
 def _sources():
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    return [Source(id="web", label="Web", url_patterns=[], requires_auth=False,
-                   has_api=False, content_fetch_enabled=True,
-                   created_at=now, updated_at=now, created_by="system", updated_by="system")]
+    return [
+        Source(
+            id="web",
+            label="Web",
+            url_patterns=[],
+            requires_auth=False,
+            has_api=False,
+            content_fetch_enabled=True,
+            created_at=now,
+            updated_at=now,
+            created_by="system",
+            updated_by="system",
+        )
+    ]
 
 
 class FakeFetchers:
@@ -28,6 +39,7 @@ class FakeFetchers:
 class FakeDirectory:
     def get_team_label(self, team_id):
         return "Partnerships"
+
     def get_person_label(self, person_id):
         return "Priya"
 
@@ -36,6 +48,7 @@ class FakeDirectory:
 def client(monkeypatch):
     monkeypatch.setenv("API_KEY", "test-key")
     from src.config import get_settings
+
     get_settings.cache_clear()
     adapter = InMemoryStorageAdapter(seed_sources=_sources())
     app = create_app()
@@ -52,6 +65,7 @@ def client_and_store(monkeypatch):
     storage the API deliberately does not expose (e.g. full doc content)."""
     monkeypatch.setenv("API_KEY", "test-key")
     from src.config import get_settings
+
     get_settings.cache_clear()
     adapter = InMemoryStorageAdapter(seed_sources=_sources())
     app = create_app()
@@ -87,8 +101,10 @@ def test_ingest_bad_team_id_returns_400(client):
     class NotFoundDir:
         def get_team_label(self, team_id):
             return None
+
         def get_person_label(self, person_id):
             return None
+
     client.app.dependency_overrides[get_directory] = lambda: NotFoundDir()
     resp = client.post(
         "/docs",
@@ -141,8 +157,10 @@ def test_patch_bad_team_id_returns_400(client):
     class NotFoundDir:
         def get_team_label(self, team_id):
             return None
+
         def get_person_label(self, person_id):
             return None
+
     client.app.dependency_overrides[get_directory] = lambda: NotFoundDir()
     resp = client.patch(
         f"/docs/{doc_id}",

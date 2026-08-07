@@ -9,6 +9,7 @@ Revision ID: 006
 Revises: 005
 Create Date: 2026-08-01
 """
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -23,8 +24,7 @@ _GOOGLE_SOURCE_IDS = ("gdocs", "gsheets", "gslides", "gdrive")
 def upgrade() -> None:
     op.execute(
         sa.text(
-            "UPDATE sources SET content_fetch_enabled = true, updated_at = now() "
-            "WHERE id IN :ids"
+            "UPDATE sources SET content_fetch_enabled = true, updated_at = now() WHERE id IN :ids"
         ).bindparams(sa.bindparam("ids", value=_GOOGLE_SOURCE_IDS, expanding=True))
     )
 
@@ -32,7 +32,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute(
         sa.text(
-            "UPDATE sources SET content_fetch_enabled = false, updated_at = now() "
-            "WHERE id IN :ids"
+            "UPDATE sources SET content_fetch_enabled = false, updated_at = now() WHERE id IN :ids"
         ).bindparams(sa.bindparam("ids", value=_GOOGLE_SOURCE_IDS, expanding=True))
     )
