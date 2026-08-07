@@ -138,7 +138,7 @@ uv run ruff format .           # format
 uv run ruff format --check .   # verify without writing (CI-style)
 ```
 
-CI runs `connectors-test`: `uv sync --extra dev`, `uv run pytest`, `ruff check`, **and** `ruff format --check`. Both are enforced here — unlike `services/meeting`, where the format check is still deferred.
+CI runs `connectors-test`: `uv sync --extra dev`, `uv run pytest`, `ruff check`, **and** `ruff format --check`. Both are enforced on every Python service.
 
 ## Checklist before you push
 

@@ -111,6 +111,7 @@ The `/forms/d/e/<id>/viewform` published link carries a *published id*, not a Dr
 | Condition | Warning |
 |---|---|
 | A spreadsheet tab exceeds `MAX_ROWS_PER_TAB` (2000) | Names the tab and its real row count; the tab is truncated to 2000 rows |
+| Sheets' `batchGet` returns fewer ranges than tabs | `batchGet returned N valueRanges for M tabs; some tabs may be missing from the output` |
 | A PDF yields no text on any page | Notes that no text layer was found (the signature of a scanned document — there is no OCR) |
 
 Every tab of a spreadsheet is read — there is no first-tab-only limitation. Docs and Slides have no size cap.
@@ -121,6 +122,8 @@ Every tab of a spreadsheet is read — there is no first-tab-only limitation. Do
 |---|---|---|
 | `source_id` not registered | 422 | `unsupported source: <id>` |
 | File's MIME type has no text form | 422 | `no text form for mime type: <mime>` |
+| PDF is encrypted | 422 | `pdf is encrypted and cannot be read` |
+| PDF could not be parsed | 422 | `pdf could not be parsed: <ExceptionType>` |
 | Malformed request body | 422 | Pydantic validation error |
 | Source not configured (`GOOGLE_CREDENTIALS_JSON` empty or malformed) | 503 | `source not configured` |
 | Service account denied access to the file | 403 | `source denied access to this file` |

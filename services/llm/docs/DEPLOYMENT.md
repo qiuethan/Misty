@@ -48,7 +48,7 @@ uv --project services/llm run llm-keys --name meeting --scopes chat
 
 Then redeploy llm. **Revoking is the reverse**: drop the entry and redeploy. There is no revoke command, because there is no database.
 
-> Always pass `--project`. Several services declare a top-level `src` package with a console script at `src.cli:main`; in the shared workspace venv a bare invocation can resolve the wrong service's CLI. Verify the token starts with `llm_`.
+> Always pass `--project`. Every service declares a top-level `src` package, so in the shared workspace venv a bare invocation can resolve the wrong service's CLI. (Entry points differ — `src.mint_key:main` here, `src.cli:main` in team-tracking and documentation-system — but the `src` collision is what bites.) Verify the token starts with `llm_`.
 
 ## Deploy order
 
@@ -59,7 +59,7 @@ Then redeploy llm. **Revoking is the reverse**: drop the entry and redeploy. The
 3. Set that plaintext key as `meeting`'s `LLM_API_KEY`, and `http://llm.railway.internal:${PORT}` as its `LLM_BASE_URL`.
 4. Deploy `meeting`.
 
-This is a genuine hard dependency, unlike connectors → documentation-system, which degrades gracefully.
+This is a genuine hard dependency, unlike `documentation-system` → `connectors`, which degrades gracefully.
 
 ## Rollback
 

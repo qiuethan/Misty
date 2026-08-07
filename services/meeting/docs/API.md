@@ -129,7 +129,7 @@ What it does, in order: wait for the end-of-audio barrier (max 5 s) → close th
 }
 ```
 
-`transcript` is one line per segment, formatted `[MM:SS] speaker: text` and sorted by `start_ms` (`pipeline/transcript.py`). `pipeline/pdf.py` parses that exact shape, so don't change the format without changing both.
+`transcript` is one line per segment, formatted `[MM:SS] speaker: text` and sorted by `start_ms` (`pipeline/transcript.py`). Segments at or past one hour use `[HH:MM:SS]` instead — reachable, since `MAX_MEETING_MS` defaults to 4 h. `pipeline/pdf.py` splits on `"] "` so it handles both; don't change the format without changing both.
 
 `pdf_b64` is the base64-encoded minutes PDF. `minutes.title` may be an empty string, in which case the PDF falls back to a generic title.
 

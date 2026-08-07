@@ -78,7 +78,7 @@ transcript, and the bot is deliberately processing-free), not an oversight. See
 
 - **`staging` is the default branch.** Feature PRs auto-target it. Merges auto-deploy to the Railway staging environment.
 - **`main` is the release branch.** Only PRs from `staging` can merge — enforced by the `main-source-guard` workflow. Merges auto-deploy to production.
-- Both branches require the 4 required CI status checks (`python-test`, `python-lint`, `node-test`, `docker-build`); main additionally requires the source-guard. (CI runs 10 jobs in total — the other six aren't yet required to merge.)
+- Both branches require **all 10** CI jobs as status checks; `main` additionally requires the source-guard.
 
 This gives you the loop of `push to feature → PR → staging → real staging deploy → validate → promote to main → production deploy`, with no branch or environment able to skip validation.
 
@@ -110,15 +110,14 @@ Minting them is a manual per-environment step — see the runbook's
 - **`verification-test`** — services/verification, Postgres 16 service container, `alembic upgrade head`, then `pytest` + ruff check/format
 - **`llm-test`** — services/llm pytest suite + ruff check/format
 - **`meeting-test`** — services/meeting pytest suite + ruff check/format. No Postgres container and no AWS credentials: the service has no database, and its Transcribe/LLM clients are faked via `app.dependency_overrides`, so the suite runs fully offline
+- **`connectors-test`** — services/connectors pytest suite + ruff check/format. No container and no Google credentials: the Google API clients are faked, so the suite runs fully offline
 - **`documentation-system-test`** — Postgres 16 service container, runs `alembic upgrade head`, then `pytest` with `RUN_PG_TESTS=1` + ruff check/format
 - **`node-test`** — the bot's `node --test` suite
-- **`docker-build`** — builds *and boot-smoke-tests* every service image (`python -c "import src.api.app"` for the five APIs, `node --check src/index.js` for the bot)
+- **`docker-build`** — builds *and boot-smoke-tests* every service image (`python -c "import src.api.app"` for the six APIs, `node --check src/index.js` for the bot)
 
-Only **four** of these are **required status checks** in branch protection —
-`python-test`, `python-lint`, `node-test`, `docker-build`. The other five
-(`auth-lib-test`, `verification-test`, `llm-test`, `meeting-test`,
-`documentation-system-test`) run on every PR but aren't yet gating merges. Plus
-`main-source-guard` on PRs to `main`.
+**All ten are required status checks** in branch protection on both `staging`
+and `main`; `main` additionally requires `main-source-guard`. A red job on any
+of them blocks the merge — there is no "runs but doesn't gate" tier.
 
 > `meeting-test` and the meeting `docker-build` steps were added late — the
 > service shipped to staging with **no CI coverage at all** for a couple of

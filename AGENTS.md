@@ -71,7 +71,7 @@ Violating any of these is a bug even if tests pass.
   git switch -c your-feature
   ```
 
-- **Keep a PR inside one CODEOWNERS zone.** `pr-zone-check.yml` warns (non-blocking) when a PR spans multiple zones. Zones are the service/package directories plus `docs/`, `scripts/`, `.github/`. If a change genuinely spans zones — a protocol change touching both `meeting` and `discord-bot` — that's fine, but it should be deliberate, not incidental.
+- **Keep a PR inside one CODEOWNERS zone.** `pr-zone-check.yml` warns (non-blocking) when a PR spans multiple zones. Zones are the service/package directories plus `docs/`, `scripts/`, `.github/`, and `root` (anything else, including this file). If a change genuinely spans zones — a protocol change touching both `meeting` and `discord-bot` — that's fine, but it should be deliberate, not incidental.
 - **Open PRs into `staging`.** Green CI is required.
 - **Don't commit or push unless asked.** Especially don't push to `staging` or `main` directly.
 - **Issue bodies use `Blocked by: #40, #42`** to drive the `blocked`/`ready` labels (`blocked-ready-automation.yml`). Case-insensitive, colon optional.
@@ -91,7 +91,7 @@ uv run ruff check . && uv run ruff format --check .
 
 Run what CI runs for that service (see the table below) rather than the generic pair, and don't quote test counts in docs or commit messages — they go stale immediately.
 
-> **Every Python CI job gates both `ruff check` and `ruff format --check`.** There are no deferrals or exemptions left — if a job ever needs one, `ci.yml` carries a comment saying so, and that file is the authority, not this one.
+> **Every Python service is gated on both `ruff check` and `ruff format --check`.** There are no deferrals left. (The one job that runs neither is `python-test`, which only runs team-tracking's pytest — team-tracking's linting lives in the separate `python-lint` job.) If a job ever needs an exemption, `ci.yml` carries a comment saying so, and that file is the authority, not this one.
 >
 > Run both before pushing. A formatting-only diff is fine on its own, but **never bundle a reformat with a behavior change** — the diff becomes unreviewable.
 >

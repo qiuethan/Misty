@@ -143,7 +143,7 @@ Misty/
 └── .github/
     ├── CODEOWNERS                     Per-area reviewers; zones mirror pr-zone-check
     ├── PULL_REQUEST_TEMPLATE.md       Zone, verification steps, deployment notes
-    ├── ISSUE_TEMPLATE/                Bug + feature templates (prompt the `Blocked by:` line)
+    ├── ISSUE_TEMPLATE/                Bug / feature / epic templates (prompt the `Blocked by:` line)
     └── workflows/
         ├── ci.yml                     Tests + lint + Docker builds on every PR (10 jobs)
         ├── main-source-guard.yml      Enforces "PRs to main come from staging"

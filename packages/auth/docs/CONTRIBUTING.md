@@ -73,7 +73,7 @@ uv run pytest
 uv run ruff check .
 ```
 
-CI runs `auth-lib-test`: `uv sync --extra dev`, `uv run pytest`, and `ruff check`.
+CI runs `auth-lib-test`: `uv sync --extra dev`, `uv run pytest`, `ruff check`, and `ruff format --check`.
 
 **Local green is not enough for this package.** Because six services import it, run their suites too before pushing anything non-trivial:
 
@@ -95,4 +95,4 @@ The `--ignore` keeps it fast; the DB-free services simply have no such file.
 - [ ] `verification`'s null store and `meeting`'s standalone WS auth both still work.
 - [ ] New branches fail closed; no `==` on key material.
 - [ ] All six service test suites pass, not just this package's.
-- [ ] `uv run pytest` and `uv run ruff check .` are clean.
+- [ ] `uv run pytest`, `uv run ruff check .`, and `uv run ruff format --check .` are clean.

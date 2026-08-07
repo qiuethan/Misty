@@ -122,4 +122,4 @@ This service reached staging with **no CI coverage at all** at one point — no 
 - [ ] WS protocol changes are reflected in the router docstring **and** [API.md](API.md), and the bot side ships in the same PR (or the change is backward compatible).
 - [ ] Tuning-constant changes updated the comment, the tests, and ARCHITECTURE.md.
 - [ ] No test opens a real Transcribe stream or calls a real `llm`.
-- [ ] `uv run pytest` and `uv run ruff check .` are clean.
+- [ ] `uv run pytest`, `uv run ruff check .`, and `uv run ruff format --check .` are clean.

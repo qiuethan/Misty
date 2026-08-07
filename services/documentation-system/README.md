@@ -219,6 +219,7 @@ Lint before committing:
 
 ```bash
 uv run ruff check .
+uv run ruff format --check .
 ```
 
 ## Further documentation

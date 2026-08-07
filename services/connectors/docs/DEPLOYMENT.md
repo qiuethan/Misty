@@ -47,7 +47,7 @@ uv --project services/connectors run connectors-keys \
 
 Then redeploy connectors. **Revoking is the same operation in reverse**: drop the entry from `CONSUMER_KEYS` and redeploy. There is no revoke command, because there is no database.
 
-> Always pass `--project`. Several services declare a top-level `src` package with a console script at `src.cli:main`, and in the shared workspace venv a bare invocation can resolve the wrong service's CLI and mint a key with the wrong envelope prefix. Verify the token starts with `connectors_`.
+> Always pass `--project`. Every service declares a top-level `src` package, so in the shared workspace venv a bare invocation can resolve the wrong service's CLI and mint a key with the wrong envelope prefix. (The entry points differ — `src.mint_key:main` here, `src.cli:main` in team-tracking and documentation-system — but the `src` collision is what bites.) Verify the token starts with `connectors_`.
 
 ## Deploy order
 
