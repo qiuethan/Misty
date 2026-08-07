@@ -134,11 +134,6 @@ jobs:
   # No Postgres service container and no AWS credentials: `meeting` has no
   # database, and its Transcribe/LLM clients are faked via
   # `app.dependency_overrides`, so the suite runs offline.
-  #
-  # `ruff format --check` is deliberately NOT run here yet: several files under
-  # services/meeting are unformatted, so adding the step would land this job red.
-  # `ruff check` (lint) passes and is enforced. To enable it, run
-  # `uv run ruff format .` in services/meeting and add the step back.
   meeting-test:
     runs-on: ubuntu-latest
     defaults:
@@ -154,6 +149,8 @@ jobs:
         run: uv run pytest
       - name: Ruff check
         run: uv run ruff check .
+      - name: Ruff format check
+        run: uv run ruff format --check .
 
   connectors-test:
     runs-on: ubuntu-latest
