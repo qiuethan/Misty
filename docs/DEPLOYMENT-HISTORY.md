@@ -78,7 +78,7 @@ transcript, and the bot is deliberately processing-free), not an oversight. See
 
 - **`staging` is the default branch.** Feature PRs auto-target it. Merges auto-deploy to the Railway staging environment.
 - **`main` is the release branch.** Only PRs from `staging` can merge — enforced by the `main-source-guard` workflow. Merges auto-deploy to production.
-- Both branches require the 4 required CI status checks (`python-test`, `python-lint`, `node-test`, `docker-build`); main additionally requires the source-guard. (CI runs 8 jobs in total — the other four aren't yet required to merge.)
+- Both branches require the 4 required CI status checks (`python-test`, `python-lint`, `node-test`, `docker-build`); main additionally requires the source-guard. (CI runs 10 jobs in total — the other six aren't yet required to merge.)
 
 This gives you the loop of `push to feature → PR → staging → real staging deploy → validate → promote to main → production deploy`, with no branch or environment able to skip validation.
 
@@ -103,14 +103,14 @@ Minting them is a manual per-environment step — see the runbook's
 
 ### CI on every PR to `staging` or `main`
 
-`.github/workflows/ci.yml` runs **9 jobs**:
+`.github/workflows/ci.yml` runs **10 jobs**:
 - **`python-test`** — team-tracking, Postgres 16 service container, applies migrations, runs the full pytest suite
 - **`python-lint`** — team-tracking ruff check + format
-- **`auth-lib-test`** — the shared `packages/auth` (`platform_auth`) pytest suite + ruff check
+- **`auth-lib-test`** — the shared `packages/auth` (`platform_auth`) pytest suite + ruff check/format
 - **`verification-test`** — services/verification, Postgres 16 service container, `alembic upgrade head`, then `pytest` + ruff check/format
 - **`llm-test`** — services/llm pytest suite + ruff check/format
-- **`meeting-test`** — services/meeting pytest suite + ruff check. No Postgres container and no AWS credentials: the service has no database, and its Transcribe/LLM clients are faked via `app.dependency_overrides`, so the suite runs fully offline. `ruff format --check` is **deferred** here (several files are unformatted; adding the step would land the job red)
-- **`documentation-system-test`** — Postgres 16 service container, runs `alembic upgrade head`, then `pytest` with `RUN_PG_TESTS=1` (does not yet run ruff — deferred)
+- **`meeting-test`** — services/meeting pytest suite + ruff check/format. No Postgres container and no AWS credentials: the service has no database, and its Transcribe/LLM clients are faked via `app.dependency_overrides`, so the suite runs fully offline
+- **`documentation-system-test`** — Postgres 16 service container, runs `alembic upgrade head`, then `pytest` with `RUN_PG_TESTS=1` + ruff check/format
 - **`node-test`** — the bot's `node --test` suite
 - **`docker-build`** — builds *and boot-smoke-tests* every service image (`python -c "import src.api.app"` for the five APIs, `node --check src/index.js` for the bot)
 
@@ -252,14 +252,14 @@ Railway's `preDeployCommand` (`alembic upgrade head`).
 - Both environments deployed and healthy, with one gap: **`meeting` is staging-only** (see the 2026-07-26 release note).
 - APIs are **private-only** on Railway (no public domains). Only in-project services reach them, over Railway's internal network. Add a public domain later if an external caller ever needs one — every service already has API-key auth.
 - **Discord commands.** All stable commands (`/link`, `/whoami`, `/seed`, `/team`, `/my-teams`, `/doc`, `/record`, plus the email-verification set `/add-email`, `/verify-email`, `/verify-code`, and `/help`) are registered globally on the production bot; **0 beta commands** remain guild-scoped (every command in `discord-bot/src/commands/index.js` is `beta: false`). To ship a future beta command, add it with `beta: true`, validate it in the staging test guild, then flip `beta: false` in its module + re-run `registerCommands` to promote it globally.
-- **Migrations run automatically** as Railway's `preDeployCommand` on the three DB-backed services (team-tracking, documentation-system, verification) — `alembic upgrade head` against the environment's Neon branch before every deploy. Idempotent. `llm` and `meeting` have no `preDeployCommand` because they own no schema.
-- **Migration counts:** team-tracking **007**, documentation-system **004**, verification **001**.
+- **Migrations run automatically** as Railway's `preDeployCommand` on the three DB-backed services (team-tracking, documentation-system, verification) — `alembic upgrade head` against the environment's Neon branch before every deploy. Idempotent. `llm`, `meeting`, and `connectors` have no `preDeployCommand` because they own no schema.
+- **Migration counts:** team-tracking **007**, documentation-system **006**, verification **001**.
 
 ### Known gaps
 
 - **`/record` is visible but non-functional in production** until `meeting` is provisioned there. Deliberate (the command degrades gracefully rather than erroring), but it *is* user-visible.
 - **`documentation-system` and `verification` dev Postgres both bind host 5434**, so they can't run locally at the same time as configured. Affects local dev only, not deployments — each has its own Neon project in Railway.
-- **`ruff format` is not enforced** for `documentation-system` or `meeting`; both have unformatted files. Lint (`ruff check`) *is* enforced for meeting.
+- ~~**`ruff format` is not enforced** for `documentation-system` or `meeting`.~~ **Closed.** Both services were formatted and their deferrals removed; `packages/auth` gained the missing step at the same time. Every Python CI job now gates `ruff check` and `ruff format --check`.
 
 ---
 

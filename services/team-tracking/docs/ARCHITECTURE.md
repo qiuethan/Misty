@@ -200,4 +200,3 @@ Explicitly out of scope:
 - No login/UI for officers editing directory data — handled by whatever admin surface is chosen.
 - No content storage — the directory is identity and structure only.
 - No pagination — list endpoints return all matching rows; add limit/offset if the roster grows past a few hundred.
-</content>
