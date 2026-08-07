@@ -23,6 +23,6 @@ WORKDIR /app/services/meeting
 RUN useradd --create-home --shell /bin/bash appuser && chown -R appuser:appuser /app
 USER appuser
 
-EXPOSE 8003
+EXPOSE 8004
 
-CMD ["uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8003"]
+CMD ["uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8004"]
