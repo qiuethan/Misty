@@ -55,6 +55,7 @@ All settings load from the environment (`src/config.py`, `.env` in dev):
 | `LLM_API_KEY` | `""` | Consumer key this service presents to `llm`'s `X-API-Key`. |
 | `REQUEST_TIMEOUT_S` | `60` | Per-request timeout when calling `llm` (seconds). |
 | `MAX_MEETING_MS` | `14400000` (4h) | Safety backstop: a session stops accepting audio past this. The normal end is `/record stop` or auto-stop-on-empty; this only bounds a forgotten meeting. 4h is also AWS Transcribe's per-stream cap. |
+| `DISCONNECT_GRACE_S` | `60` | How long a session survives an abrupt WebSocket disconnect. The transcript is already assembled server-side, so within this window `POST /stop` still turns a dropped recording into minutes instead of losing it. `0` discards immediately. |
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR`. Applied at boot by `configure_logging`. INFO is the default because the volume is a startup note plus per-meeting summaries, not per-request chatter — the alternative is losing them entirely. |
 
 ## Auth model

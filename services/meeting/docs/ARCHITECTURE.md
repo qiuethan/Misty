@@ -94,14 +94,18 @@ Two teardown paths, and picking the wrong one is expensive:
 
 | | `stop()` | `discard()` |
 |---|---|---|
-| Trigger | `POST /meetings/{id}/stop` | Client disconnect or error without a prior stop |
+| Trigger | `POST /meetings/{id}/stop` | `DISCONNECT_GRACE_S` elapsing after a disconnect with no stop |
 | Waits for end-of-audio | Yes (5 s cap) | No |
 | Flushes Transcribe | Yes | Aborts the streams |
 | Generates minutes | Yes — **blocking HTTP call to `llm`** | No |
 | Renders PDF | Yes | No |
 | Returns | `StopResponse` | Nothing |
 
-`discard()` deliberately skips the finalize pipeline. An abrupt disconnect has no one waiting for the result, and paying for an LLM call plus a PDF render that nobody will read is pure waste. This is why an unclean disconnect produces no minutes — by design, not by oversight.
+`discard()` deliberately skips the finalize pipeline: paying for an LLM call plus a PDF render that nobody will read is pure waste.
+
+**A disconnect no longer routes straight to `discard()`.** It used to, and that was a data-loss bug rather than a saving: the transcript is already assembled in memory when the socket dies, so destroying it immediately meant a client whose connection dropped had nothing left to claim — its follow-up `POST /stop` 404'd. Two fully-transcribed production meetings were lost that way in a single morning. A disconnect now **holds** the session for `DISCONNECT_GRACE_S` (default 60 s) and marks end-of-audio; `discard()` runs only if that window expires unclaimed. The cost saving is preserved — nothing is finalized unless someone actually asks — while a dropped socket becomes recoverable instead of fatal.
+
+The window is short on purpose. A held session keeps its Transcribe streams parked, so this trades a bounded amount of idle AWS state for the ability to recover a meeting; it is not a general-purpose resume mechanism. Reconnecting to a held session is deliberately *not* supported — a second WS connect for a live `session_id` still closes with 1008.
 
 ## Statefulness: the operational consequences
 

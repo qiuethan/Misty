@@ -77,7 +77,11 @@ A length-prefixed speaker id, an 8-byte millisecond timestamp, then the raw Opus
 
 ### Disconnect
 
-Disconnecting (or erroring) **without** a preceding `POST /stop` tears the session down via `discard()` — abort each speaker's Transcribe stream, deregister, done. It deliberately skips the finalize pipeline, so **no minutes and no PDF are produced**. That pipeline involves a blocking `llm` call not worth paying for when nobody is waiting for the result.
+Disconnecting (or erroring) **without** a preceding `POST /stop` **holds** the session for `DISCONNECT_GRACE_S` (default 60 s) rather than destroying it. The transcript is already assembled server-side, so within that window `POST /stop` still finalizes it into minutes and a PDF exactly as a normal stop would — which is how a client that lost its socket recovers a meeting. The disconnect also marks end-of-audio, since a closed socket can deliver no more frames.
+
+Only when the grace period expires with no `/stop` is the session torn down via `discard()` — abort each speaker's Transcribe stream, deregister, done. That path deliberately skips the finalize pipeline, so **no minutes and no PDF are produced**: it involves a blocking `llm` call not worth paying for when nobody is waiting for the result. Set `DISCONNECT_GRACE_S=0` to discard immediately instead.
+
+The WebSocket close code is logged on every abrupt disconnect (`session <id>: WS closed without POST /stop (code=…)`).
 
 To get minutes, call `POST /stop` before closing the socket.
 

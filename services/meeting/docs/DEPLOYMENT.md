@@ -29,6 +29,7 @@ Service-specific deploy notes. The full platform runbook is [`docs/RAILWAY-DEPLO
 | `LLM_API_KEY` | a `chat`-scoped `llm_` key | **Required** |
 | `REQUEST_TIMEOUT_S` | `60` | Timeout on the `llm` call during `/stop` |
 | `MAX_MEETING_MS` | `14400000` (4 h) | Backstop; also Transcribe's per-stream cap |
+| `DISCONNECT_GRACE_S` | `60` | How long a disconnected session is held so `POST /stop` can still finalize it |
 | `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR`. Not in `.env.example` — set it explicitly if you want `DEBUG` while diagnosing a live recording. |
 
 AWS credentials come from the standard chain (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`).
@@ -97,7 +98,7 @@ Worth stating plainly, because it's a recording service:
 - **Audio is never persisted, never mixed, and never returned.** It streams to AWS as transcription input and is dropped.
 - **Nothing is written to disk** — there's a test enforcing it.
 - **The service retains nothing after `/stop` replies.** Transcript, minutes, and PDF are handed to the caller and the session is deregistered. If they matter, the bot must persist them.
-- An abrupt disconnect produces **no** minutes and no PDF (`discard()` skips the pipeline).
+- An abrupt disconnect **holds** the session for `DISCONNECT_GRACE_S` (default 60 s) so `POST /stop` can still produce the minutes and PDF. Only when that window expires with no `/stop` does `discard()` run, and only then are they lost.
 
 ## Troubleshooting
 
