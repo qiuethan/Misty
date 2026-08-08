@@ -125,6 +125,7 @@ Set these per environment (staging vs production) per service.
 | `LLM_BASE_URL` | — | `http://${{llm.RAILWAY_PRIVATE_DOMAIN}}:${{llm.PORT}}` | — |
 | `LLM_API_KEY` | — | an `llm` consumer key with the `chat` scope | — |
 | `MAX_MEETING_MS` | — | optional; defaults to the 4h backstop | — |
+| `DISCONNECT_GRACE_S` | — | optional; defaults to 60s. How long a disconnected session is held so `POST /stop` can still finalize it | — |
 | `GOOGLE_CREDENTIALS_JSON` | — | — | base64 Google service-account key; empty is a valid running state (Google fetches 503, rest of the service works) |
 
 > Bedrock usage bills as **Amazon Bedrock** (credits apply) — do *not* point

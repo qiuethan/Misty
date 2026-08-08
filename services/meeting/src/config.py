@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     # long one meeting can hold an AWS stream open rather than memory. Set
     # MAX_MEETING_MS to another value, or None, to change or disable it.
     max_meeting_ms: int | None = Field(default=14_400_000, gt=0)  # 4 hours
+    # How long a session survives an abrupt WS disconnect (see
+    # routers/meetings.py). A dropped socket does NOT mean the meeting is lost:
+    # the transcript is already assembled server-side, so the session is HELD
+    # for this long and POST /stop can still finalize it into minutes. Two
+    # production meetings were lost in one morning because the disconnect path
+    # discarded immediately and the bot had nothing left to claim.
+    # Set DISCONNECT_GRACE_S=0 to restore the old discard-immediately behavior.
+    disconnect_grace_s: float = Field(default=60.0, ge=0)
 
 
 @lru_cache(maxsize=1)
