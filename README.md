@@ -103,8 +103,7 @@ Misty/
 │   ├── ARCHITECTURE.md                Cross-service architecture — how the pieces fit
 │   ├── MEETING-RECORDING.md           How /record splits across the bot + meeting service
 │   ├── RAILWAY-DEPLOYMENT.md          Deploy runbook (Railway + Neon setup, key provisioning)
-│   ├── DEPLOYMENT-HISTORY.md          Design decisions, lessons learned, release log
-│   └── SECURITY-REVIEW-2026-07-13.md  Security review + what it changed
+│   └── DEPLOYMENT-HISTORY.md          Design decisions, lessons learned, release log
 │
 ├── services/                          HTTP services (each in its own folder)
 │   ├── team-tracking/                 Directory service — port 8000, own Postgres
