@@ -118,7 +118,6 @@ Run what CI runs for that service (see the table below) rather than the generic 
 | Why is X built this way? | `services/X/docs/ARCHITECTURE.md` |
 | How do I deploy / what env vars? | `services/X/docs/DEPLOYMENT.md`, [`docs/RAILWAY-DEPLOYMENT.md`](docs/RAILWAY-DEPLOYMENT.md) |
 | Why was this decided? | [`docs/DEPLOYMENT-HISTORY.md`](docs/DEPLOYMENT-HISTORY.md) |
-| Security posture | [`docs/SECURITY-REVIEW-2026-07-13.md`](docs/SECURITY-REVIEW-2026-07-13.md) |
 | How does `/record` work? | [`docs/MEETING-RECORDING.md`](docs/MEETING-RECORDING.md) |
 
 ## Documentation is part of the change

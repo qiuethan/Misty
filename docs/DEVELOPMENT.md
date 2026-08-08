@@ -490,8 +490,6 @@ is the workflow around them.
   bot's voice surface and the `meeting` service, and why it breaks two of the
   platform's conventions on purpose.
 - [`RAILWAY-DEPLOYMENT.md`](RAILWAY-DEPLOYMENT.md) — deploy/operate runbook.
-- [`SECURITY-REVIEW-2026-07-13.md`](SECURITY-REVIEW-2026-07-13.md) — the security
-  review that drove the `people:elevate` scope, SSRF guards, and doc visibility.
 - Per-service references — every service now has the full four-doc set
   (`API.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `DEPLOYMENT.md`) under its
   own `docs/`:
